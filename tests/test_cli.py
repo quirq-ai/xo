@@ -261,3 +261,63 @@ def test_no_spec_says_pass_spec(fake, capsys, monkeypatch):
     fake.route("GET", "/api/openapi", status=307, headers={"Location": "https://app.xo.builders/sign-in"})
     err = run(capsys, "ops")[2]
     assert "pass --spec FILE" in err and err.count("\n") == 1
+
+
+# --- one command per endpoint --------------------------------------------------------------------
+
+def test_endpoint_commands_are_listed_in_help(fake, capsys):
+    with pytest.raises(SystemExit):
+        cli.main(["--help"])
+    out = capsys.readouterr().out
+    for name in ("claude-code", "templates", "orgs-templates", "health"):
+        assert f"\n    {name}" in out
+
+
+def test_a_single_operation_endpoint_is_one_command(fake, capsys):
+    fake.route("POST", "/claude-code", body={"ok": True})
+    code, out, err = run(capsys, "claude-code", "--prompt", "hello", "--project-id", "p1")
+    assert code == 0 and json.loads(out) == {"ok": True}
+    assert err == f"xo: POST {fake.base}/claude-code\n"
+    assert fake.requests[0]["body"] == {"prompt": "hello", "project_id": "p1"}
+    assert fake.requests[0]["headers"]["Authorization"] == f"Bearer {KEY}"
+
+
+def test_shared_paths_get_method_actions(fake, capsys):
+    fake.route("GET", "/api/v1/templates", body=[{"id": "t1"}])
+    assert run(capsys, "templates", "list", "--limit", "5")[0] == 0
+    assert fake.requests[-1]["query"] == "limit=5"
+
+    fake.route("GET", "/api/v1/templates/t1", body={"id": "t1"})
+    assert run(capsys, "templates", "get", "--template-id", "t1")[0] == 0
+
+    fake.route("POST", "/api/v1/templates", body={"id": "t2"})
+    assert run(capsys, "templates", "create", "--name", "demo", "--public", "false")[0] == 0
+    assert fake.requests[-1]["body"] == {"name": "demo", "public": False}
+
+    n = len(fake.requests)
+    assert "needs --yes" in run(capsys, "templates", "delete", "--template-id", "t1")[2]
+    assert len(fake.requests) == n
+
+
+def test_endpoint_commands_check_required_inputs(fake, capsys):
+    assert "needs --name" in run(capsys, "templates", "create", "--public", "true")[2]
+    assert "needs --prompt" in run(capsys, "claude-code", "--project-id", "p1")[2]
+    assert run(capsys, "templates", "get")[2].endswith("needs --template-id\n")
+    code, out, _ = run(capsys, "templates", "create", "--name", "x", "--dry-run")
+    assert code == 0 and json.loads(out)["body"] == {"name": "x"}
+    assert fake.requests == []
+
+
+def test_endpoint_flags_take_the_global_options_too(fake, capsys):
+    fake.route("GET", "/health", body={})
+    assert run(capsys, "health", "--api-key", "ak_endpoint_flag")[0] == 0
+    assert fake.requests[0]["headers"]["Authorization"] == "Bearer ak_endpoint_flag"
+
+
+def test_without_a_local_spec_only_the_builtins_exist(fake, capsys, monkeypatch):
+    monkeypatch.delenv("XO_SPEC")
+    monkeypatch.setattr("xo.spec._bundled", lambda: None)
+    with pytest.raises(SystemExit):
+        cli.main(["claude-code"])
+    assert "invalid choice" in capsys.readouterr().err
+    assert fake.requests == []

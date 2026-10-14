@@ -1,5 +1,10 @@
 """xo: the command line for the XO Cloud API (app.xo.builders).
 
+    xo ENDPOINT [ACTION] [--flag VALUE ...]  one command per API endpoint, made from the spec:
+                                            POST /claude-code is `xo claude-code`, and a path with
+                                            several methods has actions (list, get, create,
+                                            update, replace, delete). Its parameters and body
+                                            fields are its flags; `xo ENDPOINT --help` lists them.
     xo ops [FILTER]                         list the API's operations: id, method, path, summary.
                                             FILTER keeps those whose id, path or tag contains it.
     xo call OPERATION [--param NAME=VALUE ...] [--data JSON|@FILE|-] [--field KEY=VALUE ...]
@@ -30,7 +35,7 @@ import sys
 from pathlib import Path
 from typing import Any, NoReturn
 
-from xo import __version__, spec
+from xo import __version__, commands, spec
 from xo.client import DEFAULT_TIMEOUT, KEY_ENV, REDACTED, Client, XoError, api_key, base_url, redact
 
 GLOBAL_DEFAULTS = {"api_key": None, "base_url": None, "spec": None, "timeout": DEFAULT_TIMEOUT}
@@ -171,6 +176,28 @@ def _api(args: argparse.Namespace) -> int:
     return _send(client, args, args.method, args.path, query=_pairs(args.query, "--query"), body=_body(args))
 
 
+def _endpoint(args: argparse.Namespace) -> int:
+    client = _client(args)
+    op = args.op
+    params, fields = commands.values(args)
+    path, query, headers = spec.build(op, params, lambda n: f"--{commands.kebab(n)}")
+    body = _body(args)
+    if fields:
+        if body is None:
+            body = {}
+        if not isinstance(body, dict):
+            raise XoError("body field flags need --data to be a JSON object")
+        for name, value in fields.items():
+            body[name] = _value(value)
+    if body is None and op.body_required:
+        raise XoError(f"{args.command} needs a body: its field flags, --data or --field")
+    if isinstance(body, dict):
+        missing = [n for n, required, _ in op.body_fields if required and n not in body]
+        if missing:
+            raise XoError(f"{args.command} needs " + ", ".join(f"--{commands.kebab(n)}" for n in missing))
+    return _send(client, args, op.method, path, query=query, body=body, headers=headers)
+
+
 def _add_send(p: argparse.ArgumentParser) -> None:
     p.add_argument("--data", metavar="JSON|@FILE|-", help="the JSON body, inline, from a file, or stdin")
     p.add_argument("--field", action="append", metavar="KEY=VALUE",
@@ -197,7 +224,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = _Parser(prog="xo", description=__doc__, parents=[common],
                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--version", action="version", version=f"xo {__version__}")
-    sub = parser.add_subparsers(dest="command", required=True)
+    sub = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
 
     o = sub.add_parser("ops", parents=[common], help="list the API's operations")
     o.add_argument("filter", nargs="?", help="keep operations whose id, path or tag contains this")
@@ -218,6 +245,12 @@ def main(argv: list[str] | None = None) -> int:
     a.add_argument("--query", action="append", metavar="NAME=VALUE", help="a query parameter; repeat it")
     _add_send(a)
     a.set_defaults(run=_api)
+
+    # One command per endpoint, from a local spec (never the network, so --help stays offline).
+    known, _ = common.parse_known_args(argv)
+    local = spec.load_local(getattr(known, "spec", None))
+    if local is not None:
+        commands.register(sub, spec.operations(local), [common], _add_send, _endpoint)
 
     args = parser.parse_args(argv)
     for name, default in GLOBAL_DEFAULTS.items():

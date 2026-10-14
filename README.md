@@ -23,11 +23,32 @@ browser, so until a copy is bundled: download the OpenAPI JSON there while signe
 `--spec FILE` or set `XO_SPEC=FILE`. Without one, `xo ops` and `xo call` stop and say so; `xo api`
 needs no spec.
 
-## Use
+## One command per endpoint
+
+With a spec, every endpoint is a command, named after its path:
 
 ```sh
 export XO_API_KEY=ak_...        # from your XO account's API keys; never printed
 export XO_SPEC=~/xo-openapi.json
+
+xo --help                                   # every endpoint command
+xo claude-code --prompt "hello"             # POST /claude-code {"prompt": "hello"}
+xo templates list --limit 5                 # GET  /api/v1/templates?limit=5
+xo templates create --name demo --public false
+xo templates get --template-id t1           # GET  /api/v1/templates/t1
+xo templates delete --template-id t1 --yes
+xo templates create --help                  # the flags an endpoint takes
+```
+
+The command is the path without a leading `/api` or `/vN` and without its `{placeholders}`, joined
+with dashes. When several methods share a path, each is an action: `list` and `get` (GET on the
+collection or one item), `create` (POST), `update` (PATCH), `replace` (PUT), `delete` (DELETE).
+Path, query and header parameters and the top-level fields of a JSON body are the flags; values
+are JSON when they parse. Required ones are checked before anything is sent.
+
+## Lower level
+
+```sh
 
 xo ops                          # every operation: id, method, path, summary
 xo ops template                 # only those whose id, path or tag mentions "template"

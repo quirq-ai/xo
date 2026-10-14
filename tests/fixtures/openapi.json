@@ -92,6 +92,33 @@
           }
         }
       }
+    },
+    "/claude-code": {
+      "post": {
+        "operationId": "runClaudeCode",
+        "summary": "Run Claude Code",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "prompt"
+                ],
+                "properties": {
+                  "prompt": {
+                    "type": "string"
+                  },
+                  "project_id": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -101,8 +128,28 @@
         "content": {
           "application/json": {
             "schema": {
-              "type": "object"
+              "$ref": "#/components/schemas/TemplateIn"
             }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "TemplateIn": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Template name"
+          },
+          "public": {
+            "type": "boolean"
+          },
+          "agent_type": {
+            "type": "string"
           }
         }
       }

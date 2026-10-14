@@ -12,7 +12,7 @@ import re
 from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from xo.client import Client, XoError
 
@@ -39,6 +39,9 @@ class Operation:
     params: list[Param] = field(default_factory=list)
     body_required: bool = False
     has_body: bool = False
+    # Top-level fields of a JSON object body: (name, required, description). Empty when the body
+    # is not a plain object, so it can only be given whole with --data.
+    body_fields: list[tuple[str, bool, str]] = field(default_factory=list)
 
     @property
     def path_params(self) -> list[str]:
@@ -119,8 +122,38 @@ def operations(spec: dict) -> list[Operation]:
                 params=params,
                 has_body=body is not None,
                 body_required=bool(body and body.get("required")),
+                body_fields=_body_fields(spec, body),
             ))
     return sorted(ops, key=lambda o: (o.path, o.method))
+
+
+def _body_fields(spec: dict, body: dict | None) -> list[tuple[str, bool, str]]:
+    if not body:
+        return []
+    content = body.get("content") or {}
+    media = content.get("application/json") or next(iter(content.values()), {}) if content else {}
+    schema = _resolve(spec, (media or {}).get("schema") or {})
+    parts = [schema, *(_resolve(spec, s) for s in schema.get("allOf") or [])]
+    fields: dict[str, tuple[str, bool, str]] = {}
+    for part in parts:
+        if not isinstance(part, dict) or part.get("type", "object") != "object":
+            continue
+        required = set(part.get("required") or [])
+        for name, prop in (part.get("properties") or {}).items():
+            prop = _resolve(spec, prop) if isinstance(prop, dict) else {}
+            fields[name] = (name, name in required, _first_line(prop.get("description") or prop.get("title")))
+    return list(fields.values())
+
+
+def load_local(path: str | None = None) -> dict | None:
+    """The spec from --spec, $XO_SPEC or the bundled copy, without touching the network; None if none."""
+    path = path or os.environ.get(SPEC_ENV)
+    if path:
+        try:
+            return json.loads(Path(path).read_text())
+        except (OSError, json.JSONDecodeError):
+            return None
+    return _bundled()
 
 
 def find(spec: dict, name: str) -> Operation:
@@ -136,7 +169,8 @@ def find(spec: dict, name: str) -> Operation:
     raise XoError(f"no operation {name!r} in the spec{hint}")
 
 
-def build(op: Operation, values: dict[str, str]) -> tuple[str, dict[str, str], dict[str, str]]:
+def build(op: Operation, values: dict[str, str], flag: Callable[[str], str] = lambda n: f"--param {n}=...",
+          ) -> tuple[str, dict[str, str], dict[str, str]]:
     """The request path, query and headers for `op` from NAME=VALUE pairs.
 
     Every required parameter must be given. The Authorization header is xo's own: a spec that lists
@@ -153,7 +187,7 @@ def build(op: Operation, values: dict[str, str]) -> tuple[str, dict[str, str], d
                       f"it takes: {', '.join(sorted(known)) or 'none'}")
     missing = [n for n, p in known.items() if p.required and n not in values]
     if missing:
-        raise XoError(f"{op.op_id} needs {', '.join(f'--param {n}=...' for n in missing)}")
+        raise XoError(f"{op.op_id} needs {', '.join(flag(n) for n in missing)}")
     from urllib.parse import quote
     path = op.path
     for name in op.path_params:
