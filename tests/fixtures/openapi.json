@@ -1,0 +1,23 @@
+{
+  "openapi": "3.1.0",
+  "info": {"title": "SYNTHETIC test spec, not the real XO API", "version": "0.0.0"},
+  "paths": {
+    "/api/v1/templates": {
+      "get": {"operationId": "listTemplates", "summary": "List templates", "tags": ["templates"],
+              "parameters": [{"name": "limit", "in": "query", "schema": {"type": "integer"}}]},
+      "post": {"operationId": "createTemplate", "summary": "Create a template", "tags": ["templates"],
+               "requestBody": {"$ref": "#/components/requestBodies/Template"}}
+    },
+    "/api/v1/templates/{template_id}": {
+      "parameters": [{"name": "template_id", "in": "path", "required": true}],
+      "get": {"operationId": "getTemplate", "summary": "Get one template", "tags": ["templates"]},
+      "delete": {"summary": "Delete a template\nSecond line.", "tags": ["templates"]}
+    },
+    "/health": {"get": {"operationId": "health", "summary": "Health check"}}
+  },
+  "components": {
+    "requestBodies": {
+      "Template": {"required": true, "content": {"application/json": {"schema": {"type": "object"}}}}
+    }
+  }
+}

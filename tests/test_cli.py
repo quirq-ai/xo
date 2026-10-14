@@ -1,0 +1,147 @@
+from __future__ import annotations
+
+import json
+
+import pytest
+
+from conftest import KEY
+from xo import cli
+
+
+def run(capsys, *argv: str) -> tuple[int, str, str]:
+    code = cli.main(list(argv))
+    out, err = capsys.readouterr()
+    assert KEY not in out and KEY not in err, "the API key must never be printed"
+    return code, out, err
+
+
+def test_no_key_is_one_actionable_line(fake, capsys, monkeypatch):
+    monkeypatch.delenv("XO_API_KEY")
+    code, out, err = run(capsys, "call", "health")
+    assert code == 1
+    assert "set XO_API_KEY or pass --api-key" in err
+    assert fake.requests == []
+
+
+def test_key_goes_as_a_bearer_token(fake, capsys):
+    fake.route("GET", "/health", body={"status": "ok"})
+    code, out, _ = run(capsys, "call", "health")
+    assert code == 0
+    assert json.loads(out) == {"status": "ok"}
+    assert fake.requests[0]["headers"]["Authorization"] == f"Bearer {KEY}"
+
+
+def test_flag_key_wins_over_the_variable(fake, capsys):
+    fake.route("GET", "/health", body={})
+    run(capsys, "--api-key", "ak_from_flag", "call", "health")
+    assert fake.requests[0]["headers"]["Authorization"] == "Bearer ak_from_flag"
+
+
+def test_an_echoed_key_is_redacted(fake, capsys):
+    fake.route("GET", "/health", body=lambda req: {"you_sent": req["headers"]["Authorization"]})
+    code, out, _ = run(capsys, "call", "health")
+    assert code == 0 and "<redacted>" in out
+
+
+def test_an_error_body_echoing_the_key_is_redacted(fake, capsys):
+    fake.route("GET", "/health", status=401, body={"detail": f"bad key {KEY}"})
+    code, _, err = run(capsys, "call", "health")
+    assert code == 1
+    assert "HTTP 401 (check XO_API_KEY): bad key <redacted>" in err
+
+
+def test_redirects_are_never_followed(fake, capsys):
+    fake.route("GET", "/health", status=307, headers={"Location": "https://evil.example/steal"})
+    code, _, err = run(capsys, "call", "health")
+    assert code == 1
+    assert "never follows redirects" in err
+    assert len(fake.requests) == 1
+
+
+def test_a_sign_in_redirect_says_the_route_wants_a_browser(fake, capsys):
+    fake.route("GET", "/health", status=307, headers={"Location": "https://app.xo.builders/sign-in?x=1"})
+    code, _, err = run(capsys, "call", "health")
+    assert code == 1 and "does not accept an API key" in err
+
+
+@pytest.mark.parametrize("url", ["http://app.xo.builders", "ftp://x", "app.xo.builders"])
+def test_plain_http_off_this_machine_is_refused(fake, capsys, url):
+    code, _, err = run(capsys, "--base-url", url, "call", "health")
+    assert code == 1 and "must be https://" in err
+    assert fake.requests == []
+
+
+def test_unreachable_api(fake, capsys):
+    code, _, err = run(capsys, "--base-url", "http://127.0.0.1:1", "call", "health")
+    assert code == 1 and "could not reach" in err
+
+
+def test_ops_lists_and_filters(fake, capsys):
+    code, out, _ = run(capsys, "ops", "template")
+    assert code == 0
+    lines = out.splitlines()
+    assert [line.split("\t")[0] for line in lines] == [
+        "listTemplates", "createTemplate", "delete_api_v1_templates_template_id", "getTemplate"]
+    assert lines[2].endswith("\tDelete a template")
+
+
+def test_ops_needs_no_key_for_a_local_spec(fake, capsys, monkeypatch):
+    monkeypatch.delenv("XO_API_KEY")
+    code, out, _ = run(capsys, "ops", "--json")
+    assert code == 0
+    ops = {o["id"]: o for o in json.loads(out)}
+    assert ops["getTemplate"]["params"][0] == {"name": "template_id", "where": "path",
+                                               "required": True, "description": ""}
+
+
+def test_call_fills_path_query_and_body(fake, capsys):
+    fake.route("POST", "/api/v1/templates", status=201, body={"id": "t1"})
+    code, out, _ = run(capsys, "call", "createTemplate", "--data", '{"name": "demo"}',
+                       "--field", "public=false", "--field", "tags=[\"a\"]", "--field", "note=hi there")
+    assert code == 0 and json.loads(out) == {"id": "t1"}
+    assert fake.requests[0]["body"] == {"name": "demo", "public": False, "tags": ["a"], "note": "hi there"}
+
+    fake.route("GET", "/api/v1/templates/a%2Fb", body={"id": "a/b"})
+    assert run(capsys, "call", "getTemplate", "--param", "template_id=a/b")[0] == 0
+
+    fake.route("GET", "/api/v1/templates", body=[])
+    assert run(capsys, "call", "listtemplates", "--param", "limit=5")[0] == 0
+    assert fake.requests[-1]["query"] == "limit=5"
+
+
+def test_call_checks_its_inputs_before_sending(fake, capsys, tmp_path):
+    assert "needs --param template_id=" in run(capsys, "call", "getTemplate")[2]
+    assert "takes no parameter nope" in run(capsys, "call", "health", "--param", "nope=1")[2]
+    assert "needs a JSON body" in run(capsys, "call", "createTemplate")[2]
+    assert "takes no body" in run(capsys, "call", "health", "--field", "a=1")[2]
+    assert "did you mean createTemplate" in run(capsys, "call", "createTempl")[2]
+    assert "--data is not JSON" in run(capsys, "call", "createTemplate", "--data", "{nope")[2]
+    assert "--field wants NAME=VALUE" in run(capsys, "call", "createTemplate", "--field", "x")[2]
+    assert fake.requests == []
+
+    body = tmp_path / "t.json"
+    body.write_text('{"name": "from-file"}')
+    fake.route("POST", "/api/v1/templates", body={"ok": True})
+    assert run(capsys, "call", "createTemplate", "--data", f"@{body}")[0] == 0
+    assert fake.requests[0]["body"] == {"name": "from-file"}
+
+
+def test_api_sends_any_request(fake, capsys):
+    fake.route("PATCH", "/anything", body="plain text")
+    code, out, _ = run(capsys, "api", "patch", "/anything", "--query", "a=1", "--field", "x=2")
+    assert code == 0 and out.strip() == "plain text"
+    assert fake.requests[0]["method"] == "PATCH" and fake.requests[0]["query"] == "a=1"
+    assert fake.requests[0]["body"] == {"x": 2}
+
+
+def test_spec_falls_back_to_the_api(fake, capsys, monkeypatch):
+    monkeypatch.delenv("XO_SPEC")
+    monkeypatch.setattr("xo.spec._bundled", lambda: None)
+    spec = json.loads((__import__("conftest").FIXTURES / "openapi.json").read_text())
+    fake.route("GET", "/api/openapi", body=spec)
+    code, out, _ = run(capsys, "ops", "health")
+    assert code == 0 and out.startswith("health\tGET\t/health")
+    assert fake.requests[0]["headers"]["Authorization"] == f"Bearer {KEY}"
+
+    fake.route("GET", "/api/openapi", body="<html>")
+    assert "did not return an OpenAPI document" in run(capsys, "ops")[2]

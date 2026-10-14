@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=80"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "xo"
+dynamic = ["version"]
+description = "xo, the command line for the XO Cloud API (app.xo.builders)."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+# Standard library only: nothing to pin, nothing to audit beyond this repo.
+dependencies = []
+
+[project.optional-dependencies]
+test = ["pytest==9.1.1"]
+
+[project.scripts]
+xo = "xo.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "xo.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+xo = ["*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
