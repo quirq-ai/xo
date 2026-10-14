@@ -43,8 +43,10 @@ xo templates create --help                  # the flags an endpoint takes
 The command is the path without a leading `/api` or `/vN` and without its `{placeholders}`, joined
 with dashes. When several methods share a path, each is an action: `list` and `get` (GET on the
 collection or one item), `create` (POST), `update` (PATCH), `replace` (PUT), `delete` (DELETE).
-Path, query and header parameters and the top-level fields of a JSON body are the flags; values
-are JSON when they parse. Required ones are checked before anything is sent.
+Path, query and header parameters and the top-level fields of a JSON body are the flags. A body
+field the spec types as a string keeps the text you type; other values are JSON when they parse.
+Required ones are checked before anything is sent. A spec that cannot be read leaves `ops`, `call`
+and `api` working and makes any other command stop with one line saying why.
 
 ## Lower level
 
@@ -63,14 +65,16 @@ xo api GET /some/path --query limit=5                          # any request, sp
 xo api DELETE /some/path/1 --yes                               # a DELETE needs --yes
 ```
 
-`--param` fills path, query and header parameters (never `Authorization`, which is xo's own).
+`--param` fills path, query and header parameters, never `Authorization`, `Host`, `Cookie`,
+`Proxy-*` or the other headers xo and HTTP own.
 `--field` values are JSON when they parse (`false`, `5`, `["a"]`) and plain strings otherwise.
 A request that is not a GET changes things on XO, so it prints one line on stderr before it goes.
+`--dry-run` needs no key and sends nothing, so it never fetches the spec from the API either.
 Responses print as JSON on stdout. Any problem exits 1 with one line on stderr.
 
 | Setting | Variable | Flag | Default |
 |---|---|---|---|
-| API key | `XO_API_KEY` | `--api-key -` (reads one line from stdin) | none; required for every call |
+| API key | `XO_API_KEY` | `--api-key -` (asks without echo on a terminal, else reads one line from stdin) | none; required for every call but a dry run |
 | API base | `XO_BASE_URL` | `--base-url` | `https://app.xo.builders` |
 | Spec | `XO_SPEC` | `--spec` | the copy bundled with xo, else `<base>/api/openapi` |
 
@@ -82,7 +86,8 @@ or after the command.
 
 - The key goes only in the `Authorization: Bearer` header. It is redacted from any response or
   error that echoes it, and tests check it never reaches stdout or stderr, including on argument
-  errors and unexpected failures. A key with spaces, line breaks or non-ASCII characters is refused
+  errors and unexpected failures. An argument error never repeats a value you typed, so a
+  mistyped key flag (`--api_key KEY`, `--token=KEY`) stays off the screen. A key with spaces, line breaks or non-ASCII characters is refused
   without being shown.
 - xo never follows a redirect, so a redirect cannot carry the key to another host. A redirect to
   XO's sign-in page is reported as "this route does not accept an API key".

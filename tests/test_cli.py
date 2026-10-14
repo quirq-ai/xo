@@ -233,7 +233,7 @@ def test_mutations_are_labelled_delete_needs_yes_and_dry_run_sends_nothing(fake,
 def test_header_parameters_are_sent_and_authorization_is_not_settable(fake, capsys):
     fake.route("POST", "/api/v1/orgs/o1/templates", body={})
     assert "needs --param X-Org-Token=" in run(capsys, "call", "createOrgTemplate", "--param", "org=o1")[2]
-    assert "cannot set Authorization" in run(capsys, "call", "createOrgTemplate", "--param", "org=o1",
+    assert "authorization cannot be set" in run(capsys, "call", "createOrgTemplate", "--param", "org=o1",
                                              "--param", "authorization=Bearer x")[2]
     code, _, _ = run(capsys, "call", "createOrgTemplate", "--param", "org=o1", "--param", "X-Org-Token=t")
     assert code == 0
@@ -321,3 +321,171 @@ def test_without_a_local_spec_only_the_builtins_exist(fake, capsys, monkeypatch)
         cli.main(["claude-code"])
     assert "invalid choice" in capsys.readouterr().err
     assert fake.requests == []
+
+
+# --- audit round 2 -------------------------------------------------------------------------------
+
+def _argparse_err(capsys, *argv: str) -> str:
+    with pytest.raises(SystemExit) as e:
+        cli.main(list(argv))
+    out, err = capsys.readouterr()
+    assert e.value.code == 2
+    return out + err
+
+
+@pytest.mark.parametrize("argv", [
+    ["call", "health", "--api_key", "SECRET"],
+    ["call", "health", "--token=SECRET"],
+    ["call", "health", "SECRET"],
+    ["SECRET"],
+    ["health", "--apikey", "SECRET"],
+    ["templates", "list", "--key", "SECRET"],
+    ["--timeout", "SECRET", "ops"],
+    ["api", "SECRET", "/x"],
+])
+def test_no_argparse_error_echoes_what_was_typed(fake, capsys, monkeypatch, argv):
+    monkeypatch.delenv("XO_API_KEY")
+    secret = "ak_FAKE_typed_0123456789abcdef"
+    argv = [secret if a == "SECRET" else a.replace("SECRET", secret) for a in argv]
+    err = _argparse_err(capsys, *argv)
+    assert secret not in err
+    assert fake.requests == []
+
+
+def test_a_grouped_command_takes_the_global_options_before_the_action(fake, capsys, monkeypatch):
+    monkeypatch.delenv("XO_API_KEY")
+    fake.route("GET", "/api/v1/templates", body=[])
+    code, out, err = run(capsys, "templates", "--api-key", "ak_before_action_0123456789", "list")
+    assert code == 0 and "ak_before_action" not in out + err
+    assert fake.requests[0]["headers"]["Authorization"] == "Bearer ak_before_action_0123456789"
+
+
+def test_a_typed_key_on_a_terminal_is_not_echoed(fake, capsys, monkeypatch):
+    fake.route("GET", "/health", body={})
+    asked = []
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("getpass.getpass", lambda prompt: asked.append(prompt) or "ak_typed\n")
+    assert run(capsys, "--api-key", "-", "call", "health")[0] == 0
+    assert asked == ["XO API key: "]
+    assert fake.requests[0]["headers"]["Authorization"] == "Bearer ak_typed"
+
+
+def test_a_dry_run_needs_no_key_and_never_fetches_the_spec(fake, capsys, monkeypatch):
+    monkeypatch.delenv("XO_API_KEY")
+    code, out, _ = run(capsys, "templates", "create", "--name", "x", "--dry-run")
+    assert code == 0 and json.loads(out)["body"] == {"name": "x"}
+    assert run(capsys, "api", "GET", "/health", "--dry-run")[0] == 0
+    monkeypatch.delenv("XO_SPEC")
+    monkeypatch.setattr("xo.spec._bundled", lambda: None)
+    monkeypatch.setenv("XO_API_KEY", KEY)
+    code, _, err = run(capsys, "call", "createTemplate", "--field", "a=1", "--dry-run")
+    assert code == 1 and "a dry run never fetches the spec" in err
+    assert fake.requests == []
+
+
+def _spec(tmp_path, paths: object) -> str:
+    f = tmp_path / "spec.json"
+    f.write_text(json.dumps({"openapi": "3.1.0", "paths": paths}))
+    return str(f)
+
+
+def test_a_percent_in_the_spec_is_not_a_format(fake, capsys, monkeypatch, tmp_path):
+    monkeypatch.setenv("XO_SPEC", _spec(tmp_path, {"/rate": {"get": {
+        "summary": "100%(x)s of %d", "parameters": [{"name": "q", "in": "query", "description": "50%"}]}}}))
+    with pytest.raises(SystemExit):
+        cli.main(["rate", "--help"])
+    out = capsys.readouterr().out
+    assert "100%(x)s of %d" in out and "50%" in out and "%%" not in out
+    with pytest.raises(SystemExit):
+        cli.main(["--help"])
+    assert "100%(x)s of %d" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("content", ["[1, 2]", '{"paths": {"/x": {"get": {"parameters": ["q"]}}}}',
+                                     '{"paths": {"/x": {"post": {"requestBody": {"content": '
+                                     '{"application/json": {"schema": true}}}}}}}',
+                                     "[" * 100000, "\udcff"])
+def test_a_bad_spec_leaves_the_builtins_working(fake, capsys, monkeypatch, tmp_path, content):
+    f = tmp_path / "bad.json"
+    f.write_bytes(content.encode("utf-8", "surrogateescape") if content == "\udcff" else content.encode())
+    monkeypatch.setenv("XO_SPEC", str(f))
+    fake.route("GET", "/health", body={"ok": 1})
+    assert run(capsys, "api", "GET", "/health")[0] == 0
+    with pytest.raises(SystemExit) as e:
+        cli.main(["claude-code", "--prompt", "x"])
+    err = capsys.readouterr().err
+    # A spec that cannot be read says so in one line; one that reads but lacks the command is a usage error.
+    assert (e.value.code == 1 and err.startswith("xo: cannot use spec") and err.count("\n") == 1) or \
+        (e.value.code == 2 and "invalid choice" in err)
+
+
+def test_an_unreadable_named_spec_says_so(fake, capsys, tmp_path):
+    with pytest.raises(SystemExit) as e:
+        cli.main(["--spec", str(tmp_path / "missing.json"), "claude-code", "--prompt", "x"])
+    assert e.value.code == 1
+    assert "cannot use spec" in capsys.readouterr().err
+
+
+def test_spec_flags_are_never_taken_for_global_abbreviations(fake, capsys, monkeypatch, tmp_path):
+    monkeypatch.setenv("XO_SPEC", _spec(tmp_path, {"/params": {"get": {"parameters": [
+        {"name": "s", "in": "query"}, {"name": "t", "in": "query"}]}}}))
+    fake.route("GET", "/params", body={})
+    assert run(capsys, "params", "--s", "Q5", "--t", "Q7")[0] == 0
+    assert fake.requests[0]["query"] == "s=Q5&t=Q7"
+
+
+def test_undeclared_placeholders_and_clashing_names_get_working_flags(fake, capsys, monkeypatch, tmp_path):
+    monkeypatch.setenv("XO_SPEC", _spec(tmp_path, {"/items/{id}/sub": {"post": {
+        "parameters": [{"name": "data", "in": "query", "required": True}],
+        "requestBody": {"required": True, "content": {"application/json": {"schema": {
+            "type": "object", "required": ["data"], "properties": {"data": {"type": "string"}}}}}}}}}))
+    err = run(capsys, "items-sub")[2]
+    assert "xo: items-sub needs --data-param, --id\n" == err
+    err = run(capsys, "items-sub", "--id", "i/1", "--data-param", "q")[2]
+    assert "needs --data-param-param" in err
+    fake.route("POST", "/items/i%2F1/sub", body={})
+    assert run(capsys, "items-sub", "--id", "i/1", "--data-param", "q", "--data-param-param", "true")[0] == 0
+    assert fake.requests[0]["body"] == {"data": "true"}
+
+
+def test_own_headers_get_no_flag_and_cannot_be_passed(fake, capsys, monkeypatch, tmp_path):
+    monkeypatch.setenv("XO_SPEC", _spec(tmp_path, {"/h": {"get": {"parameters": [
+        {"name": "Host", "in": "header"}, {"name": "authorization ", "in": "header"},
+        {"name": "Proxy-Authorization", "in": "header"}, {"name": "X-Ok", "in": "header"}]}}}))
+    assert "--host" in _argparse_err(capsys, "h", "--host", "evil.example")
+    for name in ("Host", "Cookie", "Proxy-Thing", "Transfer-Encoding"):
+        assert "cannot be set" in run(capsys, "call", "get_h", "--param", f"{name}=x")[2]
+    fake.route("GET", "/h", body={})
+    assert run(capsys, "call", "get_h", "--param", "x-ok=1")[0] == 0
+    assert fake.requests[0]["headers"]["X-Ok"] == "1"
+
+
+def test_a_string_field_keeps_its_text(fake, capsys):
+    fake.route("POST", "/claude-code", body={})
+    assert run(capsys, "claude-code", "--prompt", "true")[0] == 0
+    assert fake.requests[0]["body"] == {"prompt": "true"}
+
+
+def test_help_and_version_paths_are_not_bare_commands(fake, capsys, monkeypatch, tmp_path):
+    monkeypatch.setenv("XO_SPEC", _spec(tmp_path, {"/help": {"get": {}}, "/version": {"get": {}}}))
+    with pytest.raises(SystemExit):
+        cli.main(["--help"])
+    out = capsys.readouterr().out
+    assert "help-api" in out and "version-api" in out
+
+
+def test_control_characters_from_the_spec_are_not_printed(fake, capsys, monkeypatch, tmp_path):
+    monkeypatch.setenv("XO_SPEC", _spec(tmp_path, {"/x": {"get": {
+        "operationId": "op\u001b]0;pwn\u0007", "summary": "s\u001b[31mred\u009b"}}}))
+    assert "\x1b" not in run(capsys, "ops")[1]
+    with pytest.raises(SystemExit):
+        cli.main(["--help"])
+    assert "\x1b" not in capsys.readouterr().out
+
+
+def test_a_reader_that_leaves_early_is_not_an_error(fake, capsys, monkeypatch):
+    def gone(*args, **kwargs):
+        raise BrokenPipeError
+    monkeypatch.setattr("os.dup2", lambda *a: None)
+    monkeypatch.setattr(cli, "print", gone, raising=False)
+    assert cli.main(["ops"]) == 0

@@ -7,6 +7,7 @@ refuses plain http except to this machine.
 """
 from __future__ import annotations
 
+import getpass
 import http.client
 import json
 import os
@@ -56,7 +57,9 @@ def base_url(flag: str | None = None) -> str:
 def api_key(flag: str | None = None) -> str:
     """The key from --api-key (`-` reads one line from stdin) or $XO_API_KEY. Never echoed."""
     if flag == "-":
-        source, key = "the key read from stdin", sys.stdin.readline().strip()
+        # On a terminal, read without echo so the key never lands in the scrollback.
+        typed = getpass.getpass("XO API key: ") if sys.stdin.isatty() else sys.stdin.readline()
+        source, key = "the key read from stdin", typed.strip()
     elif flag:
         source, key = "--api-key", flag.strip()
     else:
@@ -81,6 +84,10 @@ def redact(value: Any, key: str | None) -> Any:
     if isinstance(value, dict):
         return {redact(k, key): redact(v, key) for k, v in value.items()}
     return value
+
+
+def _one_line(value: Any) -> str:
+    return " ".join(str(value).split())
 
 
 class Client:
@@ -130,10 +137,11 @@ class Client:
         except urllib.error.HTTPError as e:
             raise XoError(self.scrub(self._http_error(label, e))) from None
         except (urllib.error.URLError, TimeoutError, OSError) as e:
-            reason = getattr(e, "reason", e)
+            reason = _one_line(getattr(e, "reason", e))
             raise XoError(self.scrub(f"{label}: could not reach {self.base} ({reason})")) from None
         except (http.client.HTTPException, ValueError) as e:
-            raise XoError(self.scrub(f"{label}: bad request or response ({type(e).__name__}: {e})")) from None
+            reason = f"{type(e).__name__}: {_one_line(e)}"
+            raise XoError(self.scrub(f"{label}: bad request or response ({reason})")) from None
 
     def _parse(self, status: int, raw: bytes) -> Response:
         text = self.scrub(raw.decode("utf-8", errors="replace"))

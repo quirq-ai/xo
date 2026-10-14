@@ -13,11 +13,20 @@ from __future__ import annotations
 
 import argparse
 import re
-from typing import Any, Callable
+from typing import Any, Callable, NamedTuple
 
-from xo.spec import Operation, _is_auth
+from xo.spec import Operation, clean, known_params
 
-RESERVED = {"ops", "call", "api"}
+# Built-in command names, and names argparse or a reader would take for something else.
+RESERVED = {"ops", "call", "api", "help", "version"}
+
+
+class Flag(NamedTuple):
+    dest: str
+    where: str  # path, query, header or body
+    wire: str   # the name the API uses
+    flag: str   # the flag, without --
+    type: str   # a body field's schema type
 
 
 def kebab(text: str) -> str:
@@ -70,39 +79,49 @@ def register(sub: argparse._SubParsersAction, ops: list[Operation], parents: lis
             _operation(sub.add_parser(command, parents=parents, help=_line(op), description=_about(op)),
                        op, add_send, run)
             continue
-        g = sub.add_parser(command, help=", ".join(sorted(actions)))
+        # parents: the global options parse here too, so `xo CMD --api-key K ACTION` never takes the
+        # key for the ACTION (and never echoes it in an "invalid choice" error).
+        g = sub.add_parser(command, parents=parents, help=", ".join(sorted(actions)))
         gsub = g.add_subparsers(dest="action", required=True, metavar="ACTION")
         for name, op in sorted(actions.items()):
             _operation(gsub.add_parser(name, parents=parents, help=_line(op), description=_about(op)),
                        op, add_send, run)
 
 
+def _esc(text: str) -> str:
+    """argparse formats help with %; text from a spec must not be read as a format."""
+    return text.replace("%", "%%")
+
+
 def _line(op: Operation) -> str:
-    return f"{op.method} {op.path}  {op.summary}".rstrip()
+    return _esc(f"{op.method} {clean(op.path)}  {op.summary}".rstrip())
 
 
 def _about(op: Operation) -> str:
-    return f"{op.summary}\n\n{op.method} {op.path}  (operation {op.op_id})".strip()
+    # argparse %-formats a description only when it holds "%(prog)", so escape only then.
+    text = f"{op.summary}\n\n{op.method} {clean(op.path)}  (operation {op.op_id})".strip()
+    return _esc(text) if "%(prog)" in text else text
 
 
 def _operation(p: argparse.ArgumentParser, op: Operation, add_send: Callable[[argparse.ArgumentParser], None],
                run: Callable[[argparse.Namespace], int]) -> None:
-    flags: list[tuple[str, str, str]] = []  # (dest, where, wire name)
+    flags: list[Flag] = []
     taken = {"data", "field", "dry-run", "yes", "api-key", "base-url", "spec", "timeout", "help"}
-    for prm in op.params:
-        if _is_auth(prm):
-            continue
+    for prm in known_params(op).values():
         flag = _unique(kebab(prm.name), taken)
         dest = f"p_{len(flags)}"
+        need = " (required)" if prm.required else ""
         p.add_argument(f"--{flag}", dest=dest, metavar="VALUE",
-                       help=f"{prm.where} parameter{' (required)' if prm.required else ''}. {prm.description}".strip())
-        flags.append((dest, prm.where, prm.name))
-    for fname, required, desc in op.body_fields:
-        flag = _unique(kebab(fname), taken)
+                       help=_esc(f"{prm.where} parameter {clean(prm.name)}{need}. {prm.description}".strip()))
+        flags.append(Flag(dest, prm.where, prm.name, flag, ""))
+    for bf in op.body_fields:
+        flag = _unique(kebab(bf.name), taken)
         dest = f"p_{len(flags)}"
+        need = " (required)" if bf.required else ""
+        how = "text" if bf.type == "string" else "JSON when it parses"
         p.add_argument(f"--{flag}", dest=dest, metavar="VALUE",
-                       help=f"body field{' (required)' if required else ''}; JSON when it parses. {desc}".strip())
-        flags.append((dest, "body", fname))
+                       help=_esc(f"body field {clean(bf.name)}{need}; {how}. {bf.description}".strip()))
+        flags.append(Flag(dest, "body", bf.name, flag, bf.type))
     if op.has_body:
         add_send(p)
     else:
@@ -120,13 +139,24 @@ def _unique(flag: str, taken: set[str]) -> str:
     return name
 
 
-def values(args: argparse.Namespace) -> tuple[dict[str, str], dict[str, str]]:
-    """(params, body fields) the user gave, by their wire names."""
+def values(args: argparse.Namespace) -> tuple[dict[str, str], dict[str, tuple[Flag, str]]]:
+    """(params, body fields) the user gave, by their wire names; body fields keep their Flag."""
     params: dict[str, str] = {}
-    fields: dict[str, str] = {}
-    for dest, where, wire in args.flags:
-        value: Any = getattr(args, dest, None)
+    fields: dict[str, tuple[Flag, str]] = {}
+    for f in args.flags:
+        value: Any = getattr(args, f.dest, None)
         if value is None:
             continue
-        (fields if where == "body" else params)[wire] = value
+        if f.where == "body":
+            fields[f.wire] = (f, value)
+        else:
+            params[f.wire] = value
     return params, fields
+
+
+def flag_for(args: argparse.Namespace, wire: str, *, body: bool = False) -> str:
+    """The flag the user types for a parameter (or, with body=True, a body field), as its help shows it."""
+    for f in args.flags:
+        if f.wire == wire and (f.where == "body") == body:
+            return f"--{f.flag}"
+    return f"--{kebab(wire)}"

@@ -4,3 +4,5 @@
 /.github/        @sharmasuraj0123
 # dependency pins and the package name
 /pyproject.toml  @sharmasuraj0123
+# the one door the API key goes through
+/src/xo/client.py  @sharmasuraj0123
