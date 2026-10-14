@@ -47,7 +47,7 @@ def test_an_error_body_echoing_the_key_is_redacted(fake, capsys):
     fake.route("GET", "/health", status=401, body={"detail": f"bad key {KEY}"})
     code, _, err = run(capsys, "call", "health")
     assert code == 1
-    assert "HTTP 401 (check XO_API_KEY): bad key <redacted>" in err
+    assert "HTTP 401 (check the API key): bad key <redacted>" in err
 
 
 def test_redirects_are_never_followed(fake, capsys):
@@ -81,8 +81,8 @@ def test_ops_lists_and_filters(fake, capsys):
     assert code == 0
     lines = out.splitlines()
     assert [line.split("\t")[0] for line in lines] == [
-        "listTemplates", "createTemplate", "delete_api_v1_templates_template_id", "getTemplate"]
-    assert lines[2].endswith("\tDelete a template")
+        "createOrgTemplate", "listTemplates", "createTemplate", "delete_api_v1_templates_template_id", "getTemplate"]
+    assert lines[3].endswith("\tDelete a template")
 
 
 def test_ops_needs_no_key_for_a_local_spec(fake, capsys, monkeypatch):
@@ -145,3 +145,119 @@ def test_spec_falls_back_to_the_api(fake, capsys, monkeypatch):
 
     fake.route("GET", "/api/openapi", body="<html>")
     assert "did not return an OpenAPI document" in run(capsys, "ops")[2]
+
+
+# --- audit round 1 -------------------------------------------------------------------------------
+
+@pytest.mark.parametrize("argv", [
+    ["call", "createTemplate", "--api-key", KEY, "--bogus"],
+    ["call", "createTemplate", f"--api-key={KEY}", "--bogus"],
+    ["--bogus", "--api-key", KEY],
+])
+def test_an_argparse_error_never_echoes_the_key(fake, capsys, argv):
+    with pytest.raises(SystemExit) as e:
+        cli.main(argv)
+    out, err = capsys.readouterr()
+    assert e.value.code == 2
+    assert KEY not in out + err
+
+
+def test_global_options_work_after_the_command(fake, capsys):
+    fake.route("GET", "/health", body={})
+    assert run(capsys, "call", "health", "--api-key", "ak_after_command")[0] == 0
+    assert fake.requests[0]["headers"]["Authorization"] == "Bearer ak_after_command"
+
+
+def test_api_key_from_stdin(fake, capsys, monkeypatch):
+    import io
+    fake.route("GET", "/health", body={})
+    monkeypatch.setattr("sys.stdin", io.StringIO("ak_from_stdin\n"))
+    assert run(capsys, "--api-key", "-", "call", "health")[0] == 0
+    assert fake.requests[0]["headers"]["Authorization"] == "Bearer ak_from_stdin"
+    assert "both read stdin" in run(capsys, "--api-key", "-", "api", "POST", "/x", "--data", "-")[2]
+
+
+@pytest.mark.parametrize("bad", [f"{KEY}\nX-Evil: 1", f"{KEY}\rX", "ak_with space", "ak_ünicode"])
+def test_a_key_with_bad_characters_is_refused_unechoed(fake, capsys, monkeypatch, bad):
+    monkeypatch.setenv("XO_API_KEY", bad)
+    code, out, err = run(capsys, "call", "health")
+    assert code == 1 and "characters an API key cannot have" in err
+    assert bad.strip() not in out + err and "Traceback" not in err
+    assert fake.requests == []
+
+
+def test_redaction_survives_truncation_and_json_escapes(fake, capsys):
+    fake.route("GET", "/health", status=500, body="x" * 180 + KEY + " tail")
+    assert KEY[:10] not in run(capsys, "call", "health")[2]
+    escaped = "".join(f"\\u{ord(c):04x}" for c in KEY)
+    fake.route("GET", "/health", body='{"echo": "' + escaped + '"}')
+    code, out, _ = run(capsys, "call", "health")
+    assert code == 0 and json.loads(out) == {"echo": "<redacted>"}
+
+
+def test_a_broken_response_is_one_line_not_a_traceback(fake, capsys, monkeypatch):
+    import http.client
+
+    def boom(*a, **k):
+        raise http.client.BadStatusLine(f"junk {KEY}")
+    monkeypatch.setattr("xo.client.Client._parse", boom)
+    fake.route("GET", "/health", body={})
+    code, _, err = run(capsys, "call", "health")
+    assert code == 1 and err.count("\n") == 1 and "BadStatusLine" in err
+
+
+def test_an_unexpected_error_is_one_redacted_line(fake, capsys, monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError(f"surprise {KEY}")
+    monkeypatch.setattr("xo.client.Client.request", boom)
+    code, _, err = run(capsys, "call", "health")
+    assert code == 1 and err == "xo: unexpected RuntimeError: surprise <redacted>\n"
+
+
+def test_mutations_are_labelled_delete_needs_yes_and_dry_run_sends_nothing(fake, capsys):
+    code, out, err = run(capsys, "api", "delete", "/api/v1/templates/t1")
+    assert code == 1 and "needs --yes" in err and fake.requests == []
+
+    code, out, err = run(capsys, "call", "createTemplate", "--field", "name=demo", "--dry-run")
+    assert code == 0 and fake.requests == [] and "dry run" in err
+    plan = json.loads(out)
+    assert plan["method"] == "POST" and plan["body"] == {"name": "demo"} and "Authorization" not in out
+
+    fake.route("DELETE", "/api/v1/templates/t1", status=204)
+    code, out, err = run(capsys, "api", "delete", "/api/v1/templates/t1", "--yes")
+    assert code == 0 and err.startswith("xo: DELETE ")
+    fake.route("GET", "/health", body={})
+    assert run(capsys, "call", "health")[2] == ""
+
+
+def test_header_parameters_are_sent_and_authorization_is_not_settable(fake, capsys):
+    fake.route("POST", "/api/v1/orgs/o1/templates", body={})
+    assert "needs --param X-Org-Token=" in run(capsys, "call", "createOrgTemplate", "--param", "org=o1")[2]
+    assert "cannot set Authorization" in run(capsys, "call", "createOrgTemplate", "--param", "org=o1",
+                                             "--param", "authorization=Bearer x")[2]
+    code, _, _ = run(capsys, "call", "createOrgTemplate", "--param", "org=o1", "--param", "X-Org-Token=t")
+    assert code == 0
+    assert fake.requests[0]["headers"]["X-Org-Token"] == "t"
+    assert fake.requests[0]["headers"]["Authorization"] == f"Bearer {KEY}"
+
+
+def test_blank_summary_and_nan(fake, capsys):
+    code, out, _ = run(capsys, "ops", "createOrg")
+    assert code == 0 and out.endswith("/api/v1/orgs/{org}/templates\t\n")
+    assert "not valid JSON" in run(capsys, "api", "POST", "/x", "--data", '{"a": NaN}')[2]
+    fake.route("POST", "/x", body={})
+    assert run(capsys, "api", "POST", "/x", "--field", "a=NaN")[0] == 0
+    assert fake.requests[0]["body"] == {"a": "NaN"}
+
+
+def test_ops_json_with_no_match_exits_1(fake, capsys):
+    code, out, err = run(capsys, "ops", "nothing-like-this", "--json")
+    assert code == 1 and json.loads(out) == [] and "no operations match" in err
+
+
+def test_no_spec_says_pass_spec(fake, capsys, monkeypatch):
+    monkeypatch.delenv("XO_SPEC")
+    monkeypatch.setattr("xo.spec._bundled", lambda: None)
+    fake.route("GET", "/api/openapi", status=307, headers={"Location": "https://app.xo.builders/sign-in"})
+    err = run(capsys, "ops")[2]
+    assert "pass --spec FILE" in err and err.count("\n") == 1

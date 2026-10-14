@@ -63,9 +63,14 @@ def load(client: Client, path: str | None = None) -> dict:
     bundled = _bundled()
     if bundled is not None:
         return bundled
-    resp = client.request("GET", REMOTE_PATH)
+    hint = (f"xo has no bundled spec yet, so download it from {client.base}{REMOTE_PATH} while signed in "
+            "and pass --spec FILE (or set XO_SPEC)")
+    try:
+        resp = client.request("GET", REMOTE_PATH)
+    except XoError as e:
+        raise XoError(f"{e}. {hint}") from None
     if not isinstance(resp.data, dict) or "paths" not in resp.data:
-        raise XoError(f"{client.base}{REMOTE_PATH} did not return an OpenAPI document; pass --spec FILE")
+        raise XoError(f"{client.base}{REMOTE_PATH} did not return an OpenAPI document. {hint}")
     return resp.data
 
 
@@ -77,6 +82,11 @@ def _resolve(spec: dict, obj: Any) -> Any:
             node = node.get(part, {}) if isinstance(node, dict) else {}
         return node
     return obj
+
+
+def _first_line(text: Any) -> str:
+    lines = str(text or "").strip().splitlines()[:1]
+    return lines[0].strip() if lines else ""
 
 
 def _op_id(method: str, path: str) -> str:
@@ -104,8 +114,7 @@ def operations(spec: dict) -> list[Operation]:
             ops.append(Operation(
                 op_id=raw.get("operationId") or _op_id(method, path),
                 method=method.upper(), path=path,
-                summary=(raw.get("summary") or raw.get("description") or "").strip().splitlines()[0]
-                if (raw.get("summary") or raw.get("description")) else "",
+                summary=_first_line(raw.get("summary") or raw.get("description")),
                 tags=list(raw.get("tags") or []),
                 params=params,
                 has_body=body is not None,
@@ -127,16 +136,22 @@ def find(spec: dict, name: str) -> Operation:
     raise XoError(f"no operation {name!r} in the spec{hint}")
 
 
-def build(op: Operation, values: dict[str, str]) -> tuple[str, dict[str, str]]:
-    """The request path and query for `op` from NAME=VALUE pairs; every required one must be given."""
-    known = {p.name: p for p in op.params}
+def build(op: Operation, values: dict[str, str]) -> tuple[str, dict[str, str], dict[str, str]]:
+    """The request path, query and headers for `op` from NAME=VALUE pairs.
+
+    Every required parameter must be given. The Authorization header is xo's own: a spec that lists
+    it as a parameter gets the API key, and --param cannot set it.
+    """
+    known = {p.name: p for p in op.params if not _is_auth(p)}
     for name in op.path_params:
         known.setdefault(name, Param(name, "path", True))
+    if any(_is_auth(Param(n, "header", False)) for n in values):
+        raise XoError("--param cannot set Authorization; xo sends the API key itself")
     unknown = sorted(set(values) - set(known))
     if unknown:
         raise XoError(f"{op.op_id} takes no parameter {', '.join(unknown)}; "
                       f"it takes: {', '.join(sorted(known)) or 'none'}")
-    missing = [n for n, p in known.items() if p.required and p.where != "header" and n not in values]
+    missing = [n for n, p in known.items() if p.required and n not in values]
     if missing:
         raise XoError(f"{op.op_id} needs {', '.join(f'--param {n}=...' for n in missing)}")
     from urllib.parse import quote
@@ -144,4 +159,9 @@ def build(op: Operation, values: dict[str, str]) -> tuple[str, dict[str, str]]:
     for name in op.path_params:
         path = path.replace("{" + name + "}", quote(values[name], safe=""))
     query = {n: v for n, v in values.items() if known[n].where == "query"}
-    return path, query
+    headers = {n: v for n, v in values.items() if known[n].where == "header"}
+    return path, query, headers
+
+
+def _is_auth(p: Param) -> bool:
+    return p.where == "header" and p.name.lower() == "authorization"

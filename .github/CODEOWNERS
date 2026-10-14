@@ -1,0 +1,6 @@
+# Owners for quirq-ai/xo, as in quirq-ai/sync. Only the paths that set policy or that CI trusts
+# are owned; there is no catch-all. Owner names are suraj's call: never change them.
+# workflows and this file
+/.github/        @sharmasuraj0123
+# dependency pins and the package name
+/pyproject.toml  @sharmasuraj0123

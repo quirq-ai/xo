@@ -3,7 +3,9 @@ requires = ["setuptools>=80"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "xo"
+# The command is `xo`; the distribution is `quirq-xo` because PyPI's `xo` is an unrelated
+# tic-tac-toe game, and `pip install -U xo` would replace this tool with it.
+name = "quirq-xo"
 dynamic = ["version"]
 description = "xo, the command line for the XO Cloud API (app.xo.builders)."
 readme = "README.md"
