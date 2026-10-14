@@ -43,7 +43,7 @@ GLOBAL_DEFAULTS = {"api_key": None, "base_url": None, "spec": None, "timeout": D
 _VALUED = {"--api-key", "--base-url", "--spec", "--timeout"}
 HIDDEN = "<hidden>"
 _UNRECOGNIZED = re.compile(r"(unrecognized arguments: )(.*)\Z", re.S)
-_ECHOED = re.compile(r"(invalid choice|invalid [\w ]+ value): ('(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\"|\S+)")
+_ECHOED = re.compile(r"(invalid choice|invalid [\w ]+ value|ignored explicit argument): ('(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\"|\S+)")
 _JOINED = re.compile(r"(--?[A-Za-z0-9][\w-]*)=\S*")
 
 
@@ -59,19 +59,48 @@ def _secrets(argv: list[str]) -> list[str]:
     return [s for s in found if len(s) >= 6]
 
 
+def _option_name(word: str) -> str:
+    """--name=value -> --name; -kVALUE -> -k."""
+    if word.startswith("--"):
+        return word.partition("=")[0]
+    return word[:2]
+
+
+def _typed_values(argv: list[str]) -> list[str]:
+    """Everything in argv that is not an option name: values, joined values, positionals."""
+    values = []
+    for word in argv:
+        if word.startswith("--"):
+            values.append(word.partition("=")[2])
+        elif word.startswith("-") and len(word) > 2:
+            values.append(word[2:])
+        elif not word.startswith("-"):
+            values.append(word)
+    # Very short words are no key, and hiding them would garble the message.
+    return sorted({v for v in values if len(v) >= 3}, key=len, reverse=True)
+
+
 def safe_error(message: str, argv: list[str]) -> str:
     """An argparse error with nothing the user typed as a value: argparse echoes unrecognised
-    arguments and bad choices, and a mistyped key flag (--api_key K, --token=K, a bare K) would put
-    the key on stderr. Option names stay, so the message still says what was wrong."""
+    arguments, bad choices and ignored values, and a key typed in the wrong place (--api_key K,
+    --token=K, -kK, a bare K) would land on stderr. Every value in argv is hidden wherever it shows;
+    option names stay, so the message still says what was wrong."""
     def unrecognized(m: re.Match) -> str:
-        words = [w.partition("=")[0] if w.startswith("-") else HIDDEN for w in m.group(2).split()]
+        words = [_option_name(w) if w.startswith("-") else HIDDEN for w in m.group(2).split()]
         return m.group(1) + " ".join(words)
     message = _UNRECOGNIZED.sub(unrecognized, message)
     message = _ECHOED.sub(lambda m: f"{m.group(1)}: {HIDDEN}", message)
     message = _JOINED.sub(lambda m: f"{m.group(1)}={HIDDEN}", message)
-    for secret in _secrets(argv):
-        message = message.replace(secret, HIDDEN)
+    for value in [*_secrets(argv), *_typed_values(argv)]:
+        message = re.sub(r"(?<![\w-])" + re.escape(value) + r"(?![\w-])", HIDDEN, message)
+        message = message.replace(value, HIDDEN) if len(value) >= 6 else message
     return message
+
+
+def _json(data: Any) -> str:
+    """JSON for a terminal: json escapes C0 itself; escape DEL and C1 too (only strings hold them)."""
+    out = json.dumps(data, indent=2, ensure_ascii=False)
+    return re.sub(r"[\x7f-\x9f]", lambda m: f"\\u{ord(m.group()):04x}", out)
 
 
 class _Parser(argparse.ArgumentParser):
@@ -148,7 +177,7 @@ def _client(args: argparse.Namespace, *, need_key: bool = True) -> Client:
 
 def _print(client: Client, data: Any, text: str) -> None:
     if data is not None:
-        out = json.dumps(data, indent=2, ensure_ascii=False)
+        out = _json(data)
     else:
         out = text
     if out:
@@ -162,13 +191,13 @@ def _send(client: Client, args: argparse.Namespace, method: str, path: str, *, q
         plan = {"method": method, "url": client.url(path, query), "headers": headers or {}, "body": body}
         if body is not None:
             client.encode(body)  # the same JSON check a real send makes
-        print(client.scrub(json.dumps(plan, indent=2, ensure_ascii=False)))
+        print(client.scrub(_json(plan)))
         print("xo: dry run, nothing sent", file=sys.stderr)
         return 0
     if method == "DELETE" and not args.yes:
         raise XoError(f"DELETE {path} needs --yes (or --dry-run to see the request first)")
     if method != "GET":
-        print(f"xo: {method} {client.url(path)}", file=sys.stderr)
+        print(f"xo: {method} {spec.clean(client.url(path))}", file=sys.stderr)
     resp = client.request(method, path, query=query, body=body, headers=headers)
     _print(client, resp.data, resp.text)
     return 0
@@ -182,12 +211,12 @@ def _ops(args: argparse.Namespace) -> int:
         ops = [o for o in ops if f in o.op_id.lower() or f in o.path.lower()
                or any(f in t.lower() for t in o.tags)]
     if args.json:
-        print(json.dumps([{"id": o.op_id, "method": o.method, "path": o.path, "summary": o.summary,
-                           "tags": o.tags, "params": [p.__dict__ for p in o.params],
-                           "body": o.has_body} for o in ops], indent=2, ensure_ascii=False))
+        print(_json([{"id": o.op_id, "method": o.method, "path": o.path, "summary": o.summary,
+                      "tags": o.tags, "params": [p.__dict__ for p in o.params],
+                      "body": o.has_body} for o in ops]))
     else:
         for o in ops:
-            print(f"{o.op_id}\t{o.method}\t{o.path}\t{o.summary}")
+            print(f"{o.op_id}\t{o.method}\t{spec.clean(o.path)}\t{o.summary}")
     if not ops:
         print("xo: " + ("no operations match" if args.filter else "the spec lists no operations"),
               file=sys.stderr)
@@ -260,6 +289,15 @@ def _common() -> argparse.ArgumentParser:
     return c
 
 
+def _redacted(text: str, argv: list[str], key: str | None = None) -> str:
+    """xo's own error text with every key it could hold replaced: the one in use, $XO_API_KEY and
+    any --api-key value, wherever the user typed it."""
+    for secret in (key, *_secrets(argv)):
+        if secret and secret != "-":
+            text = redact(text, secret)
+    return text
+
+
 def _command_word(argv: list[str]) -> str | None:
     """The first word that is not an option or a global option's value: the command."""
     skip = False
@@ -290,11 +328,13 @@ def _endpoints(sub: argparse._SubParsersAction, common: argparse.ArgumentParser,
         if local is not None:
             commands.register(sub, spec.operations(local), [common], _add_send, _endpoint)
     except (XoError, ValueError, TypeError, RecursionError, argparse.ArgumentError) as e:
-        if _command_word(argv) in ("ops", "call", "api", None):
-            return
+        command = _command_word(argv)
+        if command in ("ops", "call", "api"):
+            return  # they say for themselves when they need the spec
         reason = str(e) if isinstance(e, XoError) else f"cannot use spec {where}: {type(e).__name__}: {e}"
-        print(f"xo: {safe_error(reason, argv)}", file=sys.stderr)
-        sys.exit(1)
+        print(f"xo: {spec.clean(_redacted(reason, argv))}", file=sys.stderr)
+        if command is not None:
+            sys.exit(1)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -346,17 +386,14 @@ def main(argv: list[str] | None = None) -> int:
             pass
         return 0
     except XoError as e:
-        print(f"xo: {e}", file=sys.stderr)
+        print(f"xo: {spec.clean(_redacted(str(e), argv, getattr(args, 'resolved_key', None)))}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:
         print("xo: interrupted", file=sys.stderr)
         return 130
     except Exception as e:  # noqa: BLE001 - one line, never a traceback that could carry the key
-        text = str(e)
-        for key in (getattr(args, "resolved_key", None), *_secrets(argv)):
-            if key and key != "-":
-                text = redact(text, key)
-        print(f"xo: unexpected {type(e).__name__}: {text}", file=sys.stderr)
+        text = _redacted(str(e), argv, getattr(args, "resolved_key", None))
+        print(f"xo: unexpected {type(e).__name__}: {spec.clean(text)}", file=sys.stderr)
         return 1
 
 

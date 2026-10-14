@@ -199,11 +199,11 @@ def test_a_broken_response_is_one_line_not_a_traceback(fake, capsys, monkeypatch
     import http.client
 
     def boom(*a, **k):
-        raise http.client.BadStatusLine(f"junk {KEY}")
+        raise http.client.BadStatusLine(f"junk {KEY}\r\n")
     monkeypatch.setattr("xo.client.Client._parse", boom)
     fake.route("GET", "/health", body={})
     code, _, err = run(capsys, "call", "health")
-    assert code == 1 and err.count("\n") == 1 and "BadStatusLine" in err
+    assert code == 1 and err.count("\n") == 1 and "\r" not in err and err.endswith("<redacted>)\n")
 
 
 def test_an_unexpected_error_is_one_redacted_line(fake, capsys, monkeypatch):
@@ -401,11 +401,14 @@ def test_a_percent_in_the_spec_is_not_a_format(fake, capsys, monkeypatch, tmp_pa
     assert "100%(x)s of %d" in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("content", ["[1, 2]", '{"paths": {"/x": {"get": {"parameters": ["q"]}}}}',
-                                     '{"paths": {"/x": {"post": {"requestBody": {"content": '
-                                     '{"application/json": {"schema": true}}}}}}}',
-                                     "[" * 100000, "\udcff"])
-def test_a_bad_spec_leaves_the_builtins_working(fake, capsys, monkeypatch, tmp_path, content):
+@pytest.mark.parametrize("content,code", [
+    ("[1, 2]", 1),
+    ('{"paths": {"/x": {"get": {"parameters": ["q"]}}}}', 2),  # readable: the bad node is skipped
+    ('{"paths": {"/x": {"post": {"requestBody": {"content": {"application/json": {"schema": true}}}}}}}', 2),
+    ("[" * 100000, 1),
+    ("\udcff", 1),
+])
+def test_a_bad_spec_leaves_the_builtins_working(fake, capsys, monkeypatch, tmp_path, content, code):
     f = tmp_path / "bad.json"
     f.write_bytes(content.encode("utf-8", "surrogateescape") if content == "\udcff" else content.encode())
     monkeypatch.setenv("XO_SPEC", str(f))
@@ -415,8 +418,11 @@ def test_a_bad_spec_leaves_the_builtins_working(fake, capsys, monkeypatch, tmp_p
         cli.main(["claude-code", "--prompt", "x"])
     err = capsys.readouterr().err
     # A spec that cannot be read says so in one line; one that reads but lacks the command is a usage error.
-    assert (e.value.code == 1 and err.startswith("xo: cannot use spec") and err.count("\n") == 1) or \
-        (e.value.code == 2 and "invalid choice" in err)
+    assert e.value.code == code
+    if code == 1:
+        assert err.startswith("xo: cannot use spec") and err.count("\n") == 1
+    else:
+        assert "invalid choice" in err
 
 
 def test_an_unreadable_named_spec_says_so(fake, capsys, tmp_path):
@@ -452,7 +458,8 @@ def test_own_headers_get_no_flag_and_cannot_be_passed(fake, capsys, monkeypatch,
     monkeypatch.setenv("XO_SPEC", _spec(tmp_path, {"/h": {"get": {"parameters": [
         {"name": "Host", "in": "header"}, {"name": "authorization ", "in": "header"},
         {"name": "Proxy-Authorization", "in": "header"}, {"name": "X-Ok", "in": "header"}]}}}))
-    assert "--host" in _argparse_err(capsys, "h", "--host", "evil.example")
+    for flag in ("--host", "--authorization", "--proxy-authorization"):
+        assert flag in _argparse_err(capsys, "h", flag, "evil.example")
     for name in ("Host", "Cookie", "Proxy-Thing", "Transfer-Encoding"):
         assert "cannot be set" in run(capsys, "call", "get_h", "--param", f"{name}=x")[2]
     fake.route("GET", "/h", body={})
@@ -489,3 +496,103 @@ def test_a_reader_that_leaves_early_is_not_an_error(fake, capsys, monkeypatch):
     monkeypatch.setattr("os.dup2", lambda *a: None)
     monkeypatch.setattr(cli, "print", gone, raising=False)
     assert cli.main(["ops"]) == 0
+
+
+# --- audit round 3 -------------------------------------------------------------------------------
+
+@pytest.mark.parametrize("argv", [
+    ["api", "GET", "/x", "--yes=SECRET"],
+    ["api", "GET", "/x", "--dry-run=SECRET"],
+    ["ops", "--json=SECRET"],
+    ["--version=SECRET"],
+    ["call", "health", "-kSECRET"],
+])
+def test_an_ignored_or_joined_value_is_not_echoed(fake, capsys, monkeypatch, argv):
+    monkeypatch.delenv("XO_API_KEY")
+    secret = "ak_FAKE_joined_0123456789abcdef"
+    err = _argparse_err(capsys, *[a.replace("SECRET", secret) for a in argv])
+    assert secret not in err and ("<hidden>" in err or err.endswith("arguments: -k\n"))
+
+
+@pytest.mark.parametrize("argv", [
+    ["call", "KEY"],
+    ["call", "health", "--param", "KEY"],
+    ["call", "createTemplate", "--field", "KEY"],
+    ["api", "GET", "/x", "--query", "KEY"],
+    ["api", "POST", "/x", "--data", "@KEY"],
+    ["--spec", "KEY", "templates", "list"],
+])
+def test_xo_errors_never_repeat_a_key(fake, capsys, argv):
+    with_key = [a.replace("KEY", KEY) for a in argv]
+    if argv[0] == "--spec":
+        with pytest.raises(SystemExit):
+            cli.main(with_key)
+        out, err = capsys.readouterr()
+        assert KEY not in out + err and "<redacted>" in err
+        return
+    code, out, err = run(capsys, *with_key)
+    assert code == 1 and "<redacted>" in err
+
+
+def test_a_typed_key_in_a_value_slot_is_redacted_too(fake, capsys):
+    other = "ak_FAKE_typed_twice_0123456789"
+    code, _, err = run(capsys, "--api-key", other, "call", "health", "--param", other)
+    assert code == 1 and other not in err
+
+
+def test_a_query_parameter_named_like_a_header_is_fine(fake, capsys, monkeypatch, tmp_path):
+    monkeypatch.setenv("XO_SPEC", _spec(tmp_path, {"/search": {"get": {"parameters": [
+        {"name": "host", "in": "query", "required": True}]}}, "/v/{te}": {"get": {}}}))
+    fake.route("GET", "/search", body={})
+    assert run(capsys, "search", "--host", "example.com")[0] == 0
+    assert fake.requests[-1]["query"] == "host=example.com"
+    assert run(capsys, "call", "get_search", "--param", "host=example.org")[0] == 0
+    fake.route("GET", "/v/x", body={})
+    assert run(capsys, "v", "--te", "x")[0] == 0
+
+
+def test_optional_string_fields_keep_their_text(fake, capsys, monkeypatch, tmp_path):
+    monkeypatch.setenv("XO_SPEC", _spec(tmp_path, {"/e": {"post": {"requestBody": {"content": {
+        "application/json": {"schema": {"type": "object", "properties": {
+            "a": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+            "b": {"type": ["string", "null"]},
+            "c": {"anyOf": [{"type": "integer"}, {"type": "null"}]}}}}}}}}}))
+    code, out, _ = run(capsys, "e", "--a", "true", "--b", "5", "--c", "5", "--dry-run")
+    assert code == 0 and json.loads(out)["body"] == {"a": "true", "b": "5", "c": 5}
+
+
+def test_control_characters_never_reach_the_terminal(fake, capsys, monkeypatch, tmp_path):
+    path = "/e\u001b[2Jx\u009b1m"
+    monkeypatch.setenv("XO_SPEC", _spec(tmp_path, {path: {"post": {"operationId": "e", "parameters": [
+        {"name": "q\u001b[31m", "in": "query"}]}}}))
+    for argv in (["ops"], ["ops", "--json"], ["call", "e", "--dry-run"], ["call", "e", "--param", "zz=1"]):
+        _, out, err = run(capsys, *argv)
+        assert not any(c in out + err for c in "\x1b\x9b"), argv
+
+
+def test_an_unreadable_spec_is_named_in_help_too(fake, capsys, monkeypatch, tmp_path):
+    (tmp_path / "bad.json").write_text("[1]")
+    monkeypatch.setenv("XO_SPEC", str(tmp_path / "bad.json"))
+    with pytest.raises(SystemExit) as e:
+        cli.main(["--help"])
+    out, err = capsys.readouterr()
+    assert e.value.code == 0 and "ops" in out
+    assert err.startswith("xo: cannot use spec")
+
+
+def test_a_prog_placeholder_in_the_spec_is_not_formatted(fake, capsys, monkeypatch, tmp_path):
+    monkeypatch.setenv("XO_SPEC", _spec(tmp_path, {"/p": {"get": {"summary": "%(prog)s at 100%"}}}))
+    with pytest.raises(SystemExit):
+        cli.main(["p", "--help"])
+    assert "%(prog)s at 100%" in capsys.readouterr().out
+
+
+def test_a_spec_that_breaks_argparse_leaves_the_builtins(fake, capsys, monkeypatch):
+    def boom(*a, **k):
+        raise TypeError("odd spec")
+    monkeypatch.setattr("xo.commands.register", boom)
+    fake.route("GET", "/health", body={})
+    assert run(capsys, "api", "GET", "/health")[0] == 0
+    with pytest.raises(SystemExit) as e:
+        cli.main(["claude-code"])
+    assert e.value.code == 1 and "TypeError: odd spec" in capsys.readouterr().err

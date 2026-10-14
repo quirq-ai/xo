@@ -202,10 +202,27 @@ def _body_fields(spec: dict, body: dict | None) -> list[BodyField]:
             if not isinstance(name, str) or not name.strip():
                 continue
             prop = _dict(_resolve(spec, prop))
-            kind = prop.get("type") if isinstance(prop.get("type"), str) else ""
             fields[name] = BodyField(name, name in required, _first_line(prop.get("description") or prop.get("title")),
-                                     kind)
+                                     _kind(spec, prop))
     return list(fields.values())
+
+
+def _kind(spec: dict, prop: dict) -> str:
+    """"string" when every value the field takes is text (or null): type string, a type list such as
+    ["string", "null"], or an anyOf/oneOf of such branches, as pydantic writes optional fields."""
+    def texty(node: Any, depth: int = 0) -> bool:
+        node = _dict(_resolve(spec, node))
+        kind = node.get("type")
+        if isinstance(kind, str):
+            return kind in ("string", "null")
+        if isinstance(kind, list):
+            return bool(kind) and all(k in ("string", "null") for k in kind)
+        branches = _list(node.get("anyOf")) or _list(node.get("oneOf"))
+        return depth < 5 and bool(branches) and all(texty(b, depth + 1) for b in branches)
+    kind = prop.get("type")
+    if texty(prop) and kind != "null":
+        return "string"
+    return kind if isinstance(kind, str) else ""
 
 
 def find(spec: dict, name: str) -> Operation:
@@ -242,16 +259,17 @@ def build(op: Operation, values: dict[str, str], flag: Callable[[str], str] = la
     headers_by_lower = {n.lower(): n for n, p in known.items() if p.where == "header"}
     given: dict[str, str] = {}
     for name, value in values.items():
-        if own_header(name):
+        # Only a name that would go out as a header is refused: a query parameter `host` is fine.
+        if own_header(name) and (name not in known or known[name].where == "header"):
             raise XoError(f"{name.strip()} cannot be set: xo sends it itself or it steers routing")
         given[name if name in known else headers_by_lower.get(name.lower(), name)] = value
     unknown = sorted(set(given) - set(known))
     if unknown:
-        raise XoError(f"{label} takes no parameter {', '.join(unknown)}; "
-                      f"it takes: {', '.join(sorted(known)) or 'none'}")
+        raise XoError(f"{label} takes no parameter {clean(', '.join(unknown))}; "
+                      f"it takes: {clean(', '.join(sorted(known))) or 'none'}")
     missing = [n for n, p in known.items() if p.required and n not in given]
     if missing:
-        raise XoError(f"{label} needs {', '.join(flag(n) for n in missing)}")
+        raise XoError(f"{label} needs {clean(', '.join(flag(n) for n in missing))}")
     path = op.path
     for name in op.path_params:
         path = path.replace("{" + name + "}", quote(given[name], safe=""))
