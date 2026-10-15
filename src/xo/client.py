@@ -25,6 +25,7 @@ DEFAULT_BASE_URL = "https://app.xo.builders/api/core/v1"
 DEFAULT_TIMEOUT = 30.0
 KEY_ENV = "XO_API_KEY"
 BASE_URL_ENV = "XO_BASE_URL"
+SERVER_URL_ENV = "XO_SERVER_URL"
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 REDACTED = "<redacted>"
 # A secret shorter than this is not looked for in text: replacing it would garble the message.
@@ -47,6 +48,15 @@ class Response:
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D102
         raise urllib.error.HTTPError(req.full_url, code, msg, headers, fp)
+
+
+def server_url(flag: str | None = None) -> str:
+    """The base of an xo server (`xo serve`), for the routes that need Clerk; it has no default."""
+    url = flag or os.environ.get(SERVER_URL_ENV)
+    if not url:
+        raise XoError(f"this command goes to an xo server: set {SERVER_URL_ENV} (or pass --server-url) "
+                      "to the URL of one running `xo serve`")
+    return base_url(url)
 
 
 def base_url(flag: str | None = None) -> str:

@@ -67,6 +67,7 @@ class Operation:
     top_fields: list[str] = field(default_factory=list)  # every top-level name the body schema lists
     secret_paths: list[tuple[str, ...]] = field(default_factory=list)  # where the body holds keys or tokens
     copies_key: bool = False  # x-xo-copies-api-key: the server stores the caller's API key in what it creates
+    server: bool = False  # x-xo-server: served by an xo server (`xo serve`, $XO_SERVER_URL), not the core API
 
     @property
     def path_params(self) -> list[str]:
@@ -186,6 +187,7 @@ def operations(spec: dict) -> list[Operation]:
                 top_fields=list(_properties(spec, _body_schema(spec, body))),
                 secret_paths=_secret_paths(spec, _body_schema(spec, body)),
                 copies_key=raw.get("x-xo-copies-api-key") is True,
+                server=raw.get("x-xo-server") is True,
             ))
     return sorted(ops, key=lambda o: (o.path, o.method))
 

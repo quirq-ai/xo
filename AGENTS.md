@@ -3,13 +3,17 @@
 Read `README.md` first.
 
 - Every change is a pull request against `main`. It lands only with the `presubmit` check green.
-- `src/xo/client.py` is the only code that talks to the network. Keep it that way.
+- `src/xo/client.py` is the only CLI code that talks to the network, and `Clerk` in
+  `src/xo/server.py` the only server code. Keep it that way.
+- `CLERK_SECRET_KEY` lives only in the `xo serve` deployment's environment. Never print, log or
+  return it; tests assert it never reaches output or the audit log.
 - The API key is a secret. Never print, log, commit or write it to a file; tests assert it never
   reaches stdout or stderr. Never follow a redirect with it attached.
 - Tests mock the API (`tests/conftest.py`, a server on 127.0.0.1). No test reaches XO.
 - Standard library only. A new dependency needs a reason in the PR.
 - `src/xo/openapi.json` is the bundled spec of the core API, written from xo-swarm's route and Zod
-  schemas. Change it with the xo-swarm commit it follows in the PR. Test fixtures that are not
-  copies say "SYNTHETIC".
+  schemas. Change it with the xo-swarm commit it follows in the PR. Operations marked
+  `x-xo-server` are this repo's own server (`xo serve`) and change with `src/xo/server.py`. Test
+  fixtures that are not copies say "SYNTHETIC".
 - Mark a decision you cannot make with a one-line `TODO(suraj):`.
 - This repo is public: no secrets, tokens or internal hostnames.

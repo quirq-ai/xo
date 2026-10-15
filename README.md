@@ -43,8 +43,8 @@ xo spaces --space-id 6f1c2c1e-...   # connection URLs for a space you own
 | `xo xo-cowork` | `POST /xo-cowork` | name, volume size; providers; channels |
 | `xo nebius-openclaw` | `POST /nebius-openclaw` | name, Token Factory key, Telegram token (feature flagged) |
 | `xo spaces` | `GET /spaces/{spaceId}` | none |
-| `xo me` | `GET /me` | none (proposed: not on XO yet) |
-| `xo user-metadata get` / `update` | `GET` / `PATCH /user-metadata/{userId}` | publicMetadata, privateMetadata as JSON objects (admin keys; proposed: not on XO yet); try `--dry-run` first: a wrong `--user-id` edits another user |
+| `xo me` | `GET /me` on your xo server | none |
+| `xo user-metadata get` / `update` | `GET` / `PATCH /user-metadata/{userId}` on your xo server | publicMetadata, privateMetadata as JSON objects (admin keys only); try `--dry-run` first: a wrong `--user-id` edits another user |
 
 Each create prints the new space, `data.id` included. Keep that id: the API has no list, delete,
 start or stop endpoint, and `xo spaces --space-id ID` is the only way back to a space.
@@ -76,6 +76,12 @@ Things to know:
   the space without that setting; `xo api` sends any body as given.
 - If a create times out or is interrupted, the server may still have made the space: check before
   you retry.
+
+## Server mode
+
+`xo me` and `xo user-metadata` read your Clerk account, which needs Clerk's Secret Key. That key
+never goes on a user's machine: the same package runs as a server, `xo serve`, on one deployment
+that holds it, and the commands go there (`XO_SERVER_URL`). See [docs/server.md](docs/server.md).
 
 ## How commands are named
 
@@ -117,6 +123,7 @@ Responses print as JSON on stdout. Any problem exits 1 with one line on stderr.
 |---|---|---|---|
 | API key | `XO_API_KEY` | `--api-key -` (asks without echo on a terminal, else reads one line from stdin) | none; required for every call but a dry run |
 | API base | `XO_BASE_URL` | `--base-url` | `https://app.xo.builders/api/core/v1` |
+| xo server | `XO_SERVER_URL` | `--server-url` | none; needed only for `xo me` and `xo user-metadata` |
 | Spec | `XO_SPEC` | `--spec` | the copy bundled with xo |
 
 `--api-key KEY` also works, but the key then lands in your shell history and in the process list

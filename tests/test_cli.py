@@ -909,67 +909,76 @@ def test_only_near_misses_of_a_flag_are_shown(core, capsys):  # R5-N1, R5-N3
     assert "--providers_anthropic_api_key <hidden>" in err and ANTHROPIC not in err
 
 
-# --- proposed user routes (server side not on XO yet) ---------------------------------------------
+# --- xo server routes (xo serve): me and user-metadata -------------------------------------------
 
-def test_me_shows_the_keys_account(core, capsys):
-    core.route("GET", "/api/core/v1/me", body={"success": True, "data": {"id": "user_1", "username": "sam"}})
+@pytest.fixture
+def xs(core, monkeypatch):
+    """The fake API standing in for an xo server under /xo."""
+    monkeypatch.setenv("XO_SERVER_URL", core.base + "/xo")
+    return core
+
+
+def test_me_goes_to_the_xo_server(xs, capsys):
+    xs.route("GET", "/xo/me", body={"success": True, "data": {"id": "user_1", "username": "sam"}})
     code, out, _ = run(capsys, "me")
     assert code == 0 and json.loads(out)["data"]["username"] == "sam"
+    assert xs.requests[0]["headers"]["Authorization"] == f"Bearer {KEY}"
 
 
-def test_user_metadata_get(core, capsys):
-    core.route("GET", "/api/core/v1/user-metadata/user_1",
-               body={"success": True, "data": {"publicMetadata": {"plan": "pro"}, "privateMetadata": {}}})
+def test_server_commands_need_a_server_url(core, capsys, monkeypatch):
+    monkeypatch.delenv("XO_SERVER_URL", raising=False)
+    code, _, err = run(capsys, "me")
+    assert code == 1 and core.requests == []
+    assert "set XO_SERVER_URL (or pass --server-url)" in err
+
+
+def test_core_commands_ignore_the_server_url(xs, capsys):
+    xs.route("GET", "/api/core/v1/spaces/s1", body={"success": True, "data": {}})
+    assert run(capsys, "spaces", "--space-id", "s1")[0] == 0
+    assert xs.requests[0]["path"] == "/api/core/v1/spaces/s1"
+
+
+def test_user_metadata_get(xs, capsys):
+    xs.route("GET", "/xo/user-metadata/user_1",
+             body={"success": True, "data": {"publicMetadata": {"plan": "pro"}, "privateMetadata": {}}})
     code, out, _ = run(capsys, "user-metadata", "get", "--user-id", "user_1")
     assert code == 0 and json.loads(out)["data"]["publicMetadata"] == {"plan": "pro"}
 
 
-def test_user_metadata_update_sends_both_buckets_as_json(core, capsys):
-    core.route("PATCH", "/api/core/v1/user-metadata/user_1", body={"success": True, "data": {}})
+def test_user_metadata_update_sends_both_buckets_as_json(xs, capsys):
+    xs.route("PATCH", "/xo/user-metadata/user_1", body={"success": True, "data": {}})
     code, _, err = run(capsys, "user-metadata", "update", "--user-id", "user_1",
                        "--public-metadata", '{"plan": "pro", "beta": null}',
                        "--private-metadata", '{"stripeId": "cus_1"}')
     assert code == 0
-    assert err == f"xo: PATCH {core.base}/api/core/v1/user-metadata/user_1\n"
-    assert core.requests[0]["body"] == {"publicMetadata": {"plan": "pro", "beta": None},
-                                        "privateMetadata": {"stripeId": "cus_1"}}
+    assert err == f"xo: PATCH {xs.base}/xo/user-metadata/user_1\n"
+    assert xs.requests[0]["body"] == {"publicMetadata": {"plan": "pro", "beta": None},
+                                      "privateMetadata": {"stripeId": "cus_1"}}
 
 
-def test_user_metadata_update_dry_run_sends_nothing(core, capsys):
+def test_user_metadata_update_dry_run_sends_nothing(xs, capsys):
     code, out, _ = run(capsys, "user-metadata", "update", "--user-id", "user_1",
                        "--private-metadata", '{"stripeId": "cus_1"}', "--dry-run")
     assert code == 0 and json.loads(out)["body"] == {"privateMetadata": {"stripeId": "cus_1"}}
-    assert core.requests == []
+    assert json.loads(out)["url"] == f"{xs.base}/xo/user-metadata/user_1"
+    assert xs.requests == []
 
 
 @pytest.mark.parametrize("value", ["{plan: pro}", "null", "[]", '"pro"', "3"])
-def test_user_metadata_update_refuses_a_bucket_that_is_not_an_object(core, capsys, value):  # B-SF1
+def test_user_metadata_update_refuses_a_bucket_that_is_not_an_object(xs, capsys, value):  # B-SF1
     code, _, err = run(capsys, "user-metadata", "update", "--user-id", "user_1", "--public-metadata", value)
-    assert code != 0 and core.requests == []
+    assert code != 0 and xs.requests == []
     assert err == "xo: --public-metadata must be a JSON object, like '{\"plan\": \"pro\"}'\n"
 
 
-def test_user_metadata_update_refuses_a_non_object_bucket_in_data(core, capsys):  # B-SF1
+def test_user_metadata_update_refuses_a_non_object_bucket_in_data(xs, capsys):  # B-SF1
     code, _, err = run(capsys, "user-metadata", "update", "--user-id", "user_1",
                        "--data", '{"privateMetadata": null}')
-    assert code != 0 and core.requests == []
+    assert code != 0 and xs.requests == []
     assert "--private-metadata must be a JSON object" in err
 
 
-def test_a_proposed_route_that_answers_404_says_so(core, capsys):  # B-SF2
-    core.route("GET", "/api/core/v1/me", status=404, body={"success": False, "error": "Not found"})
-    code, _, err = run(capsys, "me")
-    assert code != 0
-    assert err == "xo: GET /me: HTTP 404: Not found (this command is PROPOSED and may not be on XO yet)\n"
-
-
-def test_a_404_from_a_live_route_has_no_proposed_hint(core, capsys):  # B-SF2
-    core.route("GET", "/api/core/v1/spaces/s1", status=404, body={"success": False, "error": "Not found"})
-    err = run(capsys, "spaces", "--space-id", "s1")[2]
-    assert "HTTP 404" in err and "PROPOSED" not in err
-
-
-def test_an_empty_path_parameter_is_refused(core, capsys):  # B-N4
+def test_an_empty_path_parameter_is_refused(xs, capsys):  # B-N4
     code, _, err = run(capsys, "user-metadata", "get", "--user-id", "")
-    assert code != 0 and core.requests == []
+    assert code != 0 and xs.requests == []
     assert err == "xo: --user-id can't be empty\n"
