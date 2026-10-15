@@ -19,7 +19,8 @@ keys.
 
 Calls to Clerk are capped for the whole process ($XO_CLERK_PER_SECOND, default 20), a bearer token
 that does not look like a Clerk API key never reaches Clerk, and each token is rate limited. Open
-connections are capped ($XO_SERVE_MAX_CONNECTIONS, default 64).
+connections are capped ($XO_SERVE_MAX_CONNECTIONS, default 64), and each is closed after
+REQUEST_DEADLINE seconds however slowly its client sends.
 
 Configuration (environment only, so the secret never lands in shell history or the process list):
     CLERK_SECRET_KEY          required; never printed or logged
@@ -42,6 +43,7 @@ import http.client
 import json
 import os
 import re
+import socket
 import sys
 import threading
 import time
@@ -62,8 +64,9 @@ CLERK_TIMEOUT = 10.0
 CLERK_API_VERSION = "2026-05-12"
 USER_ID = re.compile(r"user_[A-Za-z0-9]{1,64}")
 # What a Clerk API key looks like; anything else is refused without asking Clerk (the SDK checks
-# the ak_ prefix the same way).
-API_KEY = re.compile(r"ak_[A-Za-z0-9_-]{1,200}")
+# the ak_ prefix the same way). The characters are the CLI's (client.KEY_CHARS): letters, digits and
+# _ . - plus base64's + / = (Clerk's own test key has / and =).
+API_KEY = re.compile(r"ak_[A-Za-z0-9_.+/=-]{1,200}")
 BUCKETS = {"publicMetadata": "public_metadata", "privateMetadata": "private_metadata"}
 MAX_BODY = 32 * 1024  # two 8KB buckets with room for JSON overhead
 # Requests per minute per key: /me, then /user-metadata. Clerk allows 1000 Backend API calls per
@@ -72,6 +75,11 @@ LIMITS = {"me": 60, "user-metadata": 20}
 MAX_TRACKED = 10_000  # tokens remembered for rate limiting; the least recently seen go first
 ME_CACHE_SECONDS = 60
 REQUEST_TIMEOUT = 10  # seconds a client may wait between bytes of its request
+# Seconds a connection to `xo serve` may stay open in all: a client that trickles one byte at a time
+# cannot hold a slot past it. Room for two Clerk calls of CLERK_TIMEOUT each.
+REQUEST_DEADLINE = 30
+# Control characters in a request line are logged as \xNN, as the standard library does.
+_LOG_ESCAPES = {c: f"\\x{c:02x}" for c in (*range(0x20), *range(0x7F, 0xA0))}
 
 
 def _list_env(name: str) -> frozenset[str]:
@@ -82,7 +90,7 @@ def _int_env(name: str, default: int) -> int:
     raw = os.environ.get(name, "").strip()
     if not raw:
         return default
-    if not raw.isdigit() or int(raw) < 1:
+    if not (raw.isascii() and raw.isdigit()) or int(raw) < 1:
         raise XoError(f"{name} must be a whole number of 1 or more")
     return int(raw)
 
@@ -348,7 +356,7 @@ class App:
             return _Reply(422, error)
         try:
             changes = json.loads(body or b"")
-        except (json.JSONDecodeError, UnicodeDecodeError):
+        except (json.JSONDecodeError, UnicodeDecodeError, RecursionError):
             raise bad("Body is not JSON") from None
         if not isinstance(changes, dict) or not changes:
             raise bad("Body must be an object with publicMetadata, privateMetadata or both")
@@ -406,6 +414,9 @@ class _Server(ThreadingHTTPServer):
 def wsgi_app(make_app=None):
     """The same server as a WSGI app, for hosts that run Python functions (Vercel's root app.py).
 
+    PATH_INFO must be the raw, still percent-encoded path, as Vercel's runtime passes it; a server
+    that decodes it first would let `%3F` in a user id read as a query.
+
     The App is built on the first request, so a missing or bad setting answers 503 and says why on
     stderr, instead of failing the import.
     """
@@ -431,7 +442,7 @@ def wsgi_app(make_app=None):
         body = None
         length = environ.get("CONTENT_LENGTH") or ""
         if length:
-            size = int(length) if length.isdigit() else -1
+            size = int(length) if length.isascii() and length.isdigit() else -1
             if size < 0 or size > MAX_BODY:
                 app.refused(method, path, 413)
                 return _wsgi_reply(start_response, 413, {"success": False, "error": f"Body over {MAX_BODY} bytes"})
@@ -454,6 +465,23 @@ def make_server(app: App, host: str, port: int) -> ThreadingHTTPServer:
         server_version = f"xo-server/{__version__}"
         sys_version = ""
         timeout = REQUEST_TIMEOUT
+
+        def setup(self) -> None:
+            super().setup()
+            # Closes the connection at REQUEST_DEADLINE however slowly the client sends.
+            self._deadline = threading.Timer(REQUEST_DEADLINE, self._expire)
+            self._deadline.daemon = True
+            self._deadline.start()
+
+        def _expire(self) -> None:
+            try:
+                self.connection.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+
+        def finish(self) -> None:
+            self._deadline.cancel()
+            super().finish()
 
         def _serve(self) -> None:
             length = self.headers.get("Content-Length")
@@ -486,7 +514,7 @@ def make_server(app: App, host: str, port: int) -> ThreadingHTTPServer:
         def log_message(self, fmt: str, *args: Any) -> None:
             # The request line only (no headers, so never the key), with the secret scrubbed anyway.
             # Behind a proxy the address is the proxy's: per-address limits belong in the proxy.
-            line = redact(fmt % args, app.cfg.secret)
+            line = redact(fmt % args, app.cfg.secret).translate(_LOG_ESCAPES)
             print(f"xo-server: {self.address_string()} {line}", file=sys.stderr, flush=True)
 
     return _Server((host, port), Handler, app.cfg.max_connections)

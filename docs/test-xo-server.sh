@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# Test a deployed xo server (docs/deploy-vercel.md, step 4). Run it from a checkout of this repo:
+# Test a deployed xo server (docs/deploy-vercel.md, step 5). Run it from the checkout you deployed:
 #
 #     bash docs/test-xo-server.sh
 #
-# It installs xo from this checkout into a throwaway virtualenv, checks /healthz, asks for a test
-# user's API key without echoing it, and checks `xo me` and three refusals. The key is never
-# printed, written to a file or put on a command line. Works with macOS bash 3.2.
+# It runs xo straight from this checkout's src/ (nothing is installed or downloaded), checks
+# /healthz, asks for a test user's API key without echoing it, checks `xo me` and three refusals,
+# and last checks that the Vercel Firewall rule is active. The key is never printed, written to a
+# file, put on a command line or exported: only the xo calls that need it get it. Its only network
+# calls go to the server. Works with macOS bash 3.2.
 # XO_SERVER_URL overrides the server (default https://xo.quirq.dev).
 set -u
 
@@ -33,15 +35,14 @@ fi
 work="$(mktemp -d "${TMPDIR:-/tmp}/xo-test.XXXXXX")" || exit 1
 trap 'rm -rf "$work"' EXIT
 
-echo "Testing $server"
-echo "Installing xo from $repo into a throwaway virtualenv..."
-if ! "$python" -m venv "$work/venv" ||
-   ! "$work/venv/bin/python" -m pip install --quiet --disable-pip-version-check "$repo"; then
-  echo "Could not install xo from $repo."
-  exit 1
-fi
-xo="$work/venv/bin/xo"
-export XO_SERVER_URL="$server"
+# xo from this checkout, isolated from any installed copy (-I), talking only to $server.
+xo() {
+  XO_SERVER_URL="$server" "$python" -I -c \
+    'import sys; sys.path.insert(0, sys.argv[1]); from xo.cli import main; sys.exit(main(sys.argv[2:]))' \
+    "$repo/src" "$@"
+}
+
+echo "Testing $server with xo from $repo"
 
 # 1. Health: no key, no Clerk call.
 health="$(curl -sS --max-time 20 "$server/healthz" 2>&1)"
@@ -51,19 +52,26 @@ case "$health" in
   *) fail "/healthz: unexpected answer: $(printf '%s' "$health" | head -c 200)" ;;
 esac
 
-# 2. Your test user's key, read without echo.
+# 2. Your test user's key, read without echo, kept in an unexported variable.
 printf 'Paste the test user'"'"'s API key (ak_..., nothing shows), then press Enter: '
-IFS= read -rs XO_API_KEY
+IFS= read -rs key
 echo
-if [ -z "$XO_API_KEY" ]; then
+if [ -z "$key" ]; then
   echo "No key given; stopping."
   exit 1
 fi
-export XO_API_KEY
 
-# 3. xo me shows the key's own account, and no email or metadata.
-if "$xo" me >"$work/me.json" 2>"$work/me.err"; then
-  if "$work/venv/bin/python" - "$work/me.json" <<'PY'
+# 3. The key's format, without showing it: xo and the server accept ak_ followed by letters,
+#    digits and _ . - + / = only.
+case "$key" in
+  ak_*[!A-Za-z0-9_.+/=-]*) fail "your key has characters xo does not accept yet (tell Claude which kinds; do not paste the key)" ;;
+  ak_?*) pass "your key's format is one xo accepts" ;;
+  *) fail "your key does not start with ak_ (tell Claude; do not paste the key)" ;;
+esac
+
+# 4. xo me shows the key's own account, and no email or metadata.
+if XO_API_KEY="$key" xo me >"$work/me.json" 2>"$work/me.err"; then
+  if "$python" -I - "$work/me.json" <<'PY'
 import json, sys
 data = json.load(open(sys.argv[1]))["data"]
 assert str(data.get("id", "")).startswith("user_"), "no user id"
@@ -77,10 +85,10 @@ else
   fail "xo me: $(head -c 300 "$work/me.err")"
 fi
 
-# 4. What must be refused.
-expect() {  # expect LABEL TEXT -- command...
-  label="$1"; text="$2"; shift 3
-  if "$@" >/dev/null 2>"$work/err"; then
+# 5. What must be refused.
+expect() {  # expect LABEL TEXT KEY -- xo arguments...
+  label="$1"; text="$2"; with="$3"; shift 4
+  if XO_API_KEY="$with" xo "$@" >/dev/null 2>"$work/err"; then
     fail "$label: it was not refused"
   elif grep -q "$text" "$work/err"; then
     pass "$label"
@@ -88,12 +96,34 @@ expect() {  # expect LABEL TEXT -- command...
     fail "$label: $(head -c 300 "$work/err")"
   fi
 }
-expect "a wrong key gets 401" "HTTP 401" -- env XO_API_KEY=ak_wrong_key_for_testing "$xo" me
-expect "a key that is not a Clerk key gets 401" "HTTP 401" -- env XO_API_KEY=not-a-key "$xo" me
-expect "your key cannot read metadata (no admin keys yet)" "HTTP 403" -- \
-  "$xo" user-metadata get --user-id user_test
+expect "a wrong key gets 401" "HTTP 401" ak_wrong_key_for_testing -- me
+expect "a key that is not a Clerk key gets 401" "HTTP 401" not-a-key -- me
+expect "your key cannot read metadata (no admin keys yet)" "HTTP 403" "$key" -- \
+  user-metadata get --user-id user_test
+key=""; with=""
 
-unset XO_API_KEY
+# 6. The Firewall rule: 70 requests to /me with no key (each a 401 from the server, with no Clerk
+#    call) must run into Vercel's limit of 60 a minute. Last, because it holds your address back
+#    for up to a minute.
+echo "Sending 70 requests without a key to check the Firewall rule..."
+limited=""
+i=0
+while [ "$i" -lt 70 ]; do
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$server/me")"
+  case "$code" in
+    401) ;;
+    *) limited="$code"; break ;;
+  esac
+  i=$((i + 1))
+done
+if [ -n "$limited" ] && [ "$i" -ge 50 ]; then
+  pass "the Firewall rule is active (request $((i + 1)) got $limited)"
+elif [ -n "$limited" ]; then
+  fail "request $((i + 1)) got $limited, before the limit of 60; check the rule and the server's Logs"
+else
+  fail "70 requests in a row got 401: the Firewall rule is not active (is it published?)"
+fi
+
 echo
 if [ "$failed" -eq 0 ]; then
   echo "All checks passed."

@@ -81,7 +81,8 @@ Things to know:
 
 `xo me` and `xo user-metadata` read your Clerk account, which needs Clerk's Secret Key. That key
 never goes on a user's machine: the same package runs as a server, `xo serve`, on one deployment
-that holds it, and the commands go there (`https://xo.quirq.dev`, or `XO_SERVER_URL`). See
+that holds it, and the commands go there (`https://xo.quirq.dev`, or `XO_SERVER_URL`). Until that
+deployment holds XO's production Clerk key, it answers 401 to real XO keys. See
 [docs/server.md](docs/server.md) and, to deploy it, [docs/deploy-vercel.md](docs/deploy-vercel.md).
 
 ## How commands are named
@@ -138,8 +139,8 @@ or after the command.
   error that echoes it, and tests check it never reaches stdout or stderr, including on argument
   errors and unexpected failures. An argument error never repeats a value you typed, so a
   mistyped key flag (`--api_key KEY`, `--token=KEY`, `--api-keyKEY`) stays off the screen. A key
-  with anything but letters, digits, `_`, `.` and `-` is refused without being shown, so no URL or
-  JSON escaping can hide the key from redaction.
+  with anything but letters, digits and `_ . - + / =` is refused without being shown, and the key
+  is also redacted in the forms URL or JSON escaping gives `+ / =`.
 - xo never follows a redirect, so a redirect cannot carry the key to another host. A redirect to
   XO's sign-in page is reported as "this route does not accept an API key".
 - Plain `http://` is refused except to this machine.

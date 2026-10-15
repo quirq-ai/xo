@@ -175,13 +175,25 @@ def test_api_key_from_stdin(fake, capsys, monkeypatch):
 
 
 @pytest.mark.parametrize("bad", [f"{KEY}\nX-Evil: 1", f"{KEY}\rX", "ak_with space", "ak_ünicode",
-                                 "ak_FAKE+r4/enc=0123456789", 'ak_"quote\\0123456789'])
+                                 "ak_FAKE%r4enc0123456789", 'ak_"quote\\0123456789'])
 def test_a_key_with_bad_characters_is_refused_unechoed(fake, capsys, monkeypatch, bad):
     monkeypatch.setenv("XO_API_KEY", bad)
     code, out, err = run(capsys, "call", "health")
     assert code == 1 and "characters an API key cannot have" in err
     assert bad.strip() not in out + err and "Traceback" not in err
     assert fake.requests == []
+
+
+def test_a_base64_key_is_sent_and_redacted_in_every_echoed_form(fake, capsys, monkeypatch):
+    import urllib.parse
+    key = "ak_FAKE+r4/enc=0123456789"  # the shape of Clerk's own test key, with + / and =
+    monkeypatch.setenv("XO_API_KEY", key)
+    echoes = [key, urllib.parse.quote(key, safe=""), urllib.parse.quote_plus(key), key.replace("/", "\\/")]
+    fake.route("GET", "/health", status=500, body=" ".join(echoes))
+    code, out, err = run(capsys, "call", "health")
+    assert code == 1 and fake.requests[0]["headers"]["Authorization"] == f"Bearer {key}"
+    assert err.count("<redacted>") == 4
+    assert not any(e in out + err for e in echoes) and "FAKE" not in out + err
 
 
 def test_redaction_survives_truncation_and_json_escapes(fake, capsys):
@@ -941,6 +953,8 @@ def test_the_server_url_must_be_https(core, capsys, monkeypatch):
     code, _, err = run(capsys, "me")
     assert code == 1 and core.requests == []
     assert err == "xo: XO_SERVER_URL must be https:// (or http:// to localhost)\n"
+    code, _, err = run(capsys, "me", "--server-url", "http://10.1.1.1")
+    assert code == 1 and err == "xo: --server-url must be https:// (or http:// to localhost)\n"
 
 
 def test_core_commands_ignore_the_server_url(xs, capsys):

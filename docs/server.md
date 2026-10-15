@@ -70,7 +70,8 @@ a platform that terminates TLS): the CLI refuses plain `http://` except to local
 The server trusts its proxy to do what a standard-library server cannot do well:
 
 - **Buffer whole requests** before passing them on, and cap connections, so slow clients cannot
-  hold the server's threads (it also caps them itself, at `XO_SERVE_MAX_CONNECTIONS`).
+  hold the server's threads (it also caps them itself, at `XO_SERVE_MAX_CONNECTIONS`, and closes
+  each connection after 30 seconds).
 - **Limit requests per client address.** Behind a proxy the server only sees the proxy's address
   and does not read `X-Forwarded-For`, so per-address limits and per-address forensics belong in
   the proxy and its logs.
@@ -105,8 +106,10 @@ process apply per function instance, so the per-address limit is a Vercel Firewa
 
 ## Guards
 
-- **Only Clerk-shaped keys reach Clerk.** A bearer token that is not `ak_` followed by letters,
-  digits, `_` or `-` gets 401 without a Clerk call.
+- **Only Clerk-shaped keys reach Clerk.** A bearer token that is not `ak_` followed by up to 200
+  letters, digits or `_ . - + / =` (the characters the CLI accepts) gets 401 without a Clerk call.
+- **A deadline per connection.** `xo serve` closes a connection 30 seconds after it opens, however
+  slowly the client sends, so a trickling client cannot hold one of its slots.
 - **A budget for Clerk.** All calls to Clerk share `XO_CLERK_PER_SECOND` (default 20); past it the
   server answers 503 without calling. Clerk allows 1000 Backend API calls per 10 seconds for the
   whole instance, shared with XO's core API, and each verification past 100,000 a month is billed,

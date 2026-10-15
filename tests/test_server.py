@@ -44,6 +44,7 @@ class FakeClerk:
         self.calls: list[dict] = []
         self.fail: int | None = None
         self.redirect: str | None = None  # answer every call with a redirect here
+        self.redirect_status = 307
         self.raw: bytes | None = None  # answer every call with these bytes and a 200
 
 
@@ -58,7 +59,7 @@ def clerk(monkeypatch):
             state.calls.append({"method": self.command, "path": self.path, "headers": dict(self.headers),
                                 "body": body})
             if state.redirect:
-                self.send_response(307)
+                self.send_response(state.redirect_status)
                 self.send_header("Location", state.redirect)
                 self.send_header("Content-Length", "0")
                 self.end_headers()
@@ -317,7 +318,7 @@ def test_client_mode_never_loads_the_server():
 # --- abuse, Clerk failures and the gaps the audit's mutations found ------------------------------
 
 def test_a_token_that_is_not_a_clerk_key_never_reaches_clerk(xo_server, clerk):
-    for token in ("sk_live_xyz", "x" * 10_000, "ak_", "ak_bad!chars"):
+    for token in ("sk_live_xyz", "x" * 10_000, "ak_", "ak_bad!chars", "ak_bad%2Fchars", "ak_" + "a" * 201):
         assert call(xo_server, "GET", "/me", token) == (401, {"success": False, "error": "Invalid API key"})
     assert clerk.calls == []
 
@@ -360,8 +361,9 @@ def test_a_listed_id_without_the_claim_is_not_admin(xo_server):  # S6
     assert call(xo_server, "GET", "/user-metadata/user_alice", "ak_listed")[0] == 403
 
 
-def test_a_redirect_from_clerk_is_not_followed_and_carries_no_secret(xo_server, clerk, fake):  # S6
-    clerk.redirect = fake.base + "/stolen"
+@pytest.mark.parametrize("status", [302, 303, 307])  # urllib's default opener follows 302 and 303
+def test_a_redirect_from_clerk_is_not_followed_and_carries_no_secret(xo_server, clerk, fake, status):  # S6
+    clerk.redirect, clerk.redirect_status = fake.base + "/stolen", status
     assert call(xo_server, "GET", "/me", USER_KEY)[0] == 502
     assert fake.requests == []
 
@@ -400,6 +402,96 @@ def test_open_connections_are_capped(clerk, monkeypatch):  # S2
     for s in slow:
         s.close()
     httpd.shutdown()
+
+
+def _wait_for_free_slot(httpd) -> None:
+    """A handler thread releases its slot just after its client sees the connection close."""
+    import time
+    deadline = time.monotonic() + 3
+    while httpd._slots._value < 1:
+        assert time.monotonic() < deadline, "a connection slot was never released"
+        time.sleep(0.01)
+
+
+def test_connection_slots_are_released(clerk, monkeypatch):  # S2
+    import socket
+    monkeypatch.setenv("XO_SERVE_MAX_CONNECTIONS", "1")
+    httpd = server.make_server(server.App(server.Config(), audit=lambda line: None), "127.0.0.1", 0)
+    threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
+    port = httpd.server_address[1]
+    for ending in (b"Host: x\r\n\r\n", b"", b"\x00junk\r\n\r\n"):  # answered, closed early, garbage
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
+            s.sendall(b"GET /healthz HTTP/1.1\r\n" + ending)
+            if ending:
+                s.recv(100)
+    for _ in range(3):  # each slot came back, so the one slot is free again
+        _wait_for_free_slot(httpd)
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
+            s.sendall(b"GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n")
+            assert s.recv(100).startswith(b"HTTP/1.0 200")
+    httpd.shutdown()
+
+
+def test_a_trickling_client_is_cut_off_at_the_deadline(clerk, monkeypatch):  # S2
+    import socket
+    import time
+    monkeypatch.setattr(server, "REQUEST_DEADLINE", 1)
+    monkeypatch.setenv("XO_SERVE_MAX_CONNECTIONS", "1")
+    httpd = server.make_server(server.App(server.Config(), audit=lambda line: None), "127.0.0.1", 0)
+    threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
+    port = httpd.server_address[1]
+    start = time.monotonic()
+    with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
+        s.sendall(b"GET /healthz HTTP/1.1\r\n")
+        try:
+            while time.monotonic() - start < 4:  # one byte every 0.2 s, well inside the read timeout
+                s.sendall(b"X")
+                time.sleep(0.2)
+        except OSError:
+            pass
+        assert time.monotonic() - start < 3, "the connection outlived its deadline"
+    _wait_for_free_slot(httpd)
+    with socket.create_connection(("127.0.0.1", port), timeout=5) as s:  # and the slot is free
+        s.sendall(b"GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n")
+        assert s.recv(100).startswith(b"HTTP/1.0 200")
+    httpd.shutdown()
+
+
+def test_control_characters_in_the_request_line_are_escaped_in_the_log(xo_server, capfd):
+    import socket
+    port = xo_server.server_address[1]
+    with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
+        s.sendall(b"GET /a\x01b\x1bc HTTP/1.1\r\nHost: x\r\n\r\n")
+        s.recv(100)
+    err = capfd.readouterr().err
+    assert "\\x01" in err and "\\x1b" in err and "\x01" not in err and "\x1b" not in err
+
+
+def test_a_base64_shaped_key_reaches_clerk(xo_server, clerk, monkeypatch):
+    key = "ak_LCWGdaM8mv8K4PC/57IICZQXAeWfCgF30DZaFXHoGn9="  # Clerk's own test fixture
+    monkeypatch.setitem(KEYS, key, KEYS[USER_KEY])
+    assert call(xo_server, "GET", "/me", key)[0] == 200
+
+
+def test_a_deeply_nested_body_is_refused_and_audited(xo_server, clerk):
+    status, out = call(xo_server, "PATCH", "/user-metadata/user_alice", ADMIN_KEY, raw=b"[" * 30_000)
+    assert (status, out["error"]) == (422, "Body is not JSON")
+    assert audits(xo_server)[-1]["outcome"] == "refused"
+
+
+def test_unicode_digits_are_not_numbers(clerk, monkeypatch, capfd):
+    application = server.wsgi_app()
+    environ_length = "\u00b2"  # "²" passes str.isdigit() but not int()
+    import io
+    environ = {"REQUEST_METHOD": "PATCH", "PATH_INFO": "/user-metadata/user_alice", "QUERY_STRING": "",
+               "wsgi.input": io.BytesIO(b"{}"), "CONTENT_LENGTH": environ_length,
+               "HTTP_AUTHORIZATION": f"Bearer {ADMIN_KEY}"}
+    seen = {}
+    b"".join(application(environ, lambda status, headers: seen.setdefault("status", status)))
+    assert seen["status"].startswith("413")
+    monkeypatch.setenv("XO_CLERK_PER_SECOND", "\u00b2")
+    with pytest.raises(server.XoError, match="XO_CLERK_PER_SECOND must be a whole number"):
+        server.Config()
 
 
 def test_the_startup_line_never_shows_the_secret(clerk, monkeypatch, capfd):  # S6

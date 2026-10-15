@@ -1,0 +1,8 @@
+# Never upload local secrets or build leftovers to Vercel (its default list skips .env.local, not .env).
+.env
+.env.*
+.venv/
+venv/
+build/
+dist/
+tests/
