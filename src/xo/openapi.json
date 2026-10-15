@@ -31,6 +31,7 @@
         "tags": [
           "spaces"
         ],
+        "x-xo-copies-api-key": true,
         "requestBody": {
           "required": true,
           "content": {
@@ -74,6 +75,8 @@
                           },
                           "apiKey": {
                             "type": "string",
+                            "format": "password",
+                            "writeOnly": true,
                             "description": "Secret; no whitespace. Empty or omitted uses XO's default key"
                           }
                         }
@@ -102,6 +105,7 @@
         "tags": [
           "spaces"
         ],
+        "x-xo-copies-api-key": true,
         "requestBody": {
           "required": true,
           "content": {
@@ -148,6 +152,7 @@
         "tags": [
           "spaces"
         ],
+        "x-xo-copies-api-key": true,
         "requestBody": {
           "required": true,
           "content": {
@@ -194,6 +199,7 @@
         "tags": [
           "spaces"
         ],
+        "x-xo-copies-api-key": true,
         "requestBody": {
           "required": true,
           "content": {
@@ -237,6 +243,8 @@
                           },
                           "apiKey": {
                             "type": "string",
+                            "format": "password",
+                            "writeOnly": true,
                             "description": "Secret; no whitespace."
                           }
                         }
@@ -255,6 +263,8 @@
                           },
                           "apiKey": {
                             "type": "string",
+                            "format": "password",
+                            "writeOnly": true,
                             "description": "Secret; no whitespace."
                           }
                         }
@@ -273,6 +283,8 @@
                           },
                           "apiKey": {
                             "type": "string",
+                            "format": "password",
+                            "writeOnly": true,
                             "description": "Secret; no whitespace."
                           }
                         }
@@ -298,6 +310,8 @@
                           },
                           "botToken": {
                             "type": "string",
+                            "format": "password",
+                            "writeOnly": true,
                             "description": "Secret; no whitespace."
                           }
                         }
@@ -316,10 +330,14 @@
                           },
                           "botToken": {
                             "type": "string",
+                            "format": "password",
+                            "writeOnly": true,
                             "description": "Secret; no whitespace. Slack needs both botToken and appToken"
                           },
                           "appToken": {
                             "type": "string",
+                            "format": "password",
+                            "writeOnly": true,
                             "description": "Secret; no whitespace. Slack needs both botToken and appToken"
                           }
                         }
@@ -348,6 +366,7 @@
         "tags": [
           "spaces"
         ],
+        "x-xo-copies-api-key": true,
         "requestBody": {
           "required": true,
           "content": {
@@ -393,6 +412,8 @@
                           },
                           "apiKey": {
                             "type": "string",
+                            "format": "password",
+                            "writeOnly": true,
                             "description": "Secret; no whitespace."
                           }
                         }
@@ -411,6 +432,8 @@
                           },
                           "apiKey": {
                             "type": "string",
+                            "format": "password",
+                            "writeOnly": true,
                             "description": "Secret; no whitespace."
                           }
                         }
@@ -429,6 +452,8 @@
                           },
                           "apiKey": {
                             "type": "string",
+                            "format": "password",
+                            "writeOnly": true,
                             "description": "Secret; no whitespace."
                           }
                         }
@@ -454,6 +479,8 @@
                           },
                           "botToken": {
                             "type": "string",
+                            "format": "password",
+                            "writeOnly": true,
                             "description": "Secret; no whitespace."
                           }
                         }
@@ -472,6 +499,8 @@
                           },
                           "creds": {
                             "type": "string",
+                            "format": "password",
+                            "writeOnly": true,
                             "description": "Secret; no whitespace. The creds string from the XO connect flow"
                           }
                         }
@@ -490,10 +519,14 @@
                           },
                           "botToken": {
                             "type": "string",
+                            "format": "password",
+                            "writeOnly": true,
                             "description": "Secret; no whitespace. Slack needs both botToken and appToken"
                           },
                           "appToken": {
                             "type": "string",
+                            "format": "password",
+                            "writeOnly": true,
                             "description": "Secret; no whitespace. Slack needs both botToken and appToken"
                           }
                         }
@@ -522,6 +555,7 @@
         "tags": [
           "spaces"
         ],
+        "x-xo-copies-api-key": true,
         "requestBody": {
           "required": true,
           "content": {
@@ -565,6 +599,8 @@
                           },
                           "apiKey": {
                             "type": "string",
+                            "format": "password",
+                            "writeOnly": true,
                             "description": "Secret; no whitespace."
                           }
                         }
@@ -583,6 +619,8 @@
                           },
                           "apiKey": {
                             "type": "string",
+                            "format": "password",
+                            "writeOnly": true,
                             "description": "Secret; no whitespace."
                           }
                         }
@@ -601,6 +639,8 @@
                           },
                           "apiKey": {
                             "type": "string",
+                            "format": "password",
+                            "writeOnly": true,
                             "description": "Secret; no whitespace."
                           }
                         }
@@ -626,6 +666,8 @@
                           },
                           "botToken": {
                             "type": "string",
+                            "format": "password",
+                            "writeOnly": true,
                             "description": "Secret; no whitespace."
                           }
                         }
@@ -644,6 +686,8 @@
                           },
                           "creds": {
                             "type": "string",
+                            "format": "password",
+                            "writeOnly": true,
                             "description": "Secret; no whitespace. The creds string from the XO connect flow"
                           }
                         }
@@ -662,10 +706,14 @@
                           },
                           "botToken": {
                             "type": "string",
+                            "format": "password",
+                            "writeOnly": true,
                             "description": "Secret; no whitespace. Slack needs both botToken and appToken"
                           },
                           "appToken": {
                             "type": "string",
+                            "format": "password",
+                            "writeOnly": true,
                             "description": "Secret; no whitespace. Slack needs both botToken and appToken"
                           }
                         }
@@ -714,10 +762,14 @@
                   },
                   "tokenFactoryApiKey": {
                     "type": "string",
+                    "format": "password",
+                    "writeOnly": true,
                     "description": "Nebius Token Factory key; secret, no whitespace"
                   },
                   "telegramBotToken": {
                     "type": "string",
+                    "format": "password",
+                    "writeOnly": true,
                     "description": "Optional; secret, no whitespace"
                   }
                 }

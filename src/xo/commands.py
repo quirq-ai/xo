@@ -3,11 +3,11 @@
     xo <endpoint> [ACTION] [--flag VALUE ...]
 
 The command is the endpoint's path, without a leading /api or /vN and without its {placeholders},
-joined with dashes: POST /claude-code is `xo claude-code`, GET /api/v1/templates is
-`xo templates`. When several operations share a command (GET, POST and DELETE on /templates and
-/templates/{id}), each is an action named for its method: list, get, create, update, replace,
-delete. Path, query and header parameters and the top-level fields of a JSON body become flags;
-a body that is not a plain object is given with --data.
+joined with dashes: POST /claude-code is `xo claude-code`, GET /spaces/{spaceId} is `xo spaces`.
+When several operations share a command (say GET and DELETE on /spaces/{spaceId}), each is an
+action named for its method: list, get, create, update, replace, delete. Path, query and header
+parameters and the fields of a JSON object body, nested ones too (--providers-anthropic-api-key),
+become flags; a body that is not a plain object is given with --data.
 """
 from __future__ import annotations
 
@@ -29,6 +29,7 @@ class Flag(NamedTuple):
     type: str   # a body field's schema type
     path: tuple[str, ...] = ()  # a body field's path, top level first
     defaults: dict | None = None  # the spec's defaults for the field's siblings
+    secret: bool = False  # a key or token: hidden in a dry run and in anything printed
 
 
 def kebab(text: str) -> str:
@@ -99,9 +100,14 @@ def _line(op: Operation) -> str:
     return _esc(f"{op.method} {clean(op.path)}  {op.summary}".rstrip())
 
 
+COPIES_KEY = "the new space gets a copy of this API key (as xo_api_key)"
+
+
 def _about(op: Operation) -> str:
     # argparse %-formats a description only when it holds "%(prog)", so escape only then.
     text = f"{op.summary}\n\n{op.method} {clean(op.path)}  (operation {op.op_id})".strip()
+    if op.copies_key:
+        text += f"\n\nNote: {COPIES_KEY}. Anything that can read the space's environment can use it."
     return _esc(text) if "%(prog)" in text else text
 
 
@@ -121,15 +127,17 @@ def _operation(p: argparse.ArgumentParser, op: Operation, add_send: Callable[[ar
         dest = f"p_{len(flags)}"
         need = " (required)" if bf.required else ""
         how = "text" if bf.type == "string" else "JSON when it parses"
+        how += "; - reads it from stdin" if bf.secret else ""
         p.add_argument(f"--{flag}", dest=dest, metavar="VALUE",
                        help=_esc(f"body field {clean(bf.name)}{need}; {how}. {bf.description}".strip()))
-        flags.append(Flag(dest, "body", bf.name, flag, bf.type, bf.path, bf.defaults))
+        flags.append(Flag(dest, "body", bf.name, flag, bf.type, bf.path, bf.defaults, bf.secret))
     if op.has_body:
         add_send(p)
     else:
         p.add_argument("--dry-run", action="store_true", help="print the request and send nothing")
+        p.set_defaults(data=None, field=None, show_secrets=False)
+    if op.method == "DELETE":
         p.add_argument("--yes", action="store_true", help="needed to send a DELETE")
-        p.set_defaults(data=None, field=None)
     p.set_defaults(run=run, op=op, flags=flags)
 
 
@@ -141,16 +149,17 @@ def _unique(flag: str, taken: set[str]) -> str:
     return name
 
 
-def values(args: argparse.Namespace) -> tuple[dict[str, str], dict[str, tuple[Flag, str]]]:
-    """(params, body fields) the user gave, by their wire names; body fields keep their Flag."""
+def values(args: argparse.Namespace) -> tuple[dict[str, str], list[tuple[Flag, str]]]:
+    """(params by wire name, body fields with their Flag) the user gave. Body fields stay a list:
+    a top-level "x.y" and a nested x.y share a dotted name but not a path."""
     params: dict[str, str] = {}
-    fields: dict[str, tuple[Flag, str]] = {}
+    fields: list[tuple[Flag, str]] = []
     for f in args.flags:
         value: Any = getattr(args, f.dest, None)
         if value is None:
             continue
         if f.where == "body":
-            fields[f.wire] = (f, value)
+            fields.append((f, value))
         else:
             params[f.wire] = value
     return params, fields
@@ -161,8 +170,10 @@ def flag_for(args: argparse.Namespace, wire: str, *, body: bool = False) -> str:
     for f in args.flags:
         if f.wire == wire and (f.where == "body") == body:
             return f"--{f.flag}"
-    # A body object set through its fields' flags: name a few of them.
-    inner = [f"--{f.flag}" for f in args.flags if body and f.where == "body" and f.path[:1] == (wire,)]
+    # A body object set through its fields' flags: name a few of them, its keys and tokens first,
+    # since an object with only "enabled" set is refused by the server.
+    within = [f for f in args.flags if body and f.where == "body" and f.path[:1] == (wire,)]
+    inner = [f"--{f.flag}" for f in ([f for f in within if f.secret] or within)]
     if inner:
         return "one of " + ", ".join(inner[:3]) + (", ..." if len(inner) > 3 else "")
     return f"--{kebab(wire)}"

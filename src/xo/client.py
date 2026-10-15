@@ -2,7 +2,7 @@
 
 Everything xo sends goes through `Client.request`: this module is the only place that knows the
 base URL, how the API key is sent, the timeout, and how a failure is shaped. It never prints or
-returns the key, never follows a redirect (a redirect could carry the key to another host), and
+returns the key (nor the provider keys and bot tokens it is told about), never follows a redirect (a redirect could carry the key to another host), and
 refuses plain http except to this machine.
 """
 from __future__ import annotations
@@ -27,6 +27,9 @@ KEY_ENV = "XO_API_KEY"
 BASE_URL_ENV = "XO_BASE_URL"
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 REDACTED = "<redacted>"
+# A secret shorter than this is not looked for in text: replacing it would garble the message.
+MIN_SECRET = 4
+MAYBE_RECEIVED = "the request may have been received, so check before you retry"
 _KEY_CHARS = re.compile(r"[A-Za-z0-9_.-]+")
 
 
@@ -99,9 +102,18 @@ class Client:
         self._key = key
         self.timeout = timeout
         self._opener = urllib.request.build_opener(_NoRedirect)
+        self._secrets: list[str] = []  # provider keys and bot tokens in the body being sent
+        self.in_flight: str | None = None  # "POST /codex" while a request that changes things is out
+
+    def hide(self, secrets: list[str]) -> None:
+        """Also redact these (a body's provider keys and bot tokens) from everything printed."""
+        found = {s for s in secrets if len(s) >= MIN_SECRET and s != self._key}
+        self._secrets = sorted(found | set(self._secrets), key=len, reverse=True)
 
     def scrub(self, value: Any) -> Any:
-        return redact(value, self._key)
+        for secret in (self._key, *self._secrets):
+            value = redact(value, secret)
+        return value
 
     def url(self, path: str, query: dict[str, Any] | None = None) -> str:
         if not path.startswith("/"):
@@ -135,14 +147,23 @@ class Client:
             if auth:
                 # Unredirected: kept off any follow-up request, on top of never following redirects.
                 req.add_unredirected_header("Authorization", f"Bearer {self._key}")
+            self.in_flight = label if method.upper() != "GET" else None
             with self._opener.open(req, timeout=self.timeout) as resp:
-                return self._parse(resp.status, resp.read())
+                raw = resp.read()
+            self.in_flight = None
+            return self._parse(resp.status, raw)
         except urllib.error.HTTPError as e:
+            self.in_flight = None
             raise XoError(self.scrub(self._http_error(label, e))) from None
         except (urllib.error.URLError, TimeoutError, OSError) as e:
-            reason = _one_line(getattr(e, "reason", e))
-            raise XoError(self.scrub(f"{label}: could not reach {self.base} ({reason})")) from None
+            reason = getattr(e, "reason", e)
+            # A timeout may come after the server took the request: a create may have happened.
+            maybe = self.in_flight and isinstance(reason, TimeoutError)
+            self.in_flight = None
+            raise XoError(self.scrub(f"{label}: could not reach {self.base} ({_one_line(reason)})"
+                                     + (f"; {MAYBE_RECEIVED}" if maybe else ""))) from None
         except (http.client.HTTPException, ValueError) as e:
+            self.in_flight = None
             reason = f"{type(e).__name__}: {_one_line(e)}"
             raise XoError(self.scrub(f"{label}: bad request or response ({reason})")) from None
 

@@ -58,11 +58,20 @@ Things to know:
   `--providers-openai-api-key K` sends `{"openai": {"enabled": true, "apiKey": "K"}}`.
 - The API checks the body before the key, so a bad body answers 422 with every problem listed,
   even with no key.
-- A Coder-backed space receives the API key you create it with as its own `xo_api_key`.
+- Every create except `nebius-openclaw` stores the XO API key you call with inside the new space,
+  as its `xo_api_key`. That key can create spaces and read the connection URLs, session tokens
+  included, of every space you own, so anything that can read the new space's environment (an
+  agent steered by a message, say) can act as you. xo prints a line saying so before each such
+  create, and cannot turn it off. If XO will issue you a second key, use that one for creates.
 - `xo spaces` prints `spaceApiUrl` and `openClawRestartUrl`, which carry a session token that
   expires within the hour. Treat them as secrets.
-- Provider keys and bot tokens given as flags land in your shell history. Pass them from variables,
-  as above, or give the whole body with `--data @body.json`.
+- Provider keys and bot tokens given as flags land in your shell history, and even from a variable
+  (`"$ANTHROPIC_API_KEY"`) they show in the process list for as long as the request runs. Give the
+  body with `--data @body.json` instead, or one key or token as `-` to type it (or pipe one line).
+- A body field the command does not know is refused, since the server would drop it and create
+  the space without that setting; `xo api` sends any body as given.
+- If a create times out or is interrupted, the server may still have made the space: check before
+  you retry.
 
 ## How commands are named
 
@@ -95,7 +104,9 @@ xo api GET /spaces/ID                                               # any reques
 `Proxy-*` or the other headers xo and HTTP own.
 `--field` values are JSON when they parse (`false`, `5`, `["a"]`) and plain strings otherwise.
 A request that is not a GET changes things on XO, so it prints one line on stderr before it goes.
-`--dry-run` needs no key and sends nothing. It prints the body as given, provider keys included.
+`--dry-run` needs no key and sends nothing. It prints the request with the provider keys and bot
+tokens the spec marks as secrets shown as `<hidden>`; add `--show-secrets` to see them. Those keys
+and tokens are redacted from responses and errors too, like the API key.
 Responses print as JSON on stdout. Any problem exits 1 with one line on stderr.
 
 | Setting | Variable | Flag | Default |
@@ -110,7 +121,8 @@ or after the command.
 
 ## Safety
 
-- The key goes only in the `Authorization: Bearer` header. It is redacted from any response or
+- The key goes only in the `Authorization: Bearer` header. xo reads the spec only from a file
+  (the bundled one, `--spec` or `XO_SPEC`); it never fetches one from the API with your key. It is redacted from any response or
   error that echoes it, and tests check it never reaches stdout or stderr, including on argument
   errors and unexpected failures. An argument error never repeats a value you typed, so a
   mistyped key flag (`--api_key KEY`, `--token=KEY`, `--api-keyKEY`) stays off the screen. A key

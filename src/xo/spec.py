@@ -1,8 +1,8 @@
 """The XO OpenAPI spec: where xo learns which operations exist and what each one takes.
 
-The spec is read from, in order: --spec FILE, $XO_SPEC, the copy bundled with xo
-(src/xo/openapi.json), and last the API itself (<base>/api/openapi). Nothing here talks to the
-network except `load` through the client it is given. A spec is data from elsewhere: every node is
+The spec is read from, in order: --spec FILE, $XO_SPEC, then the copy bundled with xo
+(src/xo/openapi.json). Nothing here talks to the network: the API's own docs sit behind a browser
+sign-in, so there is nothing to fetch with a key. A spec is data from elsewhere: every node is
 type-checked before use, and text from it is cleaned of control characters before it is printed.
 """
 from __future__ import annotations
@@ -16,10 +16,9 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import quote
 
-from xo.client import Client, XoError
+from xo.client import XoError
 
 SPEC_ENV = "XO_SPEC"
-REMOTE_PATH = "/api/openapi"
 METHODS = ("get", "put", "post", "delete", "patch")
 # Headers that xo or the HTTP layer owns. A spec parameter with one of these names gets no flag and
 # --param cannot set it: Authorization carries the key, the rest steer routing or framing.
@@ -45,6 +44,7 @@ class BodyField:
     path: tuple[str, ...] = ()
     # Defaults the spec gives this field's siblings, set when this field is (enabled: true beside an apiKey).
     defaults: dict[str, Any] = field(default_factory=dict)
+    secret: bool = False  # writeOnly or format password: a key or token, never printed
 
     def __post_init__(self) -> None:
         self.path = self.path or (self.name,)
@@ -64,6 +64,9 @@ class Operation:
     # three deep. Empty when the body is not a plain object, so it can only be given whole with --data.
     body_fields: list[BodyField] = field(default_factory=list)
     required_fields: list[str] = field(default_factory=list)  # top-level names the body must hold
+    top_fields: list[str] = field(default_factory=list)  # every top-level name the body schema lists
+    secret_paths: list[tuple[str, ...]] = field(default_factory=list)  # where the body holds keys or tokens
+    copies_key: bool = False  # x-xo-copies-api-key: the server stores the caller's API key in what it creates
 
     @property
     def path_params(self) -> list[str]:
@@ -115,21 +118,11 @@ def load_local(path: str | None = None) -> dict | None:
     return _read(path) if path else _bundled()
 
 
-def load(client: Client, path: str | None = None, *, remote: bool = True) -> dict:
+def load(path: str | None = None) -> dict:
     local = load_local(path)
-    if local is not None:
-        return local
-    hint = (f"xo has no bundled spec yet, so download it from {client.base}{REMOTE_PATH} while signed in "
-            "and pass --spec FILE (or set XO_SPEC)")
-    if not remote:
-        raise XoError(f"a dry run never fetches the spec; {hint}")
-    try:
-        resp = client.request("GET", REMOTE_PATH)
-    except XoError as e:
-        raise XoError(f"{e}. {hint}") from None
-    if not isinstance(resp.data, dict) or "paths" not in resp.data:
-        raise XoError(f"{client.base}{REMOTE_PATH} did not return an OpenAPI document. {hint}")
-    return resp.data
+    if local is None:
+        raise XoError("the spec bundled with xo is missing; reinstall xo, or pass --spec FILE (or set XO_SPEC)")
+    return local
 
 
 def _resolve(spec: dict, obj: Any) -> Any:
@@ -190,6 +183,9 @@ def operations(spec: dict) -> list[Operation]:
                 body_required=bool(body and body.get("required")),
                 body_fields=_body_fields(spec, body),
                 required_fields=_required_fields(spec, body),
+                top_fields=list(_properties(spec, _body_schema(spec, body))),
+                secret_paths=_secret_paths(spec, _body_schema(spec, body)),
+                copies_key=raw.get("x-xo-copies-api-key") is True,
             ))
     return sorted(ops, key=lambda o: (o.path, o.method))
 
@@ -240,9 +236,27 @@ def _body_fields(spec: dict, body: dict | None) -> list[BodyField]:
                 continue
             fields.append(BodyField(".".join((*path, name)), not path and name in required,
                                     _first_line(prop.get("description") or prop.get("title")), _kind(spec, prop),
-                                    (*path, name), {k: v for k, v in defaults.items() if k != name} if path else {}))
+                                    (*path, name), {k: v for k, v in defaults.items() if k != name} if path else {},
+                                    _secret(prop)))
     walk(_properties(spec, schema), ())
     return fields
+
+
+def _secret(prop: dict) -> bool:
+    return prop.get("writeOnly") is True or prop.get("format") == "password"
+
+
+def _secret_paths(spec: dict, schema: dict, path: tuple[str, ...] = ()) -> list[tuple[str, ...]]:
+    """Every path in a body schema whose value is a key or token, however deep."""
+    out: list[tuple[str, ...]] = []
+    if len(path) > 8:
+        return out
+    for name, prop in _properties(spec, schema).items():
+        if _secret(prop):
+            out.append((*path, name))
+        elif prop.get("type") == "object":
+            out += _secret_paths(spec, prop, (*path, name))
+    return out
 
 
 def _kind(spec: dict, prop: dict) -> str:
@@ -274,6 +288,17 @@ def find(spec: dict, name: str) -> Operation:
     near = [op.op_id for op in ops if name.lower() in op.op_id.lower()][:5]
     hint = f"; did you mean {', '.join(near)}?" if near else "; run `xo ops` to list them"
     raise XoError(f"no operation {name!r} in the spec{hint}")
+
+
+def match(ops: list[Operation], method: str, path: str) -> Operation | None:
+    """The operation a raw METHOD PATH would run, so `xo api` hides the same secrets a command does."""
+    path = "/" + path.split("?", 1)[0].strip("/")
+    for op in ops:
+        pattern = "".join("[^/]+" if part.startswith("{") else re.escape(part)
+                          for part in re.split(r"({[^}]+})", "/" + op.path.strip("/")))
+        if op.method == method.upper() and re.fullmatch(pattern, path):
+            return op
+    return None
 
 
 def known_params(op: Operation) -> dict[str, Param]:

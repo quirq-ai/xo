@@ -16,8 +16,10 @@
     xo api METHOD PATH [--query NAME=VALUE ...] [--data JSON|@FILE|-] [--field KEY=VALUE ...]
                                             send any request, spec or not.
 
-`call` and `api` change things on XO when the method is not GET: each such request prints one line
-on stderr first. --dry-run prints the request and sends nothing; a DELETE also needs --yes.
+A request that is not a GET changes things on XO, so it prints one line on stderr first; a create
+that stores your API key in the new space says so on a second line. --dry-run prints the request
+and sends nothing, with provider keys and bot tokens shown as <hidden> unless --show-secrets is
+given. A DELETE also needs --yes.
 
 The API key comes from $XO_API_KEY, or from --api-key - (one line on stdin). --api-key KEY also
 works but lands in your shell history and the process list; prefer the variable. xo sends the key
@@ -30,6 +32,8 @@ Prints the response as JSON on stdout. Exit 1 on any problem, with one line on s
 from __future__ import annotations
 
 import argparse
+import difflib
+import getpass
 import json
 import os
 import re
@@ -38,7 +42,8 @@ from pathlib import Path
 from typing import Any, NoReturn
 
 from xo import __version__, commands, spec
-from xo.client import DEFAULT_TIMEOUT, KEY_ENV, Client, XoError, api_key, base_url, redact
+from xo.client import (DEFAULT_TIMEOUT, KEY_ENV, MAYBE_RECEIVED, MIN_SECRET, Client, XoError, api_key,
+                       base_url, redact)
 
 GLOBAL_DEFAULTS = {"api_key": None, "base_url": None, "spec": None, "timeout": DEFAULT_TIMEOUT}
 # Global options that take a value, so the word after one is never read as the command.
@@ -65,8 +70,8 @@ def _long_word(word: str) -> tuple[str, str]:
     """A --word as it may be shown, and the value it may hold.
 
     --name=value shows --name. A known option with text glued on (--api-keyK, --api-key:K) shows
-    --api-key<hidden>. Any other word shows only when it is shaped like a flag and no longer than
-    the longest one xo made; else --<hidden>.
+    --api-key<hidden>. Any other word shows only when it is a near miss of a flag xo made
+    (--providers_anthropic_api_key), which no key is; else --<hidden>.
     """
     name, _, value = word.partition("=")
     if name in _Parser.flags:
@@ -74,8 +79,7 @@ def _long_word(word: str) -> tuple[str, str]:
     prefix = max((f for f in _Parser.flags if name.startswith(f)), key=len, default="")
     if prefix:
         return prefix + HIDDEN, word[len(prefix):]
-    longest = max(map(len, _Parser.flags), default=0)
-    if re.fullmatch(r"--[a-z0-9-]+", name) and len(name) <= longest:
+    if re.fullmatch(r"--[A-Za-z0-9_-]+", name) and difflib.get_close_matches(name, _Parser.flags, n=1, cutoff=0.75):
         return name, value
     return "--" + HIDDEN, word[2:]
 
@@ -153,7 +157,8 @@ def _pairs(items: list[str] | None, flag: str) -> dict[str, str]:
     for item in items or []:
         name, sep, value = item.partition("=")
         if not sep or not name:
-            raise XoError(f"{flag} wants NAME=VALUE, not {item!r}")
+            # Not the word itself: it may be a key typed in the wrong place.
+            raise XoError(f"{flag} wants NAME=VALUE; one of them has no name or no =")
         out[name] = value
     return out
 
@@ -176,7 +181,7 @@ def _body(args: argparse.Namespace) -> Any:
             try:
                 raw = Path(raw[1:]).read_text()
             except OSError as e:
-                raise XoError(f"--data {args.data}: {e.strerror}") from None
+                raise XoError(f"--data @FILE: cannot read the file ({e.strerror})") from None
         try:
             body = json.loads(raw)
         except json.JSONDecodeError as e:
@@ -193,9 +198,13 @@ def _body(args: argparse.Namespace) -> Any:
 
 
 def _client(args: argparse.Namespace, *, need_key: bool = True) -> Client:
-    """`xo ops` reads a local spec without a key; it only needs one to fetch the spec remotely."""
-    if args.api_key == "-" and getattr(args, "data", None) == "-":
-        raise XoError("--api-key - and --data - both read stdin; give the body with --data @FILE")
+    """A client for the API; a dry run needs no key."""
+    readers = [*(["--api-key -"] if args.api_key == "-" else []),
+               *(["--data -"] if getattr(args, "data", None) == "-" else []),
+               *(f"--{f.flag} -" for f, v in getattr(args, "fields", []) if v == "-" and f.secret)]
+    if len(readers) > 1:
+        raise XoError(f"{' and '.join(readers)} all read stdin; give only one of them as -, "
+                      "and the body with --data @FILE")
     try:
         key: str | None = api_key(args.api_key)
     except XoError:
@@ -203,7 +212,8 @@ def _client(args: argparse.Namespace, *, need_key: bool = True) -> Client:
             raise
         key = None
     args.resolved_key = key
-    return Client(base_url(args.base_url), key, timeout=args.timeout)
+    args.client = Client(base_url(args.base_url), key, timeout=args.timeout)
+    return args.client
 
 
 def _print(client: Client, data: Any, text: str) -> None:
@@ -215,28 +225,64 @@ def _print(client: Client, data: Any, text: str) -> None:
         print(client.scrub(out))
 
 
+def _secret_values(body: Any, paths: list[tuple[str, ...]]) -> list[str]:
+    """The keys and tokens a body holds at the spec's secret paths."""
+    found = []
+    for p in paths:
+        node = body
+        for part in p:
+            node = node.get(part) if isinstance(node, dict) else None
+        if node not in (None, ""):
+            found.append(node if isinstance(node, str) else json.dumps(node))
+    return found
+
+
+def _masked(body: Any, paths: list[tuple[str, ...]]) -> Any:
+    """A copy of the body with every key or token at a secret path shown as <hidden>."""
+    body = json.loads(json.dumps(body))
+    for p in paths:
+        node = body
+        for part in p[:-1]:
+            node = node.get(part) if isinstance(node, dict) else None
+        if isinstance(node, dict) and node.get(p[-1]) not in (None, ""):
+            node[p[-1]] = HIDDEN
+    return body
+
+
 def _send(client: Client, args: argparse.Namespace, method: str, path: str, *, query: dict,
-          body: Any, headers: dict | None = None) -> int:
+          body: Any, headers: dict | None = None, op: spec.Operation | None = None) -> int:
     method = method.upper()
+    paths = op.secret_paths if op else []
+    args.secret_values = _secret_values(body, paths)
+    show = args.dry_run and getattr(args, "show_secrets", False)
+    if not show:
+        client.hide(args.secret_values)  # never in a response or an error either
+    # TODO(suraj): ask XO for a key scoped to one space, or a way to create a space without
+    # storing the caller's key in it; until then xo can only say that it happens.
+    copies = op is not None and op.copies_key and method != "GET"
     if args.dry_run:
-        plan = {"method": method, "url": client.url(path, query), "headers": headers or {}, "body": body}
+        shown = body if show or body is None else _masked(body, paths)
+        plan = {"method": method, "url": client.url(path, query), "headers": headers or {}, "body": shown}
         if body is not None:
             client.encode(body)  # the same JSON check a real send makes
         print(client.scrub(_json(plan)))
+        if copies:
+            print(f"xo: {commands.COPIES_KEY}", file=sys.stderr)
         print("xo: dry run, nothing sent", file=sys.stderr)
         return 0
-    if method == "DELETE" and not args.yes:
+    if method == "DELETE" and not getattr(args, "yes", False):
         raise XoError(f"DELETE {path} needs --yes (or --dry-run to see the request first)")
     if method != "GET":
         print(f"xo: {method} {spec.clean(client.scrub(client.url(path)))}", file=sys.stderr)
+    if copies:
+        print(f"xo: {commands.COPIES_KEY}", file=sys.stderr)
     resp = client.request(method, path, query=query, body=body, headers=headers)
     _print(client, resp.data, resp.text)
     return 0
 
 
 def _ops(args: argparse.Namespace) -> int:
-    client = _client(args, need_key=False)
-    ops = spec.operations(spec.load(client, args.spec))
+    ops = spec.operations(spec.load(args.spec))
     if args.filter:
         f = args.filter.lower()
         ops = [o for o in ops if f in o.op_id.lower() or f in o.path.lower()
@@ -256,21 +302,33 @@ def _ops(args: argparse.Namespace) -> int:
 
 
 def _call(args: argparse.Namespace) -> int:
+    op = spec.find(spec.load(args.spec), args.operation)
     client = _client(args, need_key=not args.dry_run)
-    # A dry run sends nothing, so it never fetches the spec either: that would send the key.
-    op = spec.find(spec.load(client, args.spec, remote=not args.dry_run), args.operation)
     path, query, headers = spec.build(op, _pairs(args.param, "--param"), label=f"call {op.op_id}")
     body = _body(args)
     if op.body_required and body is None:
         raise XoError(f"{op.op_id} needs a JSON body: --data JSON|@FILE|- or --field KEY=VALUE")
     if body is not None and not op.has_body:
         raise XoError(f"{op.op_id} takes no body")
-    return _send(client, args, op.method, path, query=query, body=body, headers=headers)
+    return _send(client, args, op.method, path, query=query, body=body, headers=headers, op=op)
 
 
 def _api(args: argparse.Namespace) -> int:
     client = _client(args, need_key=not args.dry_run)
-    return _send(client, args, args.method, args.path, query=_pairs(args.query, "--query"), body=_body(args))
+    try:  # the matching operation, if the spec has one, says which body fields are secrets
+        op = spec.match(spec.operations(spec.load_local(args.spec) or {}), args.method, args.path)
+    except (XoError, ValueError, TypeError, RecursionError):
+        op = None
+    return _send(client, args, args.method, args.path, query=_pairs(args.query, "--query"), body=_body(args),
+                 op=op)
+
+
+def _read_secret(flag: commands.Flag) -> str:
+    """A key or token given as -: read without echo on a terminal, else one line of stdin."""
+    typed = getpass.getpass(f"--{flag.flag}: ") if sys.stdin.isatty() else sys.stdin.readline()
+    if not typed.strip():
+        raise XoError(f"--{flag.flag} -: read nothing from stdin")
+    return typed.strip()
 
 
 def _set(body: dict, flag: commands.Flag, value: Any, label: str) -> None:
@@ -287,19 +345,40 @@ def _set(body: dict, flag: commands.Flag, value: Any, label: str) -> None:
         node.setdefault(name, default)
 
 
+def _unknown_fields(op: spec.Operation, body: dict, args: argparse.Namespace, label: str) -> None:
+    """The server drops a top-level field it does not know, and a space cannot be deleted through
+    the API, so a typo in --data or --field would create a space without that setting. `xo api`
+    still sends anything."""
+    if not op.top_fields:
+        return
+    for name in body:
+        if name in op.top_fields:
+            continue
+        nested = [f"--{f.flag}" for f in args.flags if f.where == "body" and ".".join(f.path) == name]
+        near = nested or [f"{n!r}" for n in difflib.get_close_matches(name, op.top_fields, n=1, cutoff=0.6)]
+        shown = repr(spec.clean(name)) if re.fullmatch(r"[A-Za-z0-9_.-]{1,40}", name) else "a name"
+        raise XoError(f"{label} has no body field {shown}"
+                      + (f"; did you mean {near[0]}?" if near else f"; it takes {', '.join(op.top_fields)}")
+                      + " (xo api sends any body as given)")
+
+
 def _endpoint(args: argparse.Namespace) -> int:
-    client = _client(args, need_key=not args.dry_run)
     op = args.op
     label = " ".join([args.command, *([args.action] if getattr(args, "action", None) else [])])
-    params, fields = commands.values(args)
+    params, args.fields = commands.values(args)
+    client = _client(args, need_key=not args.dry_run)
     path, query, headers = spec.build(op, params, lambda n: commands.flag_for(args, n), label=label)
     body = _body(args)
-    if fields:
+    if isinstance(body, dict):
+        _unknown_fields(op, body, args, label)
+    if args.fields:
         if body is None:
             body = {}
         if not isinstance(body, dict):
             raise XoError(f"{label}: body field flags need --data to be a JSON object")
-        for wire, (flag, value) in fields.items():
+        for flag, value in args.fields:
+            if flag.secret and value == "-":
+                value = _read_secret(flag)
             # A string field keeps the text as typed: --prompt true sends "true", not true.
             _set(body, flag, value if flag.type == "string" else _value(value), label)
     if body is None and op.body_required:
@@ -310,15 +389,18 @@ def _endpoint(args: argparse.Namespace) -> int:
         missing = [name for name in op.required_fields if name not in body]
         if missing:
             raise XoError(f"{label} needs " + ", ".join(commands.flag_for(args, n, body=True) for n in missing))
-    return _send(client, args, op.method, path, query=query, body=body, headers=headers)
+    return _send(client, args, op.method, path, query=query, body=body, headers=headers, op=op)
 
 
 def _add_send(p: argparse.ArgumentParser) -> None:
     p.add_argument("--data", metavar="JSON|@FILE|-", help="the JSON body, inline, from a file, or stdin")
     p.add_argument("--field", action="append", metavar="KEY=VALUE",
                    help="set one top-level body field; VALUE is JSON when it parses. Repeat it")
-    p.add_argument("--dry-run", action="store_true", help="print the request (never the key) and send nothing")
-    p.add_argument("--yes", action="store_true", help="needed to send a DELETE")
+    p.add_argument("--dry-run", action="store_true",
+                   help="print the request and send nothing; the API key never shows, and the provider keys "
+                        "and bot tokens the spec marks as secrets show as <hidden>")
+    p.add_argument("--show-secrets", action="store_true",
+                   help="with --dry-run, show those provider keys and bot tokens as given")
 
 
 def _common() -> argparse.ArgumentParser:
@@ -334,10 +416,10 @@ def _common() -> argparse.ArgumentParser:
     return c
 
 
-def _redacted(text: str, argv: list[str], key: str | None = None) -> str:
-    """xo's own error text with every key it could hold replaced: the one in use, $XO_API_KEY and
-    any --api-key value, wherever the user typed it."""
-    for secret in (key, *_secrets(argv)):
+def _redacted(text: str, argv: list[str], key: str | None = None, others: list[str] | None = None) -> str:
+    """xo's own error text with every key it could hold replaced: the one in use, $XO_API_KEY, any
+    --api-key value wherever the user typed it, and the body's provider keys and bot tokens."""
+    for secret in (key, *_secrets(argv), *(s for s in others or [] if len(s) >= MIN_SECRET)):
         if secret and secret != "-":
             text = redact(text, secret)
     return text
@@ -402,6 +484,7 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--param", action="append", metavar="NAME=VALUE",
                    help="a path, query or header parameter; repeat it")
     _add_send(c)
+    c.add_argument("--yes", action="store_true", help="needed to send a DELETE")
     c.set_defaults(run=_call)
 
     a = sub.add_parser("api", parents=[common],
@@ -410,6 +493,7 @@ def main(argv: list[str] | None = None) -> int:
     a.add_argument("path", help="starting with /, relative to the API base")
     a.add_argument("--query", action="append", metavar="NAME=VALUE", help="a query parameter; repeat it")
     _add_send(a)
+    a.add_argument("--yes", action="store_true", help="needed to send a DELETE")
     a.set_defaults(run=_api)
 
     _endpoints(sub, common, argv)
@@ -432,13 +516,16 @@ def main(argv: list[str] | None = None) -> int:
             pass
         return 0
     except XoError as e:
-        print(f"xo: {spec.clean(_redacted(str(e), argv, getattr(args, 'resolved_key', None)))}", file=sys.stderr)
+        text = _redacted(str(e), argv, getattr(args, "resolved_key", None), getattr(args, "secret_values", None))
+        print(f"xo: {spec.clean(text)}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:
-        print("xo: interrupted", file=sys.stderr)
+        client = getattr(args, "client", None)
+        sent = client is not None and client.in_flight
+        print("xo: interrupted" + (f"; {MAYBE_RECEIVED}" if sent else ""), file=sys.stderr)
         return 130
     except Exception as e:  # noqa: BLE001 - one line, never a traceback that could carry the key
-        text = _redacted(str(e), argv, getattr(args, "resolved_key", None))
+        text = _redacted(str(e), argv, getattr(args, "resolved_key", None), getattr(args, "secret_values", None))
         print(f"xo: unexpected {type(e).__name__}: {spec.clean(text)}", file=sys.stderr)
         return 1
 
