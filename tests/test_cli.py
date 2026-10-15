@@ -1012,3 +1012,11 @@ def test_an_empty_path_parameter_is_refused(xs, capsys):  # B-N4
     code, _, err = run(capsys, "user-metadata", "get", "--user-id", "")
     assert code != 0 and xs.requests == []
     assert err == "xo: --user-id can't be empty\n"
+
+
+def test_a_secret_with_a_space_is_redacted_in_its_form_encoded_form():  # #8 audit nit
+    import urllib.parse
+    from xo.client import redact
+    secret = "bot token with spaces"
+    for form in (secret, urllib.parse.quote_plus(secret), urllib.parse.quote(secret)):
+        assert redact(f"x {form} y", secret) == "x <redacted> y", form

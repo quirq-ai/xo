@@ -125,13 +125,15 @@ class Config:
 
 
 class ClerkError(Exception):
-    def __init__(self, status: int, code: str = "") -> None:
+    def __init__(self, status: int, code: str = "", seen: int | str | None = None) -> None:
         super().__init__(f"Clerk answered {status}" + (f" ({code})" if code else ""))
         self.status = status
         self.code = code
+        # For the audit line: the status Clerk answered, or what happened when it did not answer.
+        self.seen = status if seen is None else seen
 
 
-BUSY = ClerkError(429, "xo_budget")  # our own cap, not Clerk's
+BUSY = ClerkError(429, "xo_budget", seen="xo budget")  # our own cap, not Clerk's
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -188,11 +190,13 @@ class Clerk:
             except Exception:  # noqa: BLE001 - the status is enough
                 pass
             # A redirect is never followed, so the secret never goes anywhere else; treat it as down.
-            raise ClerkError(502 if 300 <= e.code < 400 else e.code, code) from None
+            if 300 <= e.code < 400:
+                raise ClerkError(502, code, seen="redirect") from None
+            raise ClerkError(e.code, code) from None
         except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException, ValueError):
-            raise ClerkError(502, "unreachable") from None
+            raise ClerkError(502, "unreachable", seen="unreachable") from None
         if not isinstance(out, dict):
-            raise ClerkError(502, "not an object")
+            raise ClerkError(502, "not an object", seen="not an object")
         return out
 
     def verify_key(self, secret: str) -> dict:
@@ -207,10 +211,11 @@ class Clerk:
 
 
 class _Reply(Exception):
-    def __init__(self, status: int, error: str) -> None:
+    def __init__(self, status: int, error: str, clerk: int | str | None = None) -> None:
         super().__init__(error)
         self.status = status
         self.error = error
+        self.clerk = clerk  # what Clerk said, for the audit line, when Clerk is why the request failed
 
 
 MISCONFIGURED = "xo server misconfigured; tell whoever runs it"
@@ -222,10 +227,10 @@ def _clerk_failure(e: ClerkError) -> _Reply:
         # One loud line for whoever runs the server; never the secret.
         print(f"xo serve: Clerk refused this server's {SECRET_ENV} ({e.status}); check or rotate it",
               file=sys.stderr, flush=True)
-        return _Reply(503, MISCONFIGURED)
+        return _Reply(503, MISCONFIGURED, e.seen)
     if e.status == 429:
-        return _Reply(503, "The server is busy; try again shortly")
-    return _Reply(502, "Clerk did not answer")
+        return _Reply(503, "The server is busy; try again shortly", e.seen)
+    return _Reply(502, "Clerk did not answer", e.seen)
 
 
 class App:
@@ -380,7 +385,7 @@ class App:
         except _Reply as r:
             # 401s here are someone trying keys; 429, 502 and 503 are worth seeing too.
             self.audit(method=method, route="/user-metadata", keyId=None, caller=None, target=target,
-                       outcome=r.status)
+                       outcome=r.status, **({"clerk": r.clerk} if r.clerk is not None else {}))
             raise
         who = {"method": method, "route": "/user-metadata", "keyId": key.get("id"), "caller": key.get("subject")}
         if not self._admin(key):
@@ -400,7 +405,7 @@ class App:
         except ClerkError as e:
             reply = self._clerk_reply(e)
             # The outcome is what the caller got; `clerk` is what Clerk (or our own budget) said.
-            self.audit(**who, outcome=reply.status, clerk=e.status, **extra)
+            self.audit(**who, outcome=reply.status, clerk=e.seen, **extra)
             raise reply from None
         data = {"publicMetadata": u.get("public_metadata") or {}, "privateMetadata": u.get("private_metadata") or {}}
         self.audit(**who, outcome=200, **extra)  # after the reply is built
