@@ -3,7 +3,9 @@ of a real Clerk answer; shapes follow @clerk/backend's APIKeyJSON and UserJSON."
 from __future__ import annotations
 
 import json
+import os
 import threading
+import time
 import urllib.error
 import urllib.request
 
@@ -51,6 +53,7 @@ class FakeClerk:
         self.core: list[dict] = []
         self.core_answer: tuple[int, bytes, dict] = (200, b'{"success": true, "data": {"id": "space_1"}}', {})
         self.core_stall = 0.0
+        self.core_trickle = 0.0  # seconds between the answer's bytes, after its headers
 
 
 @pytest.fixture
@@ -73,7 +76,14 @@ def clerk(monkeypatch):
                         self.send_header(k, v)
                     self.send_header("Content-Length", str(len(data)))
                     self.end_headers()
-                    self.wfile.write(data)
+                    if state.core_trickle:
+                        import time
+                        for byte in data:
+                            self.wfile.write(bytes([byte]))
+                            self.wfile.flush()
+                            time.sleep(state.core_trickle)
+                    else:
+                        self.wfile.write(data)
                 except OSError:
                     pass
                 return
@@ -126,6 +136,7 @@ def clerk(monkeypatch):
     monkeypatch.setenv("XO_EDITABLE_PRIVATE_KEYS", "stripeId")
     monkeypatch.setenv("XO_ADMIN_KEY_IDS", "ak_admin,ak_listed")
     monkeypatch.setenv("XO_CLERK_PER_SECOND", "1000")  # the budget has its own test
+    monkeypatch.setenv("XO_CORE_PER_SECOND", "1000")  # so has this one
     yield state
     httpd.shutdown()
 
@@ -856,11 +867,52 @@ def test_xos_answer_comes_back_as_it_was(xo_server, clerk):
     assert call(xo_server, "GET", "/api/core/v1/spaces/s1", USER_KEY)[0] == 502
 
 
-def test_a_redirect_from_xo_is_not_followed(xo_server, clerk):
-    clerk.core_answer = (307, b"", {"Location": "https://evil.example/steal"})
-    assert call(xo_server, "POST", "/api/core/v1/codex", USER_KEY, {}) == \
-        (502, {"success": False, "error": "XO redirected the request (307); not followed"})
+@pytest.mark.parametrize("method,status", [("POST", 307), ("GET", 302), ("GET", 301), ("POST", 308)])
+def test_a_redirect_from_xo_is_not_followed(xo_server, clerk, method, status):
+    # The Location is the fake's own /core path, so a followed redirect would show up as a second request.
+    clerk.core_answer = (status, b"", {"Location": os.environ["XO_CORE_API_URL"] + "/spaces/elsewhere"})
+    path = "/api/core/v1/codex" if method == "POST" else "/api/core/v1/spaces/s1"
+    assert call(xo_server, method, path, USER_KEY, {} if method == "POST" else None) == \
+        (502, {"success": False, "error": f"XO redirected the request ({status}); not followed"})
     assert len(clerk.core) == 1
+
+
+def test_a_get_body_is_not_passed_on(xo_server, clerk):
+    assert call(xo_server, "GET", "/api/core/v1/spaces/s1", USER_KEY, raw=b'{"x": 1}')[0] == 200
+    assert clerk.core[0]["body"] == b"" and "Content-Type" not in clerk.core[0]["headers"]
+
+
+def test_an_answer_that_is_not_json_says_whether_it_worked(xo_server, clerk):
+    clerk.core_answer = (201, b"created", {})
+    assert call(xo_server, "POST", "/api/core/v1/codex", USER_KEY, {}) == \
+        (201, {"success": True, "error": "XO answered 201 without a JSON object"})
+
+
+def test_a_too_large_answer_is_not_passed_on(xo_server, clerk, monkeypatch):
+    monkeypatch.setattr(server, "MAX_CORE_ANSWER", 16)
+    clerk.core_answer = (200, b'{"success": true, "data": {"id": "space_1"}}', {})
+    assert call(xo_server, "POST", "/api/core/v1/codex", USER_KEY, {}) == \
+        (200, {"success": True, "error": "XO answered 200 with more than 16 bytes, too large to pass on"})
+    clerk.core_answer = (200, b'{"success": true}', {})  # 17 bytes
+    assert call(xo_server, "POST", "/api/core/v1/codex", USER_KEY, {})[1]["error"].startswith("XO answered 200 with")
+    clerk.core_answer = (200, b'{"a": "bcdefgh"}', {})  # exactly 16 bytes
+    assert call(xo_server, "POST", "/api/core/v1/codex", USER_KEY, {}) == (200, {"a": "bcdefgh"})
+
+
+def test_xo_failing_does_not_make_the_server_degraded(xo_server, clerk):
+    clerk.core_answer = (500, b'{"success": false}', {})
+    for _ in range(3):
+        assert call(xo_server, "POST", "/api/core/v1/codex", USER_KEY, {})[0] == 500
+    assert call(xo_server, "GET", "/status")[1]["data"]["status"] == "ok"
+
+
+def test_forwards_have_a_budget_for_the_whole_process(clerk, monkeypatch):
+    monkeypatch.setenv("XO_CORE_PER_SECOND", "2")
+    app = server.App(server.Config())
+    keys = [f"ak_key_{n}" for n in range(3)]  # different keys: the per-key limit does not apply
+    answers = [app.handle("POST", "/api/core/v1/codex", {"authorization": f"Bearer {k}"}, b"{}")[0] for k in keys]
+    assert answers == [200, 200, 503]
+    assert len(clerk.core) == 2
 
 
 def test_xo_unreachable_or_slow(xo_server, clerk, monkeypatch):
@@ -874,6 +926,12 @@ def test_xo_unreachable_or_slow(xo_server, clerk, monkeypatch):
     clerk.core_stall = 0.5
     assert call(xo_server, "POST", "/api/core/v1/codex", USER_KEY, {}) == (504, {
         "success": False, "error": "XO did not answer in time; it may have been received, so check before you retry"})
+    clerk.core_stall = 0.0
+    clerk.core_trickle = 0.15  # each wait is short, but the whole answer takes about 7 seconds
+    started = time.monotonic()
+    assert call(xo_server, "GET", "/api/core/v1/spaces/s1", USER_KEY) == (504, {
+        "success": False, "error": "XO did not answer in time"})
+    assert time.monotonic() - started < 2
 
 
 def test_core_requests_are_rate_limited_per_key(xo_server, clerk):

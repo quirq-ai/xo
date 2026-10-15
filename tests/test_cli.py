@@ -968,6 +968,25 @@ def test_the_url_must_be_https(core, capsys, monkeypatch):
     assert code == 1 and err.startswith("xo: --url must be an https:// address")
 
 
+def test_the_url_error_does_not_repeat_a_password(core, capsys):
+    code, _, err = run(capsys, "me", "--url", "https://sam:hunter2@xo.example")
+    assert code == 1 and "hunter2" not in err and "sam" not in err
+    assert err == ("xo: --url must be an https:// address (or http:// to localhost) with no query and no user "
+                   "or password, not 'https://xo.example'\n")
+
+
+@pytest.mark.parametrize("names", [("XO_BASE_URL",), ("XO_SERVER_URL",), ("XO_BASE_URL", "XO_SERVER_URL")])
+def test_the_old_url_variables_are_refused_not_ignored(core, capsys, monkeypatch, names):
+    monkeypatch.delenv("XO_URL", raising=False)
+    for name in names:
+        monkeypatch.setenv(name, "http://127.0.0.1:3000/api/core/v1")
+    code, _, err = run(capsys, "codex", "--name", "x", "--volume-size", "20", "--dry-run")
+    assert code == 1 and core.requests == []
+    assert err.startswith(f"xo: {' and '.join(names)} ") and "no longer read; set XO_URL" in err
+    monkeypatch.setenv("XO_URL", core.base)  # with XO_URL set, the old ones no longer matter
+    assert run(capsys, "codex", "--name", "x", "--volume-size", "20", "--dry-run")[0] == 0
+
+
 def test_core_commands_go_under_the_core_path(xs, capsys):
     xs.route("GET", "/api/core/v1/spaces/s1", body={"success": True, "data": {}})
     assert run(capsys, "spaces", "--space-id", "s1")[0] == 0
@@ -1103,6 +1122,13 @@ def test_only_xos_space_not_found_counts_as_a_working_key(login, capsys, config_
     code, _, err = run(capsys, "login")
     assert code == 1 and "nothing saved" in err
     assert not (config_home / "xo" / "credentials").exists()
+
+
+def test_a_server_without_the_forwarding_is_named_at_login(login, capsys):
+    login.route("GET", PROBE, status=404, body={"success": False, "error": "Not found"})
+    code, _, err = run(capsys, "login")
+    assert code == 1 and err.endswith(f": HTTP 404: Not found; the xo server at {login.base} does not pass the "
+                                      "core API on (is it up to date?); nothing saved\n")
 
 
 def test_a_refused_key_leaves_the_old_saved_key(login, capsys, config_home):

@@ -6,7 +6,7 @@
 # It runs xo straight from this checkout's src/ (nothing is installed or downloaded), checks
 # /healthz, asks for a test user's API key without echoing it, checks `xo me`, that the server
 # passes the core API on to XO (with a made-up key, never yours), and three refusals, and last
-# checks that the Vercel Firewall rule is active. The key is never printed, written to a
+# checks that the Vercel Firewall rule is active and covers /api/core. The key is never printed, written to a
 # file, put on a command line or exported: only the xo calls that need it get it. Its only network
 # calls go to the server. Works with macOS bash 3.2.
 # XO_URL overrides the server (default https://xo.quirq.dev).
@@ -104,8 +104,10 @@ if XO_API_KEY=ak_made_up_for_the_xo_test xo spaces --space-id "$probe" >/dev/nul
   fail "the core API check: XO accepted a made-up key"
 elif grep -q -e "HTTP 401" -e "Space not found" "$work/core.err"; then
   pass "the server passes the core API on to XO"
+elif grep -q "HTTP 404: Not found" "$work/core.err"; then
+  fail "the core API check: the server answered its own 404, so it does not pass the core API on (is the latest main deployed?)"
 else
-  fail "the core API check: $(head -c 300 "$work/core.err") (is the latest main deployed?)"
+  fail "the core API check: $(head -c 300 "$work/core.err")"
 fi
 
 # 6. What must be refused.
@@ -151,6 +153,15 @@ elif [ "$i" -le 50 ]; then
   fail "request $i got $limited, well before the limit of 60; check the rule (if you ran the script within the last minute, or a status page tab shares the rule, wait a minute and run it again)"
 else
   pass "the Firewall rule is active (request $i got $limited)"
+  # The same rule must cover /api/core. With no key the server answers 401 there and passes
+  # nothing on to XO, so this asks XO nothing. Right after the burst, the address is still over
+  # the limit if the rule counts /api/core with /me.
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$server/api/core/v1/spaces/$probe")"
+  case "$code" in
+    429|403) pass "the Firewall rule covers /api/core (got $code)" ;;
+    401) fail "the Firewall rule does not cover /api/core (got 401): add the /api/core condition (docs/deploy-vercel.md, step 3) and publish" ;;
+    *) fail "/api/core without a key got $code (not 429, 403 or 401), so the rule could not be checked there" ;;
+  esac
 fi
 
 echo

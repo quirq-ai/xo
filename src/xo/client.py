@@ -33,6 +33,7 @@ CORE_PATH = "/api/core/v1"
 DEFAULT_TIMEOUT = 30.0
 KEY_ENV = "XO_API_KEY"
 URL_ENV = "XO_URL"
+OLD_URL_ENVS = ("XO_BASE_URL", "XO_SERVER_URL")  # before one address; refused, not ignored
 CONFIG_ENV = "XDG_CONFIG_HOME"
 SAVED = "the key saved by xo login"
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
@@ -68,6 +69,10 @@ def xo_url(flag: str | None = None, saved: str | None = None) -> str:
         source, url = "--url", flag
     elif os.environ.get(URL_ENV, "").strip():
         source, url = URL_ENV, os.environ[URL_ENV].strip()
+    elif old := [name for name in OLD_URL_ENVS if os.environ.get(name, "").strip()]:
+        # Set for an xo that had two addresses: going on would send this to another one unasked.
+        raise XoError(f"{' and '.join(old)} {'is' if len(old) == 1 else 'are'} no longer read; set {URL_ENV} "
+                      f"to the xo server's address (one address for everything), or unset {old[0]}")
     elif saved:
         source, url = "the URL saved by xo login", saved
     else:
@@ -76,8 +81,9 @@ def xo_url(flag: str | None = None, saved: str | None = None) -> str:
     parts = urllib.parse.urlsplit(url)
     ok = parts.scheme == "https" or (parts.scheme == "http" and parts.hostname in LOCAL_HOSTS)
     if not ok or not parts.hostname or parts.query or parts.fragment or parts.username or parts.password:
-        raise XoError(f"{source} must be an https:// address (or http:// to localhost) with no query, "
-                      f"not {url!r}")
+        shown = parts._replace(netloc=parts.netloc.rpartition("@")[2]).geturl() if "@" in parts.netloc else url
+        raise XoError(f"{source} must be an https:// address (or http:// to localhost) with no query "
+                      f"and no user or password, not {shown!r}")
     return url
 
 

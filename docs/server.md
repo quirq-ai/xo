@@ -58,8 +58,13 @@ and JSON back as they came. XO checks the key; the server does not ask Clerk abo
 - **What it costs.** The keys and provider tokens in a create now pass through this server's
   memory. Every user reaches XO from the server's addresses, not their own. XO's failures do not
   count toward **Degraded**, which is about Clerk.
-- **Timeouts.** XO gets 25 seconds. A create that times out answers 504 "XO did not answer in time;
-  it may have been received, so check before you retry"; one XO never answered, 502.
+- **A budget for XO.** All requests passed on share `XO_CORE_PER_SECOND` (default 10 a second per
+  process); past it the server answers 503 "The server is busy; try again shortly" without passing
+  anything on. Made-up keys step around the per-key limit, so this is what bounds them per instance.
+- **Timeouts.** XO gets 25 seconds for the whole answer, however slowly it sends. A create that
+  times out answers 504 "XO did not answer in time; it may have been received, so check before you
+  retry"; one XO never answered, 502. An answer over 1 MiB is not passed on: the caller gets XO's
+  status and "too large to pass on".
 
 ## The status page
 
@@ -106,6 +111,7 @@ Environment only, so the secret never lands in shell history or the process list
 | `XO_EDITABLE_PUBLIC_KEYS` | for edits | comma-separated top-level public metadata keys PATCH may change |
 | `XO_EDITABLE_PRIVATE_KEYS` | for edits | the same for private metadata |
 | `XO_CLERK_PER_SECOND` | no | calls to Clerk per second for the whole process; default 20 |
+| `XO_CORE_PER_SECOND` | no | requests passed on to XO per second for the whole process; default 10 |
 | `XO_SERVE_MAX_CONNECTIONS` | no | connections served at once; default 64, then 503 |
 | `CLERK_API_URL` | no | default `https://api.clerk.com`; tests point it at a fake |
 | `XO_CORE_API_URL` | no | where `/api/core/v1` goes; default `https://app.xo.builders/api/core/v1`; https only |
@@ -165,7 +171,12 @@ process apply per function instance, so the per-address limit is a Vercel Firewa
 - **A budget for Clerk.** All calls to Clerk share `XO_CLERK_PER_SECOND` (default 20); past it the
   server answers 503 without calling. Clerk allows 1000 Backend API calls per 10 seconds for the
   whole instance, shared with XO's core API, and each verification past 100,000 a month is billed,
-  so this cap is what keeps made-up keys from spending either.
+  so this cap is what keeps made-up keys sent to `/me` from spending either. It does not cover
+  `/api/core`: a request passed on makes no call to this server's Clerk, and goes to production XO
+  (app.xo.builders) whatever credentials the server holds, where XO checks the key with its own
+  Clerk. Made-up keys sent there spend XO's production Clerk, from the day the forwarding is
+  deployed. What bounds them is `XO_CORE_PER_SECOND` per instance and the Firewall rule per
+  address.
 - **Rate limits.** Per key, 60 requests a minute on `/me` and 20 on `/user-metadata`, counted
   before Clerk is asked; the table remembers the 10,000 most recent keys. Clerk also allows 10
   metadata writes per 10 seconds per user.

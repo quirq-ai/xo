@@ -14,10 +14,14 @@
                                             query and header parameters; --data or --field give the
                                             JSON body.
     xo api METHOD PATH [--query NAME=VALUE ...] [--data JSON|@FILE|-] [--field KEY=VALUE ...]
-                                            send any request, spec or not.
+                                            send any request, spec or not. Through the xo server
+                                            only the creates and GET /spaces/{id} pass; for the
+                                            rest, add --url https://app.xo.builders with
+                                            $XO_API_KEY or --api-key - (not the saved key).
     xo serve [--host H] [--port P]          run the xo server: it answers `xo me` and
                                             `xo user-metadata` with the Clerk credentials it holds,
-                                            and passes every other command on to XO's core API.
+                                            and passes the creates and GET /spaces/{id} on to XO's
+                                            core API.
     xo login [--url URL]                    ask for your API key without showing it, check it with
                                             XO through the xo server, and save it with the URL.
     xo logout                               delete the saved key and URL.
@@ -462,6 +466,9 @@ def _login(args: argparse.Namespace) -> int:
         # XO's own answer for a working key (the quickstart's check). Anything else, the server's
         # bare "Not found" included (one that does not pass the core API on), saves nothing.
         if not str(e).endswith(f"{PROBE_SPACE}: HTTP 404: Space not found"):
+            if str(e).endswith(": HTTP 404: Not found"):  # the server's own 404, not XO's
+                raise XoError(f"{e}; the xo server at {url} does not pass the core API on (is it up to date?); "
+                              "nothing saved") from None
             raise XoError(f"{e}; nothing saved") from None
     who = _account(args.client)
     path = save_login(Login(url, key))
@@ -602,7 +609,8 @@ def main(argv: list[str] | None = None) -> int:
     c.set_defaults(run=_call)
 
     a = sub.add_parser("api", parents=[common],
-                       help="send any request; non-GET changes things on XO, DELETE needs --yes")
+                       help="send any request (through the xo server, only the creates and GET /spaces/{id} "
+                            "pass); non-GET changes things on XO, DELETE needs --yes")
     a.add_argument("method", type=str.upper, choices=[m.upper() for m in spec.METHODS])
     a.add_argument("path", help="starting with /, relative to the API base")
     a.add_argument("--query", action="append", metavar="NAME=VALUE", help="a query parameter; repeat it")

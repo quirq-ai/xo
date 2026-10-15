@@ -22,8 +22,9 @@ $XO_EDITABLE_PRIVATE_KEYS can be changed; both start empty. Every request to /us
 and failed ones included, is one JSON audit line on stderr with ids and key names, never values or
 keys.
 
-Calls to Clerk are capped for the whole process ($XO_CLERK_PER_SECOND, default 20), a bearer token
-that does not look like a Clerk API key never reaches Clerk, and each token is rate limited. Open
+Calls to Clerk are capped for the whole process ($XO_CLERK_PER_SECOND, default 20), and so are
+requests passed on to XO ($XO_CORE_PER_SECOND, default 10). A bearer token that does not look like
+a Clerk API key never reaches Clerk or XO, and each token is rate limited. Open
 connections are capped ($XO_SERVE_MAX_CONNECTIONS, default 64), and each is closed after
 REQUEST_DEADLINE seconds however slowly its client sends.
 
@@ -33,6 +34,7 @@ Configuration (environment only, so the secret never lands in shell history or t
     XO_EDITABLE_PUBLIC_KEYS   comma-separated top-level keys PATCH may change in public metadata
     XO_EDITABLE_PRIVATE_KEYS  the same for private metadata
     XO_CLERK_PER_SECOND       calls to Clerk per second for the whole process (default 20)
+    XO_CORE_PER_SECOND        requests passed on to XO per second for the whole process (default 10)
     XO_SERVE_MAX_CONNECTIONS  connections served at once (default 64)
     CLERK_API_URL             default https://api.clerk.com (tests point it at a fake)
     XO_CORE_API_URL           where /api/core/v1 goes; default https://app.xo.builders/api/core/v1
@@ -72,8 +74,8 @@ USER_ID = re.compile(r"user_[A-Za-z0-9]{1,64}")
 CORE_ENV = "XO_CORE_API_URL"
 DEFAULT_CORE_URL = "https://app.xo.builders/api/core/v1"
 CORE_PREFIX = "/api/core/v1"  # the client's CORE_PATH
-# Under the 30 seconds the CLI waits by default and the server's REQUEST_DEADLINE, so the caller
-# hears why rather than timing out itself.
+# XO's time for a whole forward, under the 30 seconds the CLI waits by default and the server's
+# REQUEST_DEADLINE, so the caller hears why rather than timing out itself.
 CORE_TIMEOUT = 25.0
 MAX_CORE_ANSWER = 1024 * 1024
 # What is passed on to the core API: the bundled spec's routes that the server does not answer
@@ -143,6 +145,7 @@ class Config:
         self.editable = {"publicMetadata": _list_env("XO_EDITABLE_PUBLIC_KEYS"),
                          "privateMetadata": _list_env("XO_EDITABLE_PRIVATE_KEYS")}
         self.clerk_per_second = _int_env("XO_CLERK_PER_SECOND", 20)
+        self.core_per_second = _int_env("XO_CORE_PER_SECOND", 10)
         self.max_connections = _int_env("XO_SERVE_MAX_CONNECTIONS", 64)
 
 
@@ -235,38 +238,71 @@ class Clerk:
 class Core:
     """The other network door: XO's core API, for the routes the server passes on."""
 
-    def __init__(self, cfg: Config) -> None:
+    def __init__(self, cfg: Config, clock=time.monotonic) -> None:
         self._cfg = cfg
-        self._opener = urllib.request.build_opener(_NoRedirect)
+        self._budget = _Bucket(cfg.core_per_second, clock)
 
     def forward(self, method: str, path: str, token: str, body: bytes | None) -> tuple[int, dict]:
-        """XO's answer to the caller's request, sent with the caller's own key and body."""
-        headers = {"Accept": "application/json", "User-Agent": f"xo-server/{__version__}"}
+        """XO's answer to the caller's request, sent with the caller's own key and body.
+
+        XO gets CORE_TIMEOUT seconds for the whole exchange, however slowly it sends: a timer cuts
+        the connection then. http.client never follows a redirect, so the key goes nowhere else."""
+        maybe = "; it may have been received, so check before you retry" if method != "GET" else ""
+        if not self._budget.take():
+            return 503, {"success": False, "error": "The server is busy; try again shortly"}
+        headers = {"Accept": "application/json", "User-Agent": f"xo-server/{__version__}",
+                   "Authorization": f"Bearer {token}"}
         if body is not None:
             headers["Content-Type"] = "application/json"
-        req = urllib.request.Request(self._cfg.core_url + path, data=body, method=method, headers=headers)
-        req.add_unredirected_header("Authorization", f"Bearer {token}")
+        parts = urllib.parse.urlsplit(self._cfg.core_url)
+        kind = http.client.HTTPSConnection if parts.scheme == "https" else http.client.HTTPConnection
+        conn = kind(parts.hostname, parts.port, timeout=CORE_TIMEOUT)
+        late = threading.Event()
+        opened: list[socket.socket] = []  # kept here: http.client drops conn.sock once it will close
+
+        def cut() -> None:
+            late.set()
+            for sock in opened:
+                try:
+                    sock.shutdown(socket.SHUT_RDWR)  # wakes a read blocked in the other thread
+                except OSError:
+                    pass
+
+        timer = threading.Timer(CORE_TIMEOUT, cut)
+        timer.daemon = True
+        timer.start()
+        resp = None
         try:
-            with self._opener.open(req, timeout=CORE_TIMEOUT) as resp:
-                status, raw = resp.status, resp.read(MAX_CORE_ANSWER)
-        except urllib.error.HTTPError as e:
-            if 300 <= e.code < 400:  # never followed, so the key goes nowhere else
-                return 502, {"success": False, "error": f"XO redirected the request ({e.code}); not followed"}
-            try:
-                status, raw = e.code, e.read(MAX_CORE_ANSWER)
-            except (OSError, http.client.HTTPException, ValueError):
-                status, raw = e.code, b""  # the status still says what happened
-        except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException, ValueError) as e:
-            late = isinstance(getattr(e, "reason", e), TimeoutError)
-            maybe = "; it may have been received, so check before you retry" if method != "GET" else ""
-            return (504, {"success": False, "error": "XO did not answer in time" + maybe}) if late else \
-                   (502, {"success": False, "error": "XO did not answer" + maybe})
+            conn.connect()
+            opened.append(conn.sock)
+            if late.is_set():  # the timer fired while connecting, before there was a socket to cut
+                raise TimeoutError
+            conn.request(method, parts.path + path, body=body, headers=headers)
+            resp = conn.getresponse()
+            status, raw = resp.status, resp.read(MAX_CORE_ANSWER + 1)
+        except (TimeoutError, OSError, http.client.HTTPException, ValueError):
+            if late.is_set():
+                return 504, {"success": False, "error": "XO did not answer in time" + maybe}
+            return 502, {"success": False, "error": "XO did not answer" + maybe}
+        finally:
+            timer.cancel()
+            if resp is not None:
+                resp.close()
+            conn.close()
+        if late.is_set():  # cut mid-answer: what was read is not the whole answer
+            return 504, {"success": False, "error": "XO did not answer in time" + maybe}
+        if 300 <= status < 400:
+            return 502, {"success": False, "error": f"XO redirected the request ({status}); not followed"}
+        if status not in _KNOWN_STATUSES:
+            return 502, {"success": False, "error": f"XO answered with status {status}"}
+        if len(raw) > MAX_CORE_ANSWER:
+            return status, {"success": 200 <= status < 300,
+                            "error": f"XO answered {status} with more than {MAX_CORE_ANSWER} bytes, too large "
+                                     "to pass on"}
         try:
             payload = json.loads(raw)
         except (ValueError, RecursionError):
             payload = None
-        if status not in _KNOWN_STATUSES:
-            return 502, {"success": False, "error": f"XO answered with status {status}"}
         if not isinstance(payload, dict):
             return status, {"success": 200 <= status < 300, "error": f"XO answered {status} without a JSON object"}
         return status, payload
@@ -730,6 +766,7 @@ def serve(host: str, port: int) -> int:
     server = make_server(app, host, port)
     where = f"http://{host}:{server.server_address[1]}"
     print(f"xo serve: listening on {where} (Clerk at {app.cfg.clerk_url}; "
+          f"/api/core/v1 passed on to {app.cfg.core_url}; "
           f"{len(app.cfg.admin_ids)} admin key id(s))", file=sys.stderr, flush=True)
     if host not in LOCAL_HOSTS:
         print("xo serve: not on localhost; serve it only behind HTTPS", file=sys.stderr, flush=True)

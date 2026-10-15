@@ -820,7 +820,7 @@
           "users"
         ],
         "summary": "Show the account this API key belongs to (xo server)",
-        "description": "Returns the key's user: id, username, first and last name, image URL, created time. Served by an xo server (`xo serve`) at $XO_SERVER_URL, not by app.xo.builders.",
+        "description": "Returns the key's user: id, username, first and last name, image URL, created time. Served by an xo server (`xo serve`) at $XO_URL (the default https://xo.quirq.dev), not by app.xo.builders.",
         "responses": {
           "200": {
             "description": "data.id, data.username, data.firstName, data.lastName, data.imageUrl, data.createdAt"
@@ -845,7 +845,7 @@
           "users"
         ],
         "summary": "Show a user's public and private Clerk metadata (admin keys only; xo server)",
-        "description": "Admin keys only. Served by an xo server (`xo serve`) at $XO_SERVER_URL, not by app.xo.builders.",
+        "description": "Admin keys only. Served by an xo server (`xo serve`) at $XO_URL (the default https://xo.quirq.dev), not by app.xo.builders.",
         "parameters": [
           {
             "name": "userId",
@@ -885,7 +885,7 @@
           "users"
         ],
         "summary": "Merge changes into a user's public and private Clerk metadata (admin keys only; xo server)",
-        "description": "Clerk deep-merges the objects you send into the stored ones; a key set to null is removed, and {} changes nothing. Only top-level keys the server allow-lists can change. Each bucket holds at most 8KB. Served by an xo server (`xo serve`) at $XO_SERVER_URL, not by app.xo.builders.",
+        "description": "Clerk deep-merges the objects you send into the stored ones; a key set to null is removed, and {} changes nothing. Only top-level keys the server allow-lists can change. Each bucket holds at most 8KB. Served by an xo server (`xo serve`) at $XO_URL (the default https://xo.quirq.dev), not by app.xo.builders.",
         "parameters": [
           {
             "name": "userId",
