@@ -627,3 +627,10 @@ def test_a_typo_still_lists_the_real_commands(fake, capsys):
     err = _argparse_err(capsys, "template", "list")
     assert "'templates'" in err and "'orgs-templates'" in err
     assert "'template'" not in err
+
+
+def test_a_typed_choose_from_cannot_carry_a_value_past_the_hiding(fake, capsys, monkeypatch):
+    monkeypatch.delenv("XO_API_KEY")
+    secret = "ak_FAKE_r5_0123456789abcdef"
+    err = _argparse_err(capsys, f"x (choose from {secret}")
+    assert secret not in err and "'templates'" in err

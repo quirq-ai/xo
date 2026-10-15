@@ -108,7 +108,9 @@ def safe_error(message: str, argv: list[str]) -> str:
         words = [_option_name(w) if w.startswith("-") else HIDDEN for w in m.group(2).split()]
         return m.group(1) + " ".join(words)
     # "(choose from ...)" lists only names xo made: leave it whole, so a typo still shows the real names.
-    message, choose, choices = message.partition(" (choose from ")
+    message, choose, choices = message.rpartition(" (choose from ")
+    if not choose:  # no list: rpartition put the whole message last
+        message, choices = choices, ""
     message = _UNRECOGNIZED.sub(unrecognized, message)
     message = _ECHOED.sub(lambda m: f"{m.group(1)}: {HIDDEN}", message)
     message = _JOINED.sub(lambda m: f"{m.group(1)}={HIDDEN}", message)
