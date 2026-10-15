@@ -25,14 +25,18 @@
     xo login [--url URL]                    ask for your API key without showing it, check it with
                                             XO through the xo server, and save it with the URL.
     xo logout                               delete the saved key and URL.
+    xo coder github URL [--name NAME]      create an xo-github workspace for a GitHub repository;
+                                            uses your Coder login, then prints workspace and public
+                                            app URLs as JSON. See `xo coder github --help`.
 
 A request that is not a GET changes things on XO, so it prints one line on stderr first; a create
 that stores your API key in the new space says so on a second line. --dry-run prints the request
 and sends nothing, with provider keys and bot tokens shown as <hidden> unless --show-secrets is
 given. A DELETE also needs --yes.
 
-Every command goes to one URL: --url, else $XO_URL, else the one xo login saved, else
-https://xo.quirq.dev. The core API is under its /api/core/v1.
+XO API commands go to one URL: --url, else $XO_URL, else the one xo login saved, else
+https://xo.quirq.dev. The core API is under its /api/core/v1. Coder commands use
+--coder-url, $XO_CODER_URL, or $CODER_URL separately and authenticate with Coder.
 
 The API key comes from --api-key - (one line on stdin), $XO_API_KEY, or the key xo login saved,
 in that order; the saved key is only ever sent to the URL it was saved with. --api-key KEY also
@@ -53,15 +57,16 @@ import re
 import sys
 from pathlib import Path
 from typing import Any, NoReturn
+from urllib.parse import quote
 
-from xo import __version__, commands, spec
-from xo.client import (CORE_PATH, DEFAULT_TIMEOUT, KEY_ENV, MAYBE_RECEIVED, MIN_SECRET, Client, Login,
-                       XoError, api_key, check_key, credentials_path, forget_login, read_key, redact,
-                       save_login, saved_login, xo_url)
+from xo import __version__, coder, commands, spec
+from xo.client import (CORE_PATH, DEFAULT_TIMEOUT, KEY_ENV, MAYBE_RECEIVED, MIN_SECRET, Client,
+                       CoderClient, Login, XoError, api_key, check_key, coder_url, credentials_path,
+                       forget_login, read_key, redact, save_login, saved_login, xo_url)
 
-GLOBAL_DEFAULTS = {"api_key": None, "url": None, "spec": None, "timeout": DEFAULT_TIMEOUT}
+GLOBAL_DEFAULTS = {"api_key": None, "url": None, "coder_url": None, "spec": None, "timeout": DEFAULT_TIMEOUT}
 # Global options that take a value, so the word after one is never read as the command.
-_VALUED = {"--api-key", "--url", "--spec", "--timeout"}
+_VALUED = {"--api-key", "--url", "--coder-url", "--spec", "--timeout"}
 HIDDEN = "<hidden>"
 _UNRECOGNIZED = re.compile(r"(unrecognized arguments: )(.*)\Z", re.S)
 _ECHOED = re.compile(r"(invalid choice|invalid [\w ]+ value|ignored explicit argument): ('(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\"|\S+)")
@@ -69,8 +74,8 @@ _JOINED = re.compile(r"(--?[A-Za-z0-9][\w-]*)=\S*")
 
 
 def _secrets(argv: list[str]) -> list[str]:
-    """Every value given to --api-key in argv, plus $XO_API_KEY."""
-    found = [os.environ.get(KEY_ENV, "").strip()]
+    """Every --api-key in argv, plus XO's API key and Coder's session token from the environment."""
+    found = [os.environ.get(KEY_ENV, "").strip(), os.environ.get("CODER_SESSION_TOKEN", "").strip()]
     for i, arg in enumerate(argv):
         if arg == "--api-key" and i + 1 < len(argv):
             found.append(argv[i + 1])
@@ -504,6 +509,30 @@ def _logout(args: argparse.Namespace) -> int:
     return 0
 
 
+def _coder_github(args: argparse.Namespace) -> int:
+    name, parameters = coder.github_parameters(
+        args.repo_url, name=args.name, ref=args.ref, start_command=args.start_command,
+        capacity=args.capacity, workspace_size=args.workspace_size,
+        home_disk_size=args.home_disk_size, wait_timeout=args.wait_timeout)
+    args.client = client = CoderClient(coder_url(args.coder_url), timeout=args.timeout)
+    client.hide(_secrets(_Parser.argv))
+    if args.dry_run:
+        print(client.scrub(_json({"deploymentUrl": client.base, "template": "xo-github", "name": name,
+                                  "organization": args.org, "parameters": parameters})))
+        print("xo: dry run, nothing sent", file=sys.stderr)
+        return 0
+    owner = client.owner()
+    workspace_url = f"{client.base}/@{quote(owner, safe='')}/{quote(name, safe='')}"
+    print(client.scrub(f"xo: creating xo-github workspace {name}; its port 3000 app is public"), file=sys.stderr)
+    try:
+        app_url = client.create_github(name, parameters, org=args.org, wait_timeout=args.wait_timeout)
+    except XoError as e:
+        raise XoError(f"{e}; workspace: {workspace_url}") from None
+    print(client.scrub(_json({"name": name, "repoUrl": parameters["repo_url"],
+                              "workspaceUrl": workspace_url, "appUrl": app_url})))
+    return 0
+
+
 def _serve(args: argparse.Namespace) -> int:
     from xo import server  # imported only here: the CLI never loads server code
 
@@ -529,8 +558,11 @@ def _common(key: bool = True) -> argparse.ArgumentParser:
                        help="the XO API key; - reads it from stdin (default $XO_API_KEY, then the key xo login "
                             "saved, both safer)")
     c.add_argument("--url", default=argparse.SUPPRESS,
-                   help="the xo server every command goes to (default $XO_URL, then the one xo login saved, "
+                   help="the server XO API commands go to (default $XO_URL, then the one xo login saved, "
                         "then https://xo.quirq.dev)")
+    c.add_argument("--coder-url", default=argparse.SUPPRESS,
+                   help="a Coder deployment, for `xo coder` (default $XO_CODER_URL, then $CODER_URL, "
+                        "then https://dev-coder.xo.builders)")
     c.add_argument("--spec", default=argparse.SUPPRESS, metavar="FILE",
                    help="an OpenAPI JSON file (default $XO_SPEC, then the one bundled with xo)")
     c.add_argument("--timeout", type=float, default=argparse.SUPPRESS, help="seconds per request (default 30)")
@@ -577,7 +609,7 @@ def _endpoints(sub: argparse._SubParsersAction, common: argparse.ArgumentParser,
             commands.register(sub, spec.operations(local), [common], _add_send, _endpoint)
     except (XoError, ValueError, TypeError, RecursionError, argparse.ArgumentError) as e:
         command = _command_word(argv)
-        if command in ("ops", "call", "api"):
+        if command in ("ops", "call", "api", "serve", "login", "logout", "coder"):
             return  # they say for themselves when they need the spec
         reason = str(e) if isinstance(e, XoError) else f"cannot use spec {where}: {type(e).__name__}: {e}"
         print(f"xo: {spec.clean(_redacted(reason, argv))}", file=sys.stderr)
@@ -630,6 +662,24 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--host", default="127.0.0.1", help="address to listen on (default 127.0.0.1)")
     s.add_argument("--port", type=int, default=8787, help="port to listen on (default 8787)")
     s.set_defaults(run=_serve)
+
+    cr = sub.add_parser("coder", parents=[common], help="launch workspaces using your Coder login")
+    crsub = cr.add_subparsers(dest="action", required=True, metavar="ACTION")
+    gh = crsub.add_parser("github", parents=[common], help="deploy a GitHub repository with xo-github")
+    gh.add_argument("repo_url", metavar="URL", help="HTTPS GitHub repository URL (without a branch path)")
+    gh.add_argument("--name", help="workspace name (default: repository name, normalized to letters/digits/hyphens)")
+    gh.add_argument("--ref", default="", help="branch or tag (default: repository default branch)")
+    gh.add_argument("--start-command", default="auto",
+                    help="auto detects Node apps; manual only clones; otherwise a shell command on port 3000")
+    gh.add_argument("--capacity", choices=("spot", "ondemand"), default="spot",
+                    help="spot: shared/free; ondemand: dedicated/paid (default: spot)")
+    gh.add_argument("--workspace-size", choices=coder.SIZES, default="xo.small", help="default: xo.small")
+    gh.add_argument("--home-disk-size", type=int, default=5, metavar="GB", help="1 to 100 (default: 5); fixed at creation")
+    gh.add_argument("--org", help="Coder organization name or UUID (default: Coder's configured organization)")
+    gh.add_argument("--wait-timeout", type=float, default=600, metavar="SECONDS",
+                    help="maximum wait for Coder to create/start the workspace (default: 600)")
+    gh.add_argument("--dry-run", action="store_true", help="print the deployment plan; no Coder CLI or login needed")
+    gh.set_defaults(run=_coder_github)
 
     _endpoints(sub, common, argv)
 

@@ -1,9 +1,10 @@
-"""The one HTTP door to the XO API.
+"""The network door to XO and Coder.
 
-Everything xo sends goes through `Client.request`: this module is the only place that knows the
+XO API requests go through `Client.request`: this module is the only place that knows the
 base URL, how the API key is sent, the timeout, and how a failure is shaped. It never prints or
 returns the key (nor the provider keys and bot tokens it is told about), never follows a redirect (a redirect could carry the key to another host), and
 refuses plain http except to this machine.
+Coder uses its installed CLI through CoderClient, preserving its native login and keyring.
 """
 from __future__ import annotations
 
@@ -16,6 +17,7 @@ import os
 import re
 import secrets
 import stat
+import subprocess
 import sys
 import urllib.error
 import urllib.parse
@@ -26,14 +28,16 @@ from typing import Any
 
 from xo import __version__
 
-# One address for everything: the xo server, which answers `xo me` and `xo user-metadata` itself and
+# One address for XO API calls: the server answers `xo me` and `xo user-metadata` itself and
 # passes the core API on to XO (app.xo.builders/api/core/v1) under CORE_PATH.
 DEFAULT_URL = "https://xo.quirq.dev"
+DEFAULT_CODER_URL = "https://dev-coder.xo.builders"
 CORE_PATH = "/api/core/v1"
 DEFAULT_TIMEOUT = 30.0
 KEY_ENV = "XO_API_KEY"
 URL_ENV = "XO_URL"
 OLD_URL_ENVS = ("XO_BASE_URL", "XO_SERVER_URL")  # before one address; refused, not ignored
+CODER_URL_ENV = "XO_CODER_URL"
 CONFIG_ENV = "XDG_CONFIG_HOME"
 SAVED = "the key saved by xo login"
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
@@ -63,7 +67,7 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def xo_url(flag: str | None = None, saved: str | None = None) -> str:
-    """The one address every command uses: --url, else $XO_URL, else the one xo login saved, else
+    """The address XO API commands use: --url, else $XO_URL, else the one xo login saved, else
     https://xo.quirq.dev. Only https://, or http:// to this machine."""
     if flag:
         source, url = "--url", flag
@@ -87,6 +91,29 @@ def xo_url(flag: str | None = None, saved: str | None = None) -> str:
         raise XoError(f"{source} must be an https:// address (or http:// to localhost) with no query "
                       f"and no user or password, not {shown!r}")
     return url
+
+
+def coder_url(flag: str | None = None) -> str:
+    """A Coder deployment, with the same flag/environment/default order as the other URLs."""
+    if flag:
+        source, url = "--coder-url", flag
+    elif os.environ.get(CODER_URL_ENV, "").strip():
+        source, url = CODER_URL_ENV, os.environ[CODER_URL_ENV].strip()
+    elif os.environ.get("CODER_URL", "").strip():
+        source, url = "CODER_URL", os.environ["CODER_URL"].strip()
+    else:
+        source, url = "the default Coder URL", DEFAULT_CODER_URL
+    url = url.rstrip("/")
+    try:
+        parts = urllib.parse.urlsplit(url)
+        port = parts.port  # validate malformed ports too
+        if (parts.username is not None or parts.password is not None or parts.query or parts.fragment
+                or any(c.isspace() or ord(c) < 32 for c in url) or port == 0):
+            raise ValueError
+        return xo_url(url)
+    except (XoError, ValueError):
+        raise XoError(f"{source} must be https:// (or http:// to localhost), without credentials, "
+                      "a query or a fragment") from None
 
 
 def api_key(flag: str | None = None, url: str | None = None, saved: "Login | None" = None) -> str:
@@ -373,3 +400,76 @@ class Client:
             detail = first[0][:200] if first else ""
         hint = {401: " (check the API key)", 403: " (the key lacks access to this)"}.get(e.code, "")
         return f"{label}: HTTP {e.code}{hint}" + (f": {detail}" if detail else "")
+
+
+class CoderClient(Client):
+    """The Coder network door: delegate to its CLI so login/keyring and app routing stay native.
+
+    Raw provisioner output can contain credentials; it never reaches xo's output. Coder resolves
+    the actual app URL, including the deployment's configured wildcard hostname and app subdomain.
+    """
+
+    def __init__(self, base: str, timeout: float = DEFAULT_TIMEOUT):
+        super().__init__(base, None, timeout)
+        self.hide([os.environ.get(KEY_ENV, ""), os.environ.get("CODER_SESSION_TOKEN", "")])
+
+    def _command(self, args: list[str], *, timeout: float | None = None,
+                 print_url: bool = False) -> str:
+        env = dict(os.environ)
+        if print_url:
+            # Coder's supported in-workspace behavior prints the URL instead of opening a browser.
+            env["CODER"] = "true"
+        try:
+            proc = subprocess.run(["coder", "--url", self.base, *args], stdin=subprocess.DEVNULL,
+                                  capture_output=True, text=True, env=env,
+                                  timeout=timeout if timeout is not None else self.timeout)
+        except FileNotFoundError:
+            raise XoError("Coder CLI not found: install coder, then run coder login for this deployment") from None
+        except subprocess.TimeoutExpired:
+            raise XoError(f"coder {args[0]} timed out"
+                          + (f"; {MAYBE_RECEIVED}" if self.in_flight else "")) from None
+        except OSError:
+            raise XoError("could not run the Coder CLI; check that coder is installed and executable") from None
+        if proc.returncode:
+            raise XoError(f"coder {args[0]} failed (exit {proc.returncode}); check coder login "
+                          "for this deployment and inspect the workspace in Coder before retrying")
+        return proc.stdout
+
+    def owner(self) -> str:
+        try:
+            data = json.loads(self._command(["whoami", "--output", "json"]))
+            owner = data[0]["username"]
+            if not isinstance(owner, str) or not re.fullmatch(r"[A-Za-z0-9_.-]+", owner):
+                raise ValueError
+            return owner
+        except (ValueError, KeyError, IndexError, TypeError):
+            raise XoError("coder whoami returned an invalid account; check your Coder login") from None
+
+    def create_github(self, name: str, parameters: dict[str, str], *, org: str | None,
+                      wait_timeout: float) -> str:
+        import csv
+        import io
+
+        command = ["create", name, "--template", "xo-github", "--yes", "--use-parameter-defaults",
+                   "--preset", "none", "--no-wait=false"]
+        if org:
+            command += ["--org", org]
+        # Serpent's string-array flags read CSV. Quote the whole name=value cell so commands with
+        # commas, quotes or newlines survive without a shell or a temporary parameter file.
+        for key, value in parameters.items():
+            cell = io.StringIO(newline="")
+            csv.writer(cell, lineterminator="\n").writerow([f"{key}={value}"])
+            command += ["--parameter", cell.getvalue()[:-1]]
+        self.in_flight = "coder create"
+        self._command(command, timeout=wait_timeout)
+        self.in_flight = None
+        try:
+            app_url = self._command(["open", "app", name, "xo-cowork"], print_url=True).strip()
+            # A public share link must never carry credentials, tokens or terminal control text.
+            if not app_url:
+                raise XoError("Coder returned no app URL")
+            coder_url(app_url)
+            return app_url
+        except XoError:
+            raise XoError("the workspace was created, but its app URL could not be resolved; "
+                          "open it in Coder instead of creating it again") from None

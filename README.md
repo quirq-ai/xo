@@ -47,9 +47,11 @@ xo spaces --space-id 6f1c2c1e-...   # connection URLs for a space you own
 | `xo login` / `logout` | checks the key with XO (a space that doesn't exist), then saves it with the address / deletes them | none |
 | `xo me` | `GET /me` on your xo server | none |
 | `xo user-metadata get` / `update` | `GET` / `PATCH /user-metadata/{userId}` on your xo server | publicMetadata, privateMetadata as JSON objects (admin keys only); try `--dry-run` first: a wrong `--user-id` edits another user |
+| `xo coder github URL` | Coder CLI, using your Coder login | GitHub repository and `xo-github` template parameters; see below |
 
-Each create prints the new space, `data.id` included. Keep that id: the API has no list, delete,
-start or stop endpoint, and `xo spaces --space-id ID` is the only way back to a space.
+Each XO core API create prints the new space, `data.id` included. Keep that id: the API has no
+list, delete, start or stop endpoint, and `xo spaces --space-id ID` is the only way back to a space.
+`xo coder github` creates a Coder workspace separately; manage its lifecycle with Coder.
 
 The API is `https://app.xo.builders/api/core/v1`; xo reaches it through the xo server (see Server
 mode). Its spec is bundled with xo as
@@ -82,7 +84,7 @@ Things to know:
 
 ## Server mode
 
-Every command goes to one address, the xo server (`https://xo.quirq.dev`, or `XO_URL`, or the one
+XO API commands go to one address, the xo server (`https://xo.quirq.dev`, or `XO_URL`, or the one
 `xo login --url` saved). `xo me` and `xo user-metadata` read your Clerk account, which needs Clerk's
 Secret Key. That key never goes on a user's machine: the same package runs as a server, `xo serve`,
 on one deployment that holds it. The server passes every other command (the creates and
@@ -90,6 +92,55 @@ on one deployment that holds it. The server passes every other command (the crea
 deployment holds XO's production Clerk key, `xo me` answers 401 to real XO keys; the creates do not
 need it. See
 [docs/server.md](docs/server.md) and, to deploy it, [docs/deploy-vercel.md](docs/deploy-vercel.md).
+
+## Deploy a GitHub repository with Coder
+
+Install the [Coder CLI](https://coder.com/docs/install/cli) separately and log in to the deployment
+that has the `xo-github` template. This command uses Coder's existing login/keyring (or
+`CODER_SESSION_TOKEN`); it needs no `XO_API_KEY` and does not copy that key into a workspace.
+Tested with Coder 2.36.4.
+`xo login` and `--url`/`XO_URL` configure XO API calls; Coder uses its own login and
+`--coder-url`/`XO_CODER_URL`/`CODER_URL` independently.
+
+```sh
+coder login https://dev-coder.xo.builders
+xo coder github https://github.com/OWNER/REPO --dry-run
+xo coder github https://github.com/OWNER/REPO
+
+# A branch and an explicit startup command; the app must listen on port 3000.
+xo coder github https://github.com/OWNER/REPO --name my-preview --ref main \
+  --start-command 'npm ci && npm run dev -- --hostname 0.0.0.0 --port 3000'
+
+# Another deployment with the same template; flags also work before `coder` or `github`.
+XO_CODER_URL=https://coder.example.com xo coder github https://github.com/OWNER/REPO
+xo --coder-url https://coder.example.com coder github https://github.com/OWNER/REPO
+```
+
+The default workspace name is the repository name without `.git`, lowercased, with punctuation
+changed to hyphens and shortened to 32 characters. An existing name fails; choose `--name` for
+another preview. The command never updates, restarts or deletes an existing workspace.
+
+The defaults are `--capacity spot` (shared/free), `--workspace-size xo.small`,
+`--home-disk-size 5`, the repository's default branch and `--start-command auto`. `auto` detects
+Node apps; `manual` only clones the repository and shows the template's status page. A custom
+command runs inside `~/repo`. `--ref` selects a branch or tag at creation. Disk size is fixed at
+creation. `--capacity ondemand` explicitly selects dedicated/paid capacity. `--org` selects a
+Coder organization; otherwise Coder uses its configured organization.
+
+The command waits up to `--wait-timeout 600` seconds for Coder to create/start the workspace.
+The repository may still be installing or building afterward: the public status page switches to
+the app when it listens on port 3000. It prints JSON with `name`, `repoUrl`, `workspaceUrl` and
+`appUrl`. The app URL comes from Coder's configured routing, without a hardcoded preview hostname
+or a session token. **The app is public.** The workspace dashboard and shell still use Coder login.
+
+`--dry-run` prints the deployment URL, name and template parameters without running Coder or
+requiring a login. Provisioner logs are not printed, because they can contain credentials. If
+creation fails, times out or is interrupted, inspect the workspace in Coder before retrying: it
+may already exist. Use Coder's dashboard or `coder show NAME` to diagnose a failed build.
+
+Keep secrets out of `--start-command` and template parameters. Use
+[Coder secrets](https://coder.com/docs/user-guides/user-secrets) or a private workspace env file.
+See [docs/coder.md](docs/coder.md) for the command's setup and output example.
 
 ## How commands are named
 
@@ -100,7 +151,8 @@ Path, query and header parameters and the fields of a JSON body are the flags; a
 object is named by its path (`providers.anthropic.apiKey` is `--providers-anthropic-api-key`). A
 body field the spec types as a string keeps the text you type; other values are JSON when they
 parse. Required ones are checked before anything is sent. A spec that cannot be read leaves `ops`,
-`call` and `api` working and makes any other command stop with one line saying why.
+`call` and `api` working and makes generated endpoint commands stop with one line saying why.
+The built-in `login`, `logout`, `serve` and `coder` commands also work independently of the spec.
 
 ## Lower level
 
@@ -134,8 +186,9 @@ Responses print as JSON on stdout. Any problem exits 1 with one line on stderr.
 
 | Setting | Variable | Flag | Default |
 |---|---|---|---|
-| API key | `XO_API_KEY` | `--api-key -` (asks without echo on a terminal, else reads one line from stdin) | the key `xo login` saved in `$XDG_CONFIG_HOME/xo/credentials` (`~/.config/xo/credentials`); required for every call but a dry run |
+| API key | `XO_API_KEY` | `--api-key -` (asks without echo on a terminal, else reads one line from stdin) | the key `xo login` saved in `$XDG_CONFIG_HOME/xo/credentials` (`~/.config/xo/credentials`); required for XO API calls except a dry run; Coder uses its own login |
 | Address | `XO_URL` | `--url` | the one `xo login` saved, then `https://xo.quirq.dev`; the core API is under its `/api/core/v1`. The flag wins over the variable. `XO_BASE_URL` and `XO_SERVER_URL` are no longer read: xo stops with a line saying so while either is set, unless `--url` or `XO_URL` is given |
+| Coder deployment | `XO_CODER_URL`, then `CODER_URL` | `--coder-url` | `https://dev-coder.xo.builders`; used only by `xo coder` |
 | Spec | `XO_SPEC` | `--spec` | the copy bundled with xo |
 
 `--api-key KEY` also works, but the key then lands in your shell history and in the process list
@@ -166,7 +219,8 @@ python -m pytest -q
 ```
 
 Tests run against a fake API on 127.0.0.1 (`tests/conftest.py`) and a synthetic spec
-(`tests/fixtures/openapi.json`); they never reach XO.
+(`tests/fixtures/openapi.json`); they never reach XO. Coder tests use a fake executable/runner;
+they require neither Coder nor a deployment and create no workspaces.
 
 ## License
 

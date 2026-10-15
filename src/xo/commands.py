@@ -18,7 +18,7 @@ from typing import Any, Callable, NamedTuple
 from xo.spec import Operation, clean, known_params
 
 # Built-in command names, and names argparse or a reader would take for something else.
-RESERVED = {"ops", "call", "api", "serve", "help", "version"}
+RESERVED = {"ops", "call", "api", "serve", "login", "logout", "coder", "help", "version"}
 
 
 class Flag(NamedTuple):
