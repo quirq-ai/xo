@@ -4,15 +4,18 @@ Use this to set up `xo`, the command line for XO Cloud, on your own Mac or Linux
 
 You need:
 - Python 3.11 or newer. Check with `python3 --version`. Stock macOS ships Python 3.9, which is too old: install 3.11 or newer from python.org, or run `brew install python@3.13` and use `python3.13` in place of `python3` below.
+- On Linux with Python 3.10 or older, install 3.11 or newer from your distribution or python.org and use that `python3.x` on the first line.
 - git. On a Mac, `xcode-select --install` provides it.
 - On Debian or Ubuntu, the venv module: `sudo apt install python3-venv`.
 - An XO API key from the XO team. Each user needs their own key.
 
 ## 1. Install (once)
 
+Using bash? Before you paste, change `~/.zshrc` (twice) in the block to `~/.bash_profile` on a Mac or `~/.bashrc` on Linux.
+
 ```sh
 python3 -m venv ~/.xo \
-  && ~/.xo/bin/pip install "quirq-xo @ git+https://github.com/quirq-ai/xo@acbd42ce3fe51b34d0c2b5ebebb50ca6e36882dc" \
+  && ~/.xo/bin/pip install "quirq-xo @ git+https://github.com/quirq-ai/xo@e4dee3e636fe67a090fb4b2079a7c58dc15a34c1" \
   && { grep -qxF 'export PATH="$HOME/.xo/bin:$PATH"' ~/.zshrc 2>/dev/null || echo 'export PATH="$HOME/.xo/bin:$PATH"' >> ~/.zshrc; } \
   && export PATH="$HOME/.xo/bin:$PATH" \
   && xo --version
@@ -21,8 +24,6 @@ python3 -m venv ~/.xo \
 The last line should print `xo 0.1.0`. If any step fails, the ones after it don't run. If you installed Python with Homebrew, use `python3.13 -m venv ~/.xo` on the first line.
 
 The install is pinned to the reviewed commit of xo. The pin covers xo's own code only: pip still fetches its build tool (setuptools) unpinned while it installs.
-
-If you use bash rather than zsh, write the PATH line to `~/.bash_profile` on a Mac or `~/.bashrc` on Linux instead of `~/.zshrc`.
 
 ## 2. Give xo your key (each new terminal)
 
@@ -48,13 +49,13 @@ The last command should print `xo: GET /spaces/00000000-0000-0000-0000-000000000
 xo codex --name my-first-space --volume-size 20 --dry-run
 ```
 
-This prints the request xo would send, then `dry run, nothing sent`.
+This prints the request xo would send, a notice that a real create copies your key into the space, then `xo: dry run, nothing sent`.
 
 ## 5. Create a space for real
 
 Before you create anything, know these three things:
 - The API can't delete, list, start or stop spaces, and xo has no command for it. A space you create stays, so create only one you mean to keep.
-- Every create except `nebius-openclaw` stores your XO API key inside the new space. xo prints a notice saying so as the request goes out; it does not pause or ask first. If XO will give you a second key, use that one for creates.
+- Every create except `nebius-openclaw` stores your XO API key inside the new space. xo prints a notice saying so as the request goes out; it does not pause or ask first. If the XO team can give you a second key, use that one for creates.
 - `xo spaces` prints URLs that carry a session token. Don't share them.
 
 ```sh
@@ -91,6 +92,8 @@ To update xo, replace `NEW_SHA` with the commit you were given:
 ```sh
 ~/.xo/bin/pip install --force-reinstall --no-deps "quirq-xo @ git+https://github.com/quirq-ai/xo@NEW_SHA"
 ```
+
+To see which commit you have: `~/.xo/bin/pip freeze | grep quirq-xo`.
 
 To remove xo, delete its folder, remove the PATH line from `~/.zshrc` (or the bash file you used), and clear the key from the current terminal:
 

@@ -20,6 +20,7 @@ def test_no_key_is_one_actionable_line(fake, capsys, monkeypatch):
     code, out, err = run(capsys, "call", "health")
     assert code == 1
     assert "set XO_API_KEY or pass --api-key" in err
+    assert "from the XO team" in err
     assert fake.requests == []
 
 
