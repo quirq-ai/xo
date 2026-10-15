@@ -563,30 +563,77 @@ def test_the_status_page_is_served_with_a_strict_policy(xo_server):
         page, headers = resp.read().decode(), resp.headers
     assert headers["Content-Type"] == "text/html; charset=utf-8" and headers["Cache-Control"] == "no-store"
     csp = headers["Content-Security-Policy"]
-    assert "default-src 'none'" in csp and "connect-src 'self'" in csp and "frame-ancestors 'none'" in csp
+    for rule in ("default-src 'none'", "connect-src 'self'", "frame-ancestors 'none'", "base-uri 'none'",
+                 "form-action 'none'"):
+        assert rule in csp, rule
+    assert headers["X-Content-Type-Options"] == "nosniff" and headers["Referrer-Policy"] == "no-referrer"
     for part in (status_page.SCRIPT, status_page.STYLE):  # the hashes match what the page inlines
         assert part in page
         assert base64.b64encode(hashlib.sha256(part.encode()).digest()).decode() in csp
-    assert "innerHTML" not in page and "http" not in status_page.SCRIPT
+    assert "http" not in status_page.SCRIPT
+
+
+STATUS_KEYS = {"status", "version", "recent", "instance", "activity"}
+INSTANCE_KEYS = {"startedAt", "requests", "pings", "byStatus"}
+ENTRY_KEYS = {"time", "method", "route", "status", "ms"}
 
 
 def test_status_lists_routes_and_counts_but_never_ids_or_keys(xo_server):
     call(xo_server, "GET", "/healthz")
-    call(xo_server, "GET", "/me", USER_KEY)
-    call(xo_server, "GET", "/user-metadata/user_alice", USER_KEY)
-    call(xo_server, "GET", "/nope")
-    urllib.request.urlopen(xo_server.url + "/", timeout=5).read()
+    call(xo_server, "GET", "/me?user=user_bob&q=secretquery", USER_KEY)
+    call(xo_server, "GET", "/user-metadata/user_alice?x=secretquery", USER_KEY)
+    call(xo_server, "GET", "/user-metadata/user_alice", ADMIN_KEY)
+    call(xo_server, "POST", "/healthz")
+    call(xo_server, "GET", "/nope/user_carol")
+    urllib.request.urlopen(xo_server.url + "/?user_dave", timeout=5).read()
+    first = call(xo_server, "GET", "/status?user_erin")
     status, out = call(xo_server, "GET", "/status")
-    assert status == 200
+    assert first[0] == status == 200
     data = out["data"]
+    assert set(data) == STATUS_KEYS and set(data["instance"]) == INSTANCE_KEYS
+    assert data["recent"] == {"entries": 6, "failed": 0} and data["status"] == "ok"
+    assert all(set(a) == ENTRY_KEYS for a in data["activity"])
     assert [(a["method"], a["route"], a["status"]) for a in data["activity"]] == [
-        ("GET", "other", 404), ("GET", "/user-metadata/{userId}", 403), ("GET", "/me", 200),
-        ("GET", "/healthz", 200)]  # newest first; the page and /status itself are not listed
-    assert data["instance"]["requests"] == 4 and data["instance"]["pings"] == 1
-    assert data["instance"]["byStatus"] == {"2xx": 2, "3xx": 0, "4xx": 2, "5xx": 0}
+        ("GET", "other", 404), ("POST", "/healthz", 404), ("GET", "/user-metadata/{userId}", 200),
+        ("GET", "/user-metadata/{userId}", 403), ("GET", "/me", 200), ("GET", "/healthz", 200),
+    ]  # newest first; the page and /status are not listed, however they are asked for
+    assert data["instance"]["requests"] == 6 and data["instance"]["pings"] == 1  # a 404 POST is no ping
+    assert data["instance"]["byStatus"] == {"2xx": 3, "3xx": 0, "4xx": 3, "5xx": 0}
     text = json.dumps(out)
-    for secret in ("user_alice", "ak_user", USER_KEY, SECRET, "127.0.0.1"):
-        assert secret not in text
+    for needle in ("user_", "secretquery", "nope", "ak_", USER_KEY, ADMIN_KEY, SECRET, "sk_", "127.0.0.1",
+                   "plan", "beta", "stripeId", "XO_", "CLERK", "api.clerk", "http"):
+        assert needle not in text, needle
+
+
+def test_an_unknown_method_is_listed_as_other(clerk):
+    app = server.App(server.Config(), audit=lambda line: None)
+    app.handle("BREW", "/healthz", {}, None)
+    assert [(a["method"], a["route"]) for a in app.status()["activity"]] == [("OTHER", "/healthz")]
+
+
+def test_status_says_degraded_when_recent_requests_fail(xo_server, clerk):
+    clerk.fail = 401  # Clerk refuses the server's own secret: every /me is a 503
+    for _ in range(3):
+        assert call(xo_server, "GET", "/me", USER_KEY)[0] == 503
+    data = call(xo_server, "GET", "/status")[1]["data"]
+    assert data["status"] == "degraded" and data["recent"] == {"entries": 3, "failed": 3}
+    clerk.fail = None
+    for _ in range(server.DEGRADED_WINDOW):
+        call(xo_server, "GET", "/healthz")
+    assert call(xo_server, "GET", "/status")[1]["data"]["status"] == "ok"  # the failures aged out
+
+
+def test_head_is_answered_without_a_body(xo_server):
+    for path in ("/", "/healthz", "/status"):
+        req = urllib.request.Request(xo_server.url + path, method="HEAD")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            assert resp.status == 200 and resp.read() == b"" and int(resp.headers["Content-Length"]) > 0
+
+
+def test_the_page_never_writes_html_from_data():
+    from xo import status_page
+    for sink in ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(", "Function("):
+        assert sink not in status_page.SCRIPT, sink
 
 
 def test_status_keeps_only_the_latest_requests(clerk, monkeypatch):
@@ -613,3 +660,7 @@ def test_wsgi_serves_the_page_even_when_misconfigured(monkeypatch):
     assert seen["status"] == "200 OK" and out.startswith(b"<!doctype html>")
     assert "Content-Security-Policy" in seen["headers"]
     assert wsgi_call(application, "GET", "/status")[0] == 503  # so the page shows "Unreachable"
+    head = {}
+    assert b"".join(application({"REQUEST_METHOD": "HEAD", "PATH_INFO": "/"},
+                                lambda status, headers: head.update(status=status))) == b""
+    assert head["status"] == "200 OK"

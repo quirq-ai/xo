@@ -6,6 +6,8 @@ The same package runs as the command line (on a user's machine) and as this serv
 deployment that holds the Clerk Secret Key). The CLI sends the user's XO API key; the server
 verifies it with Clerk and answers:
 
+    GET   /                         the status page (HTML): health, counts and recent requests
+    GET   /status                   the same as JSON: no key, no Clerk call, no ids
     GET   /healthz                  no key, no Clerk call
     GET   /me                       any user key: the key's own account, a fixed list of fields
     GET   /user-metadata/{userId}   admin keys only: public and private metadata
@@ -75,6 +77,8 @@ LIMITS = {"me": 60, "user-metadata": 20}
 MAX_TRACKED = 10_000  # tokens remembered for rate limiting; the least recently seen go first
 ME_CACHE_SECONDS = 60
 ACTIVITY_KEPT = 100  # recent requests the status page lists, per process
+DEGRADED_WINDOW = 20  # the status is "degraded" when any of the latest this many requests failed (5xx)
+_PROCESS_STARTED = time.time()  # when this process (on Vercel, this instance) loaded the server
 REQUEST_TIMEOUT = 10  # seconds a client may wait between bytes of its request
 # Seconds a connection to `xo serve` may stay open in all: a client that trickles one byte at a time
 # cannot hold a slot past it. Room for two Clerk calls of CLERK_TIMEOUT each.
@@ -231,7 +235,7 @@ class App:
         self._me_cache: dict[str, tuple[float, dict]] = {}
         # What the status page shows: counts and the last ACTIVITY_KEPT requests, each only its time,
         # method, route template, status and duration (never a key, user id, path or address).
-        self.started = time.time()
+        self.started = _PROCESS_STARTED
         self._activity: collections.deque[dict] = collections.deque(maxlen=ACTIVITY_KEPT)
         self._counts = {"requests": 0, "pings": 0, "2xx": 0, "3xx": 0, "4xx": 0, "5xx": 0}
 
@@ -298,13 +302,16 @@ class App:
         with self._lock:
             self._activity.appendleft(entry)
             self._counts["requests"] += 1
-            self._counts["pings"] += route == "/healthz"
+            self._counts["pings"] += route == "/healthz" and status == 200
             self._counts[f"{min(max(status // 100, 2), 5)}xx"] += 1
 
     def status(self) -> dict:
         with self._lock:
             counts, activity = dict(self._counts), list(self._activity)
-        return {"status": "ok", "version": __version__,
+        recent = activity[:DEGRADED_WINDOW]
+        failed = sum(a["status"] >= 500 for a in recent)
+        return {"status": "degraded" if failed else "ok", "version": __version__,
+                "recent": {"entries": len(recent), "failed": failed},
                 "instance": {"startedAt": _iso(self.started), "requests": counts["requests"],
                              "pings": counts["pings"],
                              "byStatus": {k: counts[k] for k in ("2xx", "3xx", "4xx", "5xx")}},
@@ -318,9 +325,9 @@ class App:
 
     def _route(self, method: str, path: str, headers: dict[str, str], body: bytes | None) -> Any:
         path = urllib.parse.urlsplit(path).path.rstrip("/") or "/"
-        if path == "/healthz" and method == "GET":
+        if path == "/healthz" and method in ("GET", "HEAD"):
             return {"status": "ok"}
-        if path == "/status" and method == "GET":
+        if path == "/status" and method in ("GET", "HEAD"):
             return self.status()
         if path == "/me":
             if method != "GET":
@@ -435,7 +442,7 @@ def _route_name(path: str) -> str | None:
 
 def is_page(method: str, path: str) -> bool:
     """Whether this request is for the status page (HTML), not the JSON API."""
-    return method == "GET" and urllib.parse.urlsplit(path).path == "/"
+    return method in ("GET", "HEAD") and urllib.parse.urlsplit(path).path == "/"
 
 
 PAGE_HEADERS = [("Content-Type", "text/html; charset=utf-8"), ("Cache-Control", "no-store"),
@@ -490,7 +497,7 @@ def wsgi_app(make_app=None):
     def application(environ, start_response):
         if is_page(environ.get("REQUEST_METHOD", "GET"), environ.get("PATH_INFO") or "/"):
             start_response("200 OK", [*PAGE_HEADERS, ("Content-Length", str(len(status_page.PAGE)))])
-            return [status_page.PAGE]
+            return [] if environ.get("REQUEST_METHOD") == "HEAD" else [status_page.PAGE]
         with lock:
             if "app" not in state and "error" not in state:
                 try:
@@ -515,7 +522,8 @@ def wsgi_app(make_app=None):
                 return _wsgi_reply(start_response, 413, {"success": False, "error": f"Body over {MAX_BODY} bytes"})
             body = environ["wsgi.input"].read(size)
         status, payload = app.handle(method, path, headers, body)
-        return _wsgi_reply(start_response, status, payload)
+        reply = _wsgi_reply(start_response, status, payload)
+        return [] if method == "HEAD" else reply
 
     return application
 
@@ -556,7 +564,8 @@ def make_server(app: App, host: str, port: int) -> ThreadingHTTPServer:
                 for name, value in [*PAGE_HEADERS, ("Content-Length", str(len(status_page.PAGE)))]:
                     self.send_header(name, value)
                 self.end_headers()
-                self.wfile.write(status_page.PAGE)
+                if self.command != "HEAD":
+                    self.wfile.write(status_page.PAGE)
                 return
             length = self.headers.get("Content-Length")
             body = None
@@ -581,9 +590,10 @@ def make_server(app: App, host: str, port: int) -> ThreadingHTTPServer:
             self.send_header("Content-Length", str(len(data)))
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
-            self.wfile.write(data)
+            if self.command != "HEAD":
+                self.wfile.write(data)
 
-        do_GET = do_PATCH = do_POST = do_PUT = do_DELETE = _serve
+        do_GET = do_HEAD = do_PATCH = do_POST = do_PUT = do_DELETE = _serve
 
         def log_message(self, fmt: str, *args: Any) -> None:
             # The request line only (no headers, so never the key), with the secret scrubbed anyway.

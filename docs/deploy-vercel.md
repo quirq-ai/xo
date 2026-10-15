@@ -135,6 +135,7 @@ missing or refused; the project's **Logs** say which.
 | Big bodies | over 32KB refused (413) |
 | Requests per address | the Firewall rule in step 3, once published |
 | **Not protected** | a flood from many addresses spread over many instances; only Clerk's own limits stop it |
+| **Not rate limited** | `/` (the status page), `/status` and `/healthz`: public, one function invocation each, never a Clerk call. An open status page tab polls `/status` every 5 seconds while it is visible (about 17,000 invocations a day per tab left open) and stops while hidden. To cap them too, add `/status` to the Firewall rule in step 3; the page stays well under 60 a minute. |
 
 ## Logs and audit lines
 
