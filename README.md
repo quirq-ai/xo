@@ -15,6 +15,8 @@ pip install "quirq-xo @ git+https://github.com/quirq-ai/xo"
 Python 3.11 or newer. The package is `quirq-xo`, not `xo`: PyPI's `xo` is an unrelated game, and
 `pip install -U xo` would replace this tool with it. The command it installs is `xo`.
 
+For a step-by-step setup on your own Mac or Linux machine, see [docs/quickstart.md](docs/quickstart.md).
+
 ## Commands
 
 ```sh
