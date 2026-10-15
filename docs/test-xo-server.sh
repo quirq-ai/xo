@@ -134,7 +134,7 @@ if [ -n "$other" ]; then
 elif [ -z "$limited" ]; then
   fail "130 requests in a row got 401: the Firewall rule is not active (is it published?)"
 elif [ "$i" -le 50 ]; then
-  fail "request $i got $limited, well before the limit of 60; check the rule (if you ran the script within the last minute, wait a minute and run it again)"
+  fail "request $i got $limited, well before the limit of 60; check the rule (if you ran the script within the last minute, or a status page tab shares the rule, wait a minute and run it again)"
 else
   pass "the Firewall rule is active (request $i got $limited)"
 fi

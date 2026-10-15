@@ -31,8 +31,8 @@ border:1px solid var(--border)}.dot{width:8px;height:8px;border-radius:50%;backg
 table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
 th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--border);white-space:nowrap}
 th{color:var(--muted-fg);font-weight:500;font-size:13px;background:var(--muted)}tr:last-child td{border-bottom:0}
-td.route{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;white-space:normal;overflow-wrap:anywhere}
-.stale{opacity:.5}
+td.route{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;white-space:normal}
+.stale .value,.stale td{color:var(--muted-fg)}
 .empty{color:var(--muted-fg);padding:16px;text-align:center}.note{color:var(--muted-fg);font-size:13px;margin-top:12px}
 @media (max-width:520px){.hide-sm{display:none}}
 """
@@ -54,13 +54,26 @@ function ago(iso) {
 function cell(text, cls) {
   const td = document.createElement("td"); td.textContent = text; if (cls) td.className = cls; return td;
 }
+function routeCell(route) {  // breaks only after a "/", never inside a word
+  const td = cell("", "route"); const parts = route.split("/");
+  parts.forEach((part, i) => {
+    td.append(i < parts.length - 1 ? part + "/" : part);
+    if (i < parts.length - 1) td.append(document.createElement("wbr"));
+  });
+  return td;
+}
+function deadline() {  // AbortSignal.timeout is missing before Safari 16, Chrome 103 and Firefox 100
+  if (AbortSignal.timeout) return AbortSignal.timeout(TIMEOUT);
+  const c = new AbortController(); setTimeout(() => c.abort(), TIMEOUT); return c.signal;
+}
 function message(text) {
   const tr = document.createElement("tr"); const td = cell(text, "empty");
   td.colSpan = 5; tr.append(td); $("rows").replaceChildren(tr);
 }
 function render(d) {
   if (d.status === "ok") setBadge("ok", "Operational");
-  else setBadge("warn", "Degraded: " + d.recent.failed + " of the last " + d.recent.entries + " requests failed");
+  else setBadge("warn", "Degraded: " + d.recent.failed + " of " + d.recent.entries +
+                " account requests failed in the last 5 minutes");
   $("since").textContent = "This instance started " + ago(d.instance.startedAt) + " (" + d.instance.startedAt + ")";
   $("requests").textContent = d.instance.requests;
   $("pings").textContent = d.instance.pings;
@@ -76,7 +89,7 @@ function render(d) {
     span.className = "badge " + (a.status < 400 ? "ok" : a.status < 500 ? "warn" : "bad");
     span.textContent = String(a.status); status.replaceChildren(span);
     const when = cell(ago(a.time)); when.title = a.time;
-    tr.append(when, cell(a.method), cell(a.route, "route"), status, cell(a.ms + " ms", "hide-sm"));
+    tr.append(when, cell(a.method), routeCell(a.route), status, cell(a.ms + " ms", "hide-sm"));
     rows.push(tr);
   }
   $("rows").replaceChildren(...rows);
@@ -86,7 +99,7 @@ async function refresh() {
   if (document.hidden || busy) return;  // polling stops while the tab is hidden and resumes when it shows
   busy = true;
   try {
-    const r = await fetch("status", {cache: "no-store", signal: AbortSignal.timeout(TIMEOUT)});
+    const r = await fetch("status", {cache: "no-store", signal: deadline()});
     if (!r.ok) throw new Error("HTTP " + r.status);
     const body = await r.json();
     render(body.data);

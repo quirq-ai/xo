@@ -77,7 +77,12 @@ LIMITS = {"me": 60, "user-metadata": 20}
 MAX_TRACKED = 10_000  # tokens remembered for rate limiting; the least recently seen go first
 ME_CACHE_SECONDS = 60
 ACTIVITY_KEPT = 100  # recent requests the status page lists, per process
-DEGRADED_WINDOW = 20  # the status is "degraded" when any of the latest this many requests failed (5xx)
+# The status is "degraded" when a request to a route that calls Clerk (/me, /user-metadata) failed
+# with a 5xx within the last DEGRADED_SECONDS. Failures are kept apart from other requests, so no
+# amount of other traffic hides one, and each heals by itself once it is older than that.
+DEGRADED_SECONDS = 300
+DEGRADED_KEPT = 1000  # times remembered of each kind; enough to count five minutes of real traffic
+_CLERK_ROUTES = ("/me", "/user-metadata/{userId}")
 _PROCESS_STARTED = time.time()  # when this process (on Vercel, this instance) loaded the server
 REQUEST_TIMEOUT = 10  # seconds a client may wait between bytes of its request
 # Seconds a connection to `xo serve` may stay open in all: a client that trickles one byte at a time
@@ -238,6 +243,8 @@ class App:
         # method, route template, status and duration (never a key, user id, path or address).
         self.started = _PROCESS_STARTED
         self._activity: collections.deque[dict] = collections.deque(maxlen=ACTIVITY_KEPT)
+        self._seen: collections.deque[float] = collections.deque(maxlen=DEGRADED_KEPT)  # Clerk routes
+        self._failed: collections.deque[float] = collections.deque(maxlen=DEGRADED_KEPT)  # and their 5xx
         self._counts = {"requests": 0, "pings": 0, "2xx": 0, "3xx": 0, "4xx": 0, "5xx": 0}
 
     def audit(self, **fields: Any) -> None:
@@ -302,6 +309,10 @@ class App:
                  "status": status, "ms": round((time.monotonic() - start) * 1000)}
         with self._lock:
             self._activity.appendleft(entry)
+            if route in _CLERK_ROUTES:
+                self._seen.append(self.clock())
+                if status >= 500:
+                    self._failed.append(self.clock())
             self._counts["requests"] += 1
             self._counts["pings"] += route == "/healthz" and status == 200
             self._counts[f"{min(max(status // 100, 2), 5)}xx"] += 1
@@ -309,10 +320,11 @@ class App:
     def status(self) -> dict:
         with self._lock:
             counts, activity = dict(self._counts), list(self._activity)
-        recent = activity[:DEGRADED_WINDOW]
-        failed = sum(a["status"] >= 500 for a in recent)
+            since = self.clock() - DEGRADED_SECONDS
+            seen = sum(t > since for t in self._seen)
+            failed = sum(t > since for t in self._failed)
         return {"status": "degraded" if failed else "ok", "version": __version__,
-                "recent": {"entries": len(recent), "failed": failed},
+                "recent": {"entries": seen, "failed": failed},
                 "instance": {"startedAt": _iso(self.started), "requests": counts["requests"],
                              "pings": counts["pings"],
                              "byStatus": {k: counts[k] for k in ("2xx", "3xx", "4xx", "5xx")}},
@@ -522,7 +534,8 @@ def wsgi_app(make_app=None):
             size = int(length) if length.isascii() and length.isdigit() else -1
             if size < 0 or size > MAX_BODY:
                 app.refused(method, path, 413)
-                return _wsgi_reply(start_response, 413, {"success": False, "error": f"Body over {MAX_BODY} bytes"})
+                reply = _wsgi_reply(start_response, 413, {"success": False, "error": f"Body over {MAX_BODY} bytes"})
+                return [] if method == "HEAD" else reply
             body = environ["wsgi.input"].read(size)
         status, payload = app.handle(method, path, headers, body)
         reply = _wsgi_reply(start_response, status, payload)

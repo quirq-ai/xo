@@ -43,8 +43,11 @@ key id, user id, path or address, so it is public. The page and `/status` are no
 counts live in the process's memory: on Vercel each instance keeps its own and starts empty, so the
 page shows what the instance answering you has seen. The audit log stays in the logs only.
 
-The badge says **Operational**, **Degraded** when any of the latest 20 requests failed with a 5xx
-(a refused Clerk secret looks like this), or **Unreachable** when `/status` does not answer. The
+The badge says **Operational**, **Degraded** when a request to `/me` or `/user-metadata` (the
+routes that call Clerk) failed with a 5xx in the last 5 minutes (a refused Clerk secret, Clerk
+down, or the server's own Clerk budget used up), or **Unreachable** when `/status` does not answer.
+Other traffic does not count, so it cannot hide a failure, and a failure stops counting 5 minutes
+later without any further requests. `recent` in `/status` holds those two counts. The
 page refreshes every 5 seconds while its tab is visible, stops while it is hidden, and slows to
 every 30 seconds after three failures in a row. `/`, `/status` and `/healthz` also answer `HEAD`,
 for uptime monitors. Public by design: the version, each instance's start time and traffic volume,

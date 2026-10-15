@@ -124,7 +124,7 @@ missing or refused; the project's **Logs** say which.
 | Big bodies | over 32KB refused (413) |
 | Requests per address | the Firewall rule in step 3, once published |
 | **Not protected** | a flood from many addresses spread over many instances; only Clerk's own limits stop it |
-| **Not rate limited** | `/` (the status page), `/status` and `/healthz`: public, one function invocation each, never a Clerk call. An open status page tab polls `/status` every 5 seconds while it is visible (about 17,000 invocations a day per tab left open) and stops while hidden. To cap them too, add `/status` to the Firewall rule in step 3; the page stays well under 60 a minute. |
+| **Not rate limited** | `/` (the status page), `/status` and `/healthz`: public, one function invocation each, never a Clerk call. An open status page tab polls `/status` every 5 seconds while it is visible (about 17,000 invocations a day per tab left open) and stops while hidden. To cap them too, add a second rule of its own (Request Path **equals** `/status`, 60 requests per 60 seconds per IP); the page stays well under that. Do not add `/status` to the rule in step 3: it would share one per-address budget with `/me`, and an open status tab could then make the test script's Firewall check fail. |
 
 ## Logs and audit lines
 
