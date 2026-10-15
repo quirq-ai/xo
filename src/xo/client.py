@@ -56,7 +56,10 @@ def server_url(flag: str | None = None) -> str:
     if not url:
         raise XoError(f"this command goes to an xo server: set {SERVER_URL_ENV} (or pass --server-url) "
                       "to the URL of one running `xo serve`")
-    return base_url(url)
+    try:
+        return base_url(url)
+    except XoError:
+        raise XoError(f"{SERVER_URL_ENV} must be https:// (or http:// to localhost)") from None
 
 
 def base_url(flag: str | None = None) -> str:

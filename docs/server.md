@@ -28,8 +28,9 @@ xo codex, ... ──────┴─ XO_API_KEY ─► app.xo.builders (unchan
 Answers use the core API's envelope: `{"success": true, "data": ...}` or
 `{"success": false, "error": "..."}`, with 401 (bad key, or a key not tied to a user), 403 (not an
 admin key), 404 (no such user), 405, 413 (body over 32KB), 422 (bad body, a key that is not
-editable, a bad user id, or over Clerk's 8KB per bucket), 429 (rate limit) and 502 (Clerk did not
-answer).
+editable, a bad user id, or over Clerk's 8KB per bucket), 429 (this key's rate limit), 502 (Clerk
+did not answer) and 503 (the server is busy, or misconfigured: Clerk refused its Secret Key, which
+it also says in one line on stderr).
 
 ## Who can do what
 
@@ -53,6 +54,8 @@ Environment only, so the secret never lands in shell history or the process list
 | `XO_ADMIN_KEY_IDS` | for metadata | comma-separated Clerk API key ids (`ak_...`) that may act as admin |
 | `XO_EDITABLE_PUBLIC_KEYS` | for edits | comma-separated top-level public metadata keys PATCH may change |
 | `XO_EDITABLE_PRIVATE_KEYS` | for edits | the same for private metadata |
+| `XO_CLERK_PER_SECOND` | no | calls to Clerk per second for the whole process; default 20 |
+| `XO_SERVE_MAX_CONNECTIONS` | no | connections served at once; default 64, then 503 |
 | `CLERK_API_URL` | no | default `https://api.clerk.com`; tests point it at a fake |
 
 ```sh
@@ -62,17 +65,58 @@ xo serve --host 127.0.0.1 --port 8787
 It listens on 127.0.0.1 by default. Serve it to anyone else only behind HTTPS (a reverse proxy or
 a platform that terminates TLS): the CLI refuses plain `http://` except to localhost.
 
+### The proxy in front
+
+The server trusts its proxy to do what a standard-library server cannot do well:
+
+- **Buffer whole requests** before passing them on, and cap connections, so slow clients cannot
+  hold the server's threads (it also caps them itself, at `XO_SERVE_MAX_CONNECTIONS`).
+- **Limit requests per client address.** Behind a proxy the server only sees the proxy's address
+  and does not read `X-Forwarded-For`, so per-address limits and per-address forensics belong in
+  the proxy and its logs.
+
+### Docker
+
+The `Dockerfile` builds the server image: non-root, `xo serve --host 0.0.0.0` inside the
+container, and a `HEALTHCHECK` on `/healthz`. Nothing in this repo deploys it.
+
+```sh
+docker build -t xo-serve .
+docker run --rm -p 127.0.0.1:8787:8787 -e CLERK_SECRET_KEY -e XO_ADMIN_KEY_IDS xo-serve
+```
+
+`-e CLERK_SECRET_KEY` with no value passes it from your shell's environment, so it never appears on
+the command line. Never bake it into the image (`ARG` or `ENV`) or a file in it.
+
+### Treat this deployment like the Secret Key itself
+
+- The Secret Key can read and change every user, read every API key's secret and delete users.
+  Only the people who could hold that key should be able to reach this deployment's settings,
+  shell or logs.
+- **Rotating the key:** create a new Secret Key in the Clerk Dashboard, set it on the deployment,
+  restart, check `/me` answers, then delete the old key. A 503 "xo server misconfigured" with a
+  stderr line naming `CLERK_SECRET_KEY` means the key in use was refused.
+- **Keep the audit lines.** They go to stderr, which a container loses on restart: ship stderr to
+  the platform's log store and keep it as long as you would keep an access log.
+
 TODO(suraj): where the server is deployed, and its public URL for `XO_SERVER_URL`.
 
 ## Guards
 
+- **Only Clerk-shaped keys reach Clerk.** A bearer token that is not `ak_` followed by letters,
+  digits, `_` or `-` gets 401 without a Clerk call.
+- **A budget for Clerk.** All calls to Clerk share `XO_CLERK_PER_SECOND` (default 20); past it the
+  server answers 503 without calling. Clerk allows 1000 Backend API calls per 10 seconds for the
+  whole instance, shared with XO's core API, and each verification past 100,000 a month is billed,
+  so this cap is what keeps made-up keys from spending either.
 - **Rate limits.** Per key, 60 requests a minute on `/me` and 20 on `/user-metadata`, counted
-  before Clerk is asked. Clerk allows 1000 Backend API calls per 10 seconds for the whole instance
-  and 10 metadata writes per 10 seconds per user.
+  before Clerk is asked; the table remembers the 10,000 most recent keys. Clerk also allows 10
+  metadata writes per 10 seconds per user.
 - **Cache.** `/me` answers are cached for 60 seconds per user. Key checks are never cached.
-- **Audit log.** Every `/user-metadata` read and write, refused and failed ones included, is one
-  JSON line on stderr: time, method, outcome, the key's id, the caller, the target user, and for a
-  PATCH the bucket and key names changed. Never values or keys, so a key removed with `null`
+- **Audit log.** Every request to `/user-metadata`, refused and failed ones included (a bad or
+  missing key, a rate limit, a wrong method, a body too big), is one JSON line on stderr: time,
+  method, outcome, the key's id and the caller (null before the key is verified), the target user,
+  and for a PATCH the bucket and key names changed. Never values or keys, so a key removed with `null`
   cannot be restored from the log.
 - **No secrets in metadata.** Never store API keys, tokens or passwords in private metadata: an
   admin key reads every user's private metadata in full.

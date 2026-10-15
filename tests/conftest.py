@@ -39,12 +39,15 @@ def fake(monkeypatch):
             if callable(body):
                 body = body(state.requests[-1])
             data = b"" if body is None else (body.encode() if isinstance(body, str) else json.dumps(body).encode())
-            self.send_response(status)
-            for k, v in headers.items():
-                self.send_header(k, v)
-            self.send_header("Content-Length", str(len(data)))
-            self.end_headers()
-            self.wfile.write(data)
+            try:
+                self.send_response(status)
+                for k, v in headers.items():
+                    self.send_header(k, v)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # the client gave up (a timeout test); a traceback here would land in a later test
 
         do_GET = do_POST = do_PUT = do_PATCH = do_DELETE = _serve
 

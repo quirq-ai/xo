@@ -25,6 +25,10 @@ KEYS = {
                  "revoked": False, "expired": False},
     "ak_org": {"id": "ak_org", "subject": "org_1", "claims": None, "revoked": False, "expired": False},
     "ak_revoked": {"id": "ak_rev", "subject": "user_alice", "claims": None, "revoked": True, "expired": False},
+    "ak_expired": {"id": "ak_exp", "subject": "user_alice", "claims": None, "revoked": False, "expired": True},
+    # On XO_ADMIN_KEY_IDS but without the claim.
+    "ak_listed": {"id": "ak_listed", "subject": "user_suraj", "claims": {"issued_by": "xo"},
+                  "revoked": False, "expired": False},
 }
 USERS = {
     "user_alice": {"id": "user_alice", "username": "alice", "first_name": "Alice", "last_name": "A",
@@ -39,6 +43,8 @@ class FakeClerk:
     def __init__(self) -> None:
         self.calls: list[dict] = []
         self.fail: int | None = None
+        self.redirect: str | None = None  # answer every call with a redirect here
+        self.raw: bytes | None = None  # answer every call with these bytes and a 200
 
 
 @pytest.fixture
@@ -51,8 +57,14 @@ def clerk(monkeypatch):
             body = json.loads(raw) if raw else None
             state.calls.append({"method": self.command, "path": self.path, "headers": dict(self.headers),
                                 "body": body})
+            if state.redirect:
+                self.send_response(307)
+                self.send_header("Location", state.redirect)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
             status, out = self._answer(body)
-            data = json.dumps(out).encode()
+            data = state.raw if state.raw is not None else json.dumps(out).encode()
             self.send_response(status)
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
@@ -86,9 +98,10 @@ def clerk(monkeypatch):
     threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
     monkeypatch.setenv("CLERK_SECRET_KEY", SECRET)
     monkeypatch.setenv("CLERK_API_URL", f"http://127.0.0.1:{httpd.server_address[1]}")
-    monkeypatch.setenv("XO_ADMIN_KEY_IDS", "ak_admin")
     monkeypatch.setenv("XO_EDITABLE_PUBLIC_KEYS", "plan,beta")
     monkeypatch.setenv("XO_EDITABLE_PRIVATE_KEYS", "stripeId")
+    monkeypatch.setenv("XO_ADMIN_KEY_IDS", "ak_admin,ak_listed")
+    monkeypatch.setenv("XO_CLERK_PER_SECOND", "1000")  # the budget has its own test
     yield state
     httpd.shutdown()
 
@@ -151,7 +164,7 @@ def test_me_never_returns_email_or_metadata(xo_server):
 
 
 @pytest.mark.parametrize("key, error", [(None, "Missing API key"), ("ak_unknown", "Invalid API key"),
-                                        ("ak_revoked", "Invalid API key"),
+                                        ("ak_revoked", "Invalid API key"), ("ak_expired", "Invalid API key"),
                                         ("ak_org", "API key is not tied to a user")])
 def test_bad_keys_get_401(xo_server, key, error):
     assert call(xo_server, "GET", "/me", key) == (401, {"success": False, "error": error})
@@ -274,16 +287,24 @@ def test_serve_refuses_plain_http_to_another_host(monkeypatch, capsys):
     assert "CLERK_API_URL must be https://" in err and SECRET not in err
 
 
+def _no_secret(*texts: str) -> None:
+    for secret in (SECRET, USER_KEY, ADMIN_KEY, FORGED_KEY):
+        assert all(secret not in t for t in texts), "a secret was printed"
+
+
 def test_the_cli_and_the_server_work_together(xo_server, monkeypatch, capfd):
     monkeypatch.setenv("XO_SERVER_URL", xo_server.url)
     monkeypatch.setenv("XO_API_KEY", ADMIN_KEY)
     assert cli.main(["user-metadata", "update", "--user-id", "user_suraj",
                      "--public-metadata", '{"beta": true}']) == 0
-    out = capfd.readouterr().out
+    out, err = capfd.readouterr()
+    _no_secret(out, err)
     assert json.loads(out)["data"]["publicMetadata"]["beta"] is True
     monkeypatch.setenv("XO_API_KEY", USER_KEY)
     assert cli.main(["me"]) == 0
-    assert json.loads(capfd.readouterr().out)["data"]["username"] == "alice"
+    out, err = capfd.readouterr()
+    _no_secret(out, err)
+    assert json.loads(out)["data"]["username"] == "alice"
 
 
 def test_client_mode_never_loads_the_server():
@@ -291,3 +312,106 @@ def test_client_mode_never_loads_the_server():
     import sys
     code = "import sys, xo.cli; xo.cli.main(['ops']); sys.exit('xo.server' in sys.modules)"
     assert subprocess.run([sys.executable, "-c", code], capture_output=True).returncode == 0
+
+
+# --- abuse, Clerk failures and the gaps the audit's mutations found ------------------------------
+
+def test_a_token_that_is_not_a_clerk_key_never_reaches_clerk(xo_server, clerk):
+    for token in ("sk_live_xyz", "x" * 10_000, "ak_", "ak_bad!chars"):
+        assert call(xo_server, "GET", "/me", token) == (401, {"success": False, "error": "Invalid API key"})
+    assert clerk.calls == []
+
+
+def test_many_made_up_keys_cannot_flood_clerk(clerk, monkeypatch):  # M1
+    monkeypatch.setenv("XO_CLERK_PER_SECOND", "5")
+    app = server.App(server.Config(), audit=lambda line: None, clock=lambda: 1000.0)  # time stands still
+    answers = [app.handle("GET", "/me", {"authorization": f"Bearer ak_madeup{i}"}, None)[0] for i in range(50)]
+    assert len(clerk.calls) == 5
+    assert answers.count(401) == 5 and answers.count(503) == 45
+
+
+def test_the_rate_limit_table_stays_bounded(clerk, monkeypatch):  # M1
+    monkeypatch.setattr(server, "MAX_TRACKED", 10)
+    app = server.App(server.Config(), audit=lambda line: None)
+    for i in range(50):
+        app.handle("GET", "/me", {"authorization": f"Bearer ak_madeup{i}"}, None)
+    assert len(app._hits) == 10
+
+
+def test_a_wrong_server_secret_is_a_503_not_a_bad_user_key(xo_server, capfd):  # S1
+    xo_server.app.cfg.secret = "sk_test_wrong"
+    assert call(xo_server, "GET", "/me", USER_KEY) == (503, {"success": False, "error": server.MISCONFIGURED})
+    assert "Clerk refused this server's CLERK_SECRET_KEY" in capfd.readouterr().err
+
+
+@pytest.mark.parametrize("status, expected", [(429, 503), (500, 502), (403, 503), (400, 401)])
+def test_clerk_failures_on_the_key_check(xo_server, clerk, status, expected):  # S1, S6
+    clerk.fail = status
+    assert call(xo_server, "GET", "/me", USER_KEY)[0] == expected
+
+
+def test_the_key_check_is_never_cached(xo_server, monkeypatch):  # S6
+    assert call(xo_server, "GET", "/me", USER_KEY)[0] == 200
+    monkeypatch.setitem(KEYS, USER_KEY, {**KEYS[USER_KEY], "revoked": True})
+    assert call(xo_server, "GET", "/me", USER_KEY)[0] == 401
+
+
+def test_a_listed_id_without_the_claim_is_not_admin(xo_server):  # S6
+    assert call(xo_server, "GET", "/user-metadata/user_alice", "ak_listed")[0] == 403
+
+
+def test_a_redirect_from_clerk_is_not_followed_and_carries_no_secret(xo_server, clerk, fake):  # S6
+    clerk.redirect = fake.base + "/stolen"
+    assert call(xo_server, "GET", "/me", USER_KEY)[0] == 502
+    assert fake.requests == []
+
+
+def test_a_clerk_answer_that_is_not_an_object_is_a_502(xo_server, clerk):  # S7
+    xo_server.app.clerk.verify_key = lambda secret: KEYS[secret]
+    clerk.raw = b"[]"
+    status, out = call(xo_server, "GET", "/user-metadata/user_alice", ADMIN_KEY)
+    assert (status, out["error"]) == (502, "Clerk did not answer")
+    assert audits(xo_server)[-1]["outcome"] == 502
+
+
+def test_refusals_before_auth_are_audited(xo_server):  # S3
+    call(xo_server, "GET", "/user-metadata/user_alice", "ak_unknown")
+    call(xo_server, "GET", "/user-metadata/user_alice")
+    call(xo_server, "DELETE", "/user-metadata/user_alice", ADMIN_KEY)
+    call(xo_server, "PATCH", "/user-metadata/user_alice", ADMIN_KEY, raw=b" " * (server.MAX_BODY + 1))
+    assert [a["outcome"] for a in audits(xo_server)] == [401, 401, 405, 413]
+    assert all(a["keyId"] is None for a in audits(xo_server))
+
+
+def test_open_connections_are_capped(clerk, monkeypatch):  # S2
+    import socket
+    monkeypatch.setenv("XO_SERVE_MAX_CONNECTIONS", "2")
+    httpd = server.make_server(server.App(server.Config(), audit=lambda line: None), "127.0.0.1", 0)
+    threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
+    port = httpd.server_address[1]
+    slow = [socket.create_connection(("127.0.0.1", port)) for _ in range(2)]
+    for s in slow:
+        s.sendall(b"GET /healthz HTTP/1.1\r\n")  # never finished
+    import time
+    time.sleep(0.2)
+    with socket.create_connection(("127.0.0.1", port), timeout=5) as third:
+        third.sendall(b"GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n")
+        assert third.recv(100).startswith(b"HTTP/1.1 503")
+    for s in slow:
+        s.close()
+    httpd.shutdown()
+
+
+def test_the_startup_line_never_shows_the_secret(clerk, monkeypatch, capfd):  # S6
+    class Stub:
+        server_address = ("127.0.0.1", 8787)
+
+        def serve_forever(self):
+            raise KeyboardInterrupt
+
+        def server_close(self):
+            pass
+    monkeypatch.setattr(server, "make_server", lambda app, host, port: Stub())
+    assert server.serve("0.0.0.0", 8787) == 0
+    err = capfd.readouterr().err
+    assert "listening on" in err and "behind HTTPS" in err and SECRET not in err

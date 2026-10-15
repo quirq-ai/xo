@@ -830,6 +830,9 @@
           },
           "429": {
             "description": "Over the per-key rate limit"
+          },
+          "503": {
+            "description": "The xo server is misconfigured or busy"
           }
         }
       }
@@ -864,11 +867,14 @@
           "404": {
             "description": "No such user"
           },
+          "422": {
+            "description": "userId is not a Clerk user id"
+          },
           "429": {
             "description": "Over the per-key rate limit"
           },
-          "422": {
-            "description": "userId is not a Clerk user id"
+          "503": {
+            "description": "The xo server is misconfigured or busy"
           }
         }
       },
@@ -928,6 +934,9 @@
           },
           "429": {
             "description": "Over the per-key rate limit"
+          },
+          "503": {
+            "description": "The xo server is misconfigured or busy"
           }
         }
       }

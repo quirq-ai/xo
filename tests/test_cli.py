@@ -839,11 +839,15 @@ def test_a_secret_flag_reads_dash_from_stdin(core, capsys, monkeypatch):
 
 
 def test_a_create_that_times_out_may_have_happened(core, capsys):
+    import threading
     import time
-    core.route("POST", "/api/core/v1/codex", status=201, body=lambda req: time.sleep(1.5) or {})
+    done = threading.Event()
+    core.route("POST", "/api/core/v1/codex", status=201,
+               body=lambda req: time.sleep(1.5) or done.set() or {})
     err = run(capsys, "--timeout", "0.3", "codex", "--name", "c", "--volume-size", "20")[2]
     assert "the request may have been received, so check before you retry" in err
     assert len(core.requests) == 1
+    assert done.wait(5)  # the slow handler finishes inside this test, not during a later one
 
 
 def test_an_interrupted_create_may_have_happened(core, capsys, monkeypatch):
@@ -930,6 +934,13 @@ def test_server_commands_need_a_server_url(core, capsys, monkeypatch):
     code, _, err = run(capsys, "me")
     assert code == 1 and core.requests == []
     assert "set XO_SERVER_URL (or pass --server-url)" in err
+
+
+def test_the_server_url_must_be_https(core, capsys, monkeypatch):
+    monkeypatch.setenv("XO_SERVER_URL", "http://xo-server.example")
+    code, _, err = run(capsys, "me")
+    assert code == 1 and core.requests == []
+    assert err == "xo: XO_SERVER_URL must be https:// (or http:// to localhost)\n"
 
 
 def test_core_commands_ignore_the_server_url(xs, capsys):
