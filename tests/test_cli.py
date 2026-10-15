@@ -19,7 +19,7 @@ def test_no_key_is_one_actionable_line(fake, capsys, monkeypatch):
     monkeypatch.delenv("XO_API_KEY")
     code, out, err = run(capsys, "call", "health")
     assert code == 1
-    assert "set XO_API_KEY or pass --api-key" in err
+    assert "run xo login, set XO_API_KEY, or pass --api-key" in err
     assert "from the XO team" in err
     assert fake.requests == []
 
@@ -1020,3 +1020,205 @@ def test_a_secret_with_a_space_is_redacted_in_its_form_encoded_form():  # #8 aud
     secret = "bot token with spaces"
     for form in (secret, urllib.parse.quote_plus(secret), urllib.parse.quote(secret)):
         assert redact(f"x {form} y", secret) == "x <redacted> y", form
+
+
+# --- xo login and xo logout ------------------------------------------------------------------------
+
+ME = {"success": True, "data": {"id": "user_1", "username": "sam", "firstName": "Sam", "lastName": "Lee"}}
+
+
+@pytest.fixture
+def login(xs, monkeypatch):
+    """xo login against the fake xo server, with no key in the environment and one typed in."""
+    monkeypatch.delenv("XO_API_KEY")
+    xs.route("GET", "/xo/me", body=ME)
+
+    def typed(text: str = KEY + "\n") -> None:
+        import io
+        monkeypatch.setattr("sys.stdin", io.StringIO(text))
+    typed()
+    xs.typed = typed
+    return xs
+
+
+def test_login_checks_the_key_then_saves_it_private(login, capsys, config_home):
+    import os
+    import stat
+    code, out, err = run(capsys, "login")
+    assert code == 0 and out == ""
+    assert login.requests[0]["path"] == "/xo/me"
+    assert login.requests[0]["headers"]["Authorization"] == f"Bearer {KEY}"
+    assert "xo: logged in as sam (user_1)\n" in err
+    saved = config_home / "xo" / "credentials"
+    assert f"key saved to {saved}" in err
+    assert saved.read_text() == KEY + "\n"
+    assert stat.S_IMODE(os.stat(saved).st_mode) == 0o600
+    assert stat.S_IMODE(os.stat(saved.parent).st_mode) == 0o700
+    assert [p.name for p in saved.parent.iterdir()] == ["credentials"]  # no temp file left
+
+
+def test_later_commands_use_the_saved_key(login, capsys):
+    assert run(capsys, "login")[0] == 0
+    login.route("GET", "/xo/me", body=ME)
+    assert run(capsys, "me")[0] == 0
+    assert login.requests[-1]["headers"]["Authorization"] == f"Bearer {KEY}"
+
+
+def test_the_variable_wins_over_the_saved_key(login, capsys, monkeypatch):
+    assert run(capsys, "login")[0] == 0
+    monkeypatch.setenv("XO_API_KEY", "ak_from_variable")
+    assert run(capsys, "me")[0] == 0
+    assert login.requests[-1]["headers"]["Authorization"] == "Bearer ak_from_variable"
+
+
+def test_login_says_when_the_variable_hides_the_saved_key(login, capsys, monkeypatch):
+    monkeypatch.setenv("XO_API_KEY", "ak_from_variable")
+    code, _, err = run(capsys, "login")
+    assert code == 0 and "XO_API_KEY is set in this terminal and is used instead" in err
+    assert login.requests[0]["headers"]["Authorization"] == f"Bearer {KEY}"  # the typed key is checked
+    assert "ak_from_variable" not in err
+
+
+def test_a_refused_key_is_not_saved(login, capsys, config_home):
+    login.route("GET", "/xo/me", status=401, body={"error": "Invalid API key"})
+    code, _, err = run(capsys, "login")
+    assert code == 1
+    assert err == ("xo: GET /me: HTTP 401 (check the API key): Invalid API key; nothing saved "
+                   "(xo login --no-check saves a key without checking it)\n")
+    assert not (config_home / "xo" / "credentials").exists()
+
+
+def test_a_refused_key_leaves_the_old_saved_key(login, capsys, config_home):
+    assert run(capsys, "login")[0] == 0
+    login.route("GET", "/xo/me", status=401, body={"error": "Invalid API key"})
+    login.typed("ak_another_key_1234\n")
+    assert run(capsys, "login")[0] == 1
+    assert (config_home / "xo" / "credentials").read_text() == KEY + "\n"
+
+
+def test_an_unreachable_server_saves_nothing(login, capsys, config_home, monkeypatch):
+    monkeypatch.setenv("XO_SERVER_URL", "http://127.0.0.1:9")
+    code, _, err = run(capsys, "login")
+    assert code == 1 and "could not reach" in err and "nothing saved" in err
+    assert not (config_home / "xo" / "credentials").exists()
+
+
+def test_an_answer_without_an_account_saves_nothing(login, capsys, config_home):
+    login.route("GET", "/xo/me", body={"success": True})
+    code, _, err = run(capsys, "login")
+    assert code == 1 and err == "xo: the xo server's /me answered without an account; nothing saved\n"
+    assert not (config_home / "xo" / "credentials").exists()
+
+
+def test_login_no_check_saves_without_a_request(login, capsys, config_home):
+    code, _, err = run(capsys, "login", "--no-check")
+    assert code == 0 and login.requests == []
+    assert "xo: saved without checking it" in err
+    assert (config_home / "xo" / "credentials").read_text() == KEY + "\n"
+
+
+@pytest.mark.parametrize("text", ["\n", "", "   \n"])
+def test_login_with_nothing_typed_saves_nothing(login, capsys, config_home, text):
+    login.typed(text)
+    code, _, err = run(capsys, "login")
+    assert code == 1 and err == "xo: no key entered; nothing saved\n" and login.requests == []
+    assert not (config_home / "xo").exists()
+
+
+def test_login_refuses_a_bad_key_without_showing_it(login, capsys, config_home):
+    login.typed("ak_bad key\"<>\n")
+    code, _, err = run(capsys, "login")
+    assert code == 1 and login.requests == [] and "bad" not in err
+    assert "the key entered holds characters an API key cannot have" in err
+    assert not (config_home / "xo").exists()
+
+
+def test_login_takes_no_key_flag(login, capsys):
+    code, _, err = run(capsys, "login", "--api-key", "ak_typed_on_the_line")
+    assert code == 1 and login.requests == []
+    assert err == "xo: xo login asks for the key itself; leave out --api-key\n"
+
+
+def test_login_never_prints_the_key_even_in_the_name(login, capsys):
+    login.route("GET", "/xo/me", body={"success": True, "data": {"id": "user_1", "username": KEY}})
+    code, _, err = run(capsys, "login")  # run() asserts the key is not in the output
+    assert code == 0 and "logged in as <redacted> (user_1)" in err
+
+
+def test_login_uses_the_name_when_there_is_no_username(login, capsys):
+    login.route("GET", "/xo/me", body={"success": True, "data": {"id": "user_1", "firstName": "Sam"}})
+    assert "logged in as Sam (user_1)" in run(capsys, "login")[2]
+
+
+def test_a_saved_key_others_can_read_is_refused(login, capsys, config_home):
+    import os
+    assert run(capsys, "login")[0] == 0
+    saved = config_home / "xo" / "credentials"
+    os.chmod(saved, 0o644)
+    code, _, err = run(capsys, "me")
+    assert code == 1 and len(login.requests) == 1  # only login's check went out
+    assert err == (f"xo: {saved} can be read by other users, so xo will not use it; run xo logout, "
+                   "ask the XO team for a new key, then xo login\n")
+
+
+def test_a_symlinked_saved_key_is_refused(login, capsys, config_home, tmp_path):
+    other = tmp_path / "elsewhere"
+    other.write_text(KEY + "\n")
+    (config_home / "xo").mkdir(parents=True)
+    (config_home / "xo" / "credentials").symlink_to(other)
+    code, _, err = run(capsys, "me")
+    assert code == 1 and login.requests == [] and "cannot read" in err
+
+
+def test_login_replaces_the_saved_key(login, capsys, config_home):
+    assert run(capsys, "login")[0] == 0
+    login.typed("ak_second_key_5678\n")
+    assert run(capsys, "login")[0] == 0
+    assert (config_home / "xo" / "credentials").read_text() == "ak_second_key_5678\n"
+
+
+def test_logout_deletes_the_saved_key(login, capsys, config_home):
+    assert run(capsys, "login")[0] == 0
+    saved = config_home / "xo" / "credentials"
+    code, _, err = run(capsys, "logout")
+    assert code == 0 and err == f"xo: deleted {saved}\n" and not saved.exists()
+    code, _, err = run(capsys, "logout")
+    assert code == 0 and err == f"xo: no saved key at {saved}\n"
+    code, _, err = run(capsys, "me")
+    assert code == 1 and "no API key: run xo login" in err
+
+
+def test_logout_says_the_variable_is_still_set(login, capsys, monkeypatch):
+    monkeypatch.setenv("XO_API_KEY", "ak_from_variable")
+    assert "XO_API_KEY is still set in this terminal" in run(capsys, "logout")[2]
+
+
+def test_the_config_folder_defaults_to_home(monkeypatch, tmp_path):
+    from xo import client
+    monkeypatch.delenv("XDG_CONFIG_HOME")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert client.credentials_path() == tmp_path / ".config" / "xo" / "credentials"
+    monkeypatch.setenv("XDG_CONFIG_HOME", "relative/path")  # the spec says ignore a relative one
+    assert client.credentials_path() == tmp_path / ".config" / "xo" / "credentials"
+
+
+def test_login_tightens_an_existing_xo_folder(login, capsys, config_home):
+    import os
+    import stat
+    (config_home / "xo").mkdir(parents=True, mode=0o755)
+    os.chmod(config_home / "xo", 0o755)
+    assert run(capsys, "login")[0] == 0
+    assert stat.S_IMODE(os.stat(config_home / "xo").st_mode) == 0o700
+
+
+def test_a_folder_that_cannot_be_made_is_one_line(login, capsys, config_home):
+    config_home.mkdir(parents=True)
+    (config_home / "xo").write_text("a file where the folder goes")
+    code, _, err = run(capsys, "login")
+    assert code == 1 and err.startswith(f"xo: cannot save the key to {config_home / 'xo' / 'credentials'} (")
+
+
+def test_a_long_name_is_cut_after_the_key_is_redacted(login, capsys):
+    login.route("GET", "/xo/me", body={"success": True, "data": {"id": "user_1", "username": "x" * 110 + KEY}})
+    code, _, err = run(capsys, "login")
+    assert code == 0 and KEY[:8] not in err and "logged in as " + "x" * 108 in err

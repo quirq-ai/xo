@@ -25,13 +25,17 @@ The last line should print `xo 0.1.0`. If any step fails, the ones after it don'
 
 The install is pinned to the reviewed commit of xo. The pin covers xo's own code only: pip still fetches its build tool (setuptools) unpinned while it installs.
 
-## 2. Give xo your key (each new terminal)
+## 2. Log in with your key (once)
 
 ```sh
-printf 'XO API key: '; read -rs XO_API_KEY && export XO_API_KEY; echo
+xo login
 ```
 
-Paste your key and press Enter. Nothing shows while you type, and the key stays out of your shell history. The same line works in zsh and bash.
+Paste your key at the `XO API key:` prompt and press Enter. Nothing shows while you type, and the key stays out of your shell history. xo checks the key with the xo server (`xo me`), prints the account it belongs to, and saves it in `~/.config/xo/credentials`, which only you can read. Every later `xo` command, in any terminal, uses it. If the check fails, nothing is saved.
+
+Until the xo server holds XO's production Clerk key, it answers 401 to real XO keys. Then use `xo login --no-check`, which saves the key without checking it; step 3 checks it instead.
+
+To use a different key, run `xo login` again. `xo logout` deletes the saved key. A key in `XO_API_KEY` wins over the saved one, so a terminal where you set that variable uses it instead.
 
 ## 3. Check it works (creates nothing)
 
@@ -95,9 +99,10 @@ To update xo, replace `NEW_SHA` with the commit you were given:
 
 To see which commit you have: `~/.xo/bin/pip freeze | grep quirq-xo`.
 
-To remove xo, delete its folder, remove the PATH line from `~/.zshrc` (or the bash file you used), and clear the key from the current terminal:
+To remove xo, delete the saved key, then xo's folder, and remove the PATH line from `~/.zshrc` (or the bash file you used):
 
 ```sh
+xo logout
 rm -rf ~/.xo
 unset XO_API_KEY
 ```

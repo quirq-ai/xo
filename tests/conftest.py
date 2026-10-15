@@ -23,6 +23,15 @@ class FakeXo:
         self.routes[(method, path)] = (status, body, headers or {})
 
 
+@pytest.fixture(autouse=True)
+def config_home(tmp_path, monkeypatch):
+    """Every test gets its own empty config folder, so a key saved by xo login on this machine is
+    never read, and no test writes to the real one."""
+    home = tmp_path / "config"
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(home))
+    return home
+
+
 @pytest.fixture
 def fake(monkeypatch):
     state = FakeXo()

@@ -2,7 +2,7 @@
 
 One package, two deployments:
 
-- **The command line** runs on each user's machine with their XO API key (`XO_API_KEY`).
+- **The command line** runs on each user's machine with their XO API key (`XO_API_KEY`, or the key `xo login` saved).
 - **The server**, `xo serve`, runs once, on a machine XO controls, with Clerk's Secret Key. It is
   the only place that key exists.
 

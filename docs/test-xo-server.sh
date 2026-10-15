@@ -35,9 +35,10 @@ fi
 work="$(mktemp -d "${TMPDIR:-/tmp}/xo-test.XXXXXX")" || exit 1
 trap 'rm -rf "$work"' EXIT
 
-# xo from this checkout, isolated from any installed copy (-I), talking only to $server.
+# xo from this checkout, isolated from any installed copy (-I) and any key xo login saved,
+# talking only to $server.
 xo() {
-  XO_SERVER_URL="$server" "$python" -I -c \
+  XDG_CONFIG_HOME="$work/config" XO_SERVER_URL="$server" "$python" -I -c \
     'import sys; sys.path.insert(0, sys.argv[1]); from xo.cli import main; sys.exit(main(sys.argv[2:]))' \
     "$repo/src" "$@"
 }

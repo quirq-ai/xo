@@ -16,19 +16,22 @@
     xo api METHOD PATH [--query NAME=VALUE ...] [--data JSON|@FILE|-] [--field KEY=VALUE ...]
                                             send any request, spec or not.
     xo serve [--host H] [--port P]          run the xo server that holds the Clerk credentials;
-                                            `xo me` and `xo user-metadata` go to it ($XO_SERVER_URL,
-                                            default https://xo.quirq.dev).
+                                            `xo login`, `xo me` and `xo user-metadata` go to it
+                                            ($XO_SERVER_URL, default https://xo.quirq.dev).
+    xo login [--no-check]                   ask for your API key without showing it, check it with
+                                            the xo server's /me, and save it for later commands.
+    xo logout                               delete the saved key.
 
 A request that is not a GET changes things on XO, so it prints one line on stderr first; a create
 that stores your API key in the new space says so on a second line. --dry-run prints the request
 and sends nothing, with provider keys and bot tokens shown as <hidden> unless --show-secrets is
 given. A DELETE also needs --yes.
 
-The API key comes from $XO_API_KEY, or from --api-key - (one line on stdin). --api-key KEY also
-works but lands in your shell history and the process list; prefer the variable. xo sends the key
-as a bearer token, never prints it, and never follows a redirect. The API base is $XO_BASE_URL or
-https://app.xo.builders/api/core/v1. The spec comes from --spec FILE, $XO_SPEC, or the copy
-bundled with xo.
+The API key comes from --api-key - (one line on stdin), $XO_API_KEY, or the key xo login saved,
+in that order. --api-key KEY also works but lands in your shell history and the process list.
+xo sends the key as a bearer token, never prints it, and never follows a redirect. The API base
+is $XO_BASE_URL or https://app.xo.builders/api/core/v1. The spec comes from --spec FILE, $XO_SPEC,
+or the copy bundled with xo.
 
 Prints the response as JSON on stdout. Exit 1 on any problem, with one line on stderr saying why.
 """
@@ -46,7 +49,8 @@ from typing import Any, NoReturn
 
 from xo import __version__, commands, spec
 from xo.client import (DEFAULT_TIMEOUT, KEY_ENV, MAYBE_RECEIVED, MIN_SECRET, Client, XoError, api_key,
-                       base_url, redact, server_url)
+                       base_url, check_key, credentials_path, forget_key, read_key, redact, save_key,
+                       server_url)
 
 GLOBAL_DEFAULTS = {"api_key": None, "base_url": None, "server_url": None, "spec": None, "timeout": DEFAULT_TIMEOUT}
 # Global options that take a value, so the word after one is never read as the command.
@@ -414,6 +418,46 @@ def _endpoint(args: argparse.Namespace) -> int:
     return _send(client, args, op.method, path, query=query, body=body, headers=headers, op=op)
 
 
+def _login(args: argparse.Namespace) -> int:
+    """Ask for the key, check it with the xo server's /me, and save it for later commands."""
+    if args.api_key is not None:
+        raise XoError("xo login asks for the key itself; leave out --api-key")
+    key = read_key()
+    if not key:
+        raise XoError("no key entered; nothing saved")
+    args.resolved_key = check_key(key, "the key entered")
+    if args.no_check:
+        who = None
+    else:
+        args.client = Client(server_url(args.server_url), key, timeout=args.timeout)
+        try:
+            data = args.client.request("GET", "/me").data
+        except XoError as e:
+            raise XoError(f"{e}; nothing saved (xo login --no-check saves a key without checking it)") from None
+        user = data.get("data") if isinstance(data, dict) else None
+        if not isinstance(user, dict):
+            raise XoError("the xo server's /me answered without an account; nothing saved")
+        name = user.get("username") or " ".join(str(user.get(k)) for k in ("firstName", "lastName") if user.get(k))
+        # Redact before cutting it short, so a cut can never leave part of the key showing.
+        shown = args.client.scrub(" ".join(f"{name or ''} ({user.get('id') or 'no id'})".split()))
+        who = spec.clean(shown)[:120]
+    path = save_key(key)
+    print(f"xo: logged in as {who}" if who else "xo: saved without checking it", file=sys.stderr)
+    print(f"xo: key saved to {path} (only you can read it); xo logout deletes it", file=sys.stderr)
+    if os.environ.get(KEY_ENV, "").strip():
+        print(f"xo: {KEY_ENV} is set in this terminal and is used instead; run unset {KEY_ENV} to use the saved key",
+              file=sys.stderr)
+    return 0
+
+
+def _logout(args: argparse.Namespace) -> int:
+    path = forget_key()
+    print(f"xo: deleted {path}" if path else f"xo: no saved key at {credentials_path()}", file=sys.stderr)
+    if os.environ.get(KEY_ENV, "").strip():
+        print(f"xo: {KEY_ENV} is still set in this terminal; run unset {KEY_ENV} to clear it", file=sys.stderr)
+    return 0
+
+
 def _serve(args: argparse.Namespace) -> int:
     from xo import server  # imported only here: the CLI never loads server code
 
@@ -439,7 +483,7 @@ def _common() -> argparse.ArgumentParser:
     c.add_argument("--base-url", default=argparse.SUPPRESS,
                    help="the API base (default $XO_BASE_URL or https://app.xo.builders/api/core/v1)")
     c.add_argument("--server-url", default=argparse.SUPPRESS,
-                   help="an xo server's base, for `xo me` and `xo user-metadata` "
+                   help="an xo server's base, for `xo login`, `xo me` and `xo user-metadata` "
                         "(default $XO_SERVER_URL or https://xo.quirq.dev)")
     c.add_argument("--spec", default=argparse.SUPPRESS, metavar="FILE",
                    help="an OpenAPI JSON file (default $XO_SPEC, then the one bundled with xo)")
@@ -526,6 +570,14 @@ def main(argv: list[str] | None = None) -> int:
     _add_send(a)
     a.add_argument("--yes", action="store_true", help="needed to send a DELETE")
     a.set_defaults(run=_api)
+
+    li = sub.add_parser("login", parents=[common],
+                        help="ask for your XO API key, check it with the xo server, and save it for later commands")
+    li.add_argument("--no-check", action="store_true",
+                    help="save the key without asking the xo server whose it is")
+    li.set_defaults(run=_login)
+    lo = sub.add_parser("logout", parents=[common], help="delete the key xo login saved")
+    lo.set_defaults(run=_logout)
 
     s = sub.add_parser("serve", help="run the xo server that holds the Clerk credentials (see docs/server.md)")
     s.add_argument("--host", default="127.0.0.1", help="address to listen on (default 127.0.0.1)")

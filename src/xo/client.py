@@ -13,11 +13,13 @@ import http.client
 import json
 import os
 import re
+import secrets
 import sys
 import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from xo import __version__
@@ -28,6 +30,8 @@ DEFAULT_TIMEOUT = 30.0
 KEY_ENV = "XO_API_KEY"
 BASE_URL_ENV = "XO_BASE_URL"
 SERVER_URL_ENV = "XO_SERVER_URL"
+CONFIG_ENV = "XDG_CONFIG_HOME"
+SAVED = "the key saved by xo login"
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 REDACTED = "<redacted>"
 # A secret shorter than this is not looked for in text: replacing it would garble the message.
@@ -75,24 +79,104 @@ def base_url(flag: str | None = None) -> str:
 
 
 def api_key(flag: str | None = None) -> str:
-    """The key from --api-key (`-` reads one line from stdin) or $XO_API_KEY. Never echoed."""
+    """The key from --api-key (`-` reads one line from stdin), $XO_API_KEY, or the file `xo login`
+    saved, in that order. Never echoed."""
     if flag == "-":
-        # On a terminal, read without echo so the key never lands in the scrollback.
-        typed = getpass.getpass("XO API key: ") if sys.stdin.isatty() else sys.stdin.readline()
-        source, key = "the key read from stdin", typed.strip()
+        source, key = "the key read from stdin", read_key()
     elif flag:
         source, key = "--api-key", flag.strip()
+    elif (os.environ.get(KEY_ENV) or "").strip():
+        source, key = KEY_ENV, os.environ[KEY_ENV].strip()
     else:
-        source, key = KEY_ENV, (os.environ.get(KEY_ENV) or "").strip()
+        source, key = SAVED, saved_key() or ""
     if not key:
-        raise XoError(f"no API key: set {KEY_ENV} or pass --api-key - to read it from stdin "
+        raise XoError(f"no API key: run xo login, set {KEY_ENV}, or pass --api-key - to read it from stdin "
                       "(get a key from the XO team)")
+    return check_key(key, source)
+
+
+def read_key() -> str:
+    """One key from stdin: asked for without echo on a terminal, so it never lands in the scrollback."""
+    typed = getpass.getpass("XO API key: ") if sys.stdin.isatty() else sys.stdin.readline()
+    return typed.strip()
+
+
+def check_key(key: str, source: str) -> str:
+    """`key` if it holds only characters an API key may have; the error never shows it."""
     # Only characters that JSON and repr never escape, so redaction finds the key as sent; redact()
     # also looks for the forms a URL, an escaping JSON writer or an HTML writer would give them.
     if not KEY_CHARS.fullmatch(key):
         raise XoError(f"{source} holds characters an API key cannot have "
                       "(only letters, digits and _ . - + / = are allowed); the key is not shown")
     return key
+
+
+def credentials_path() -> Path:
+    """Where `xo login` keeps the key: $XDG_CONFIG_HOME/xo/credentials, else ~/.config/xo/credentials."""
+    base = os.environ.get(CONFIG_ENV) or ""
+    root = Path(base) if os.path.isabs(base) else Path.home() / ".config"
+    return root / "xo" / "credentials"
+
+
+def _private(st: os.stat_result) -> bool:
+    """Only its owner, the current user, can read or write it (Windows has no such mode bits)."""
+    if os.name == "nt":
+        return True
+    return st.st_mode & 0o077 == 0 and st.st_uid == os.getuid()
+
+
+def saved_key() -> str | None:
+    """The key `xo login` saved, or None when there is none. A file other users could read is
+    refused rather than used: the key in it should be treated as leaked."""
+    path = credentials_path()
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except FileNotFoundError:
+        return None
+    except OSError as e:
+        raise XoError(f"cannot read {path} ({e.strerror}); run xo logout, then xo login") from None
+    with os.fdopen(fd) as f:
+        if not _private(os.fstat(f.fileno())):
+            raise XoError(f"{path} can be read by other users, so xo will not use it; run xo logout, "
+                          "ask the XO team for a new key, then xo login")
+        text = f.read(4096)
+    return text.strip() or None
+
+
+def save_key(key: str) -> Path:
+    """Write `key` where saved_key() reads it: the folder 0700, the file 0600 from the start, and
+    swapped in whole (rename), so no other user and no half-written file ever sees it."""
+    path = credentials_path()
+    tmp = path.with_name(f".credentials.{secrets.token_hex(8)}.tmp")
+    try:
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if os.name != "nt":
+            os.chmod(path.parent, 0o700)
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(key + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except OSError as e:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise XoError(f"cannot save the key to {path} ({e.strerror})") from None
+    return path
+
+
+def forget_key() -> Path | None:
+    """Delete the saved key; the path it was at, or None when there was none."""
+    path = credentials_path()
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return None
+    except OSError as e:
+        raise XoError(f"cannot delete {path} ({e.strerror})") from None
+    return path
 
 
 def redact(value: Any, key: str | None) -> Any:
@@ -187,7 +271,7 @@ class Client:
                 body: Any = None, headers: dict[str, str] | None = None, auth: bool = True) -> Response:
         """Send one request and return the parsed response, or raise XoError. 2xx only."""
         if auth and not self._key:
-            raise XoError(f"no API key: set {KEY_ENV} or pass --api-key -")
+            raise XoError(f"no API key: run xo login, set {KEY_ENV}, or pass --api-key -")
         sent = {"Accept": "application/json", "User-Agent": f"xo/{__version__}", **(headers or {})}
         data = None
         if body is not None:
