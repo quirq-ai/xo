@@ -123,7 +123,7 @@ def _pattern(key: str) -> re.Pattern[str]:
 
     Each character also matches its %XX form in either case (or double-encoded as %25XX), JSON's
     \\uXXXX, HTML's &#xHH; or &#DD; (zero-padded or not) and its named reference; / also matches
-    JSON's \\/, and + also a space, as a form decoder would turn it.
+    JSON's \\/, + also a space (a form decoder's) and a space also + (a form encoder's).
     """
     parts = []
     for c in key:
@@ -138,6 +138,8 @@ def _pattern(key: str) -> re.Pattern[str]:
             forms.append(re.escape("\\/"))
         if c == "+":
             forms.append(" ")
+        if c == " ":
+            forms.append(re.escape("+"))  # a form encoder's space
         parts.append("(?:" + "|".join(forms) + ")")
     return re.compile("".join(parts))
 

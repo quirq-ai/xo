@@ -83,9 +83,10 @@ instance only.
   **Instant Rollback**, then fix `main`. Vercel's documentation says a rollback turns off the
   automatic assignment of production domains: later merges to `main` still build, but they do not
   reach `xo.quirq.dev`. Once the fix is merged and its deployment is **Ready**, **Promote** it to
-  production (or choose **Undo Rollback**) to turn automatic deploys back on, then run the test
-  script. Also from the documentation: on the Hobby plan, Instant Rollback can go back only to the
-  previous production deployment.
+  production to turn automatic deploys back on, then run the test script. Not **Undo Rollback**:
+  that puts back the deployment you rolled back from, the broken one. Also from the
+  documentation: on the Hobby plan, Instant Rollback can go back only to the previous production
+  deployment.
 - `.vercelignore` keeps `.env` files and the tests out of every upload.
 
 ## 5. Test
@@ -95,9 +96,11 @@ From a checkout at the commit that is deployed: its sha is on the production dep
 
 ```bash
 SHA=paste-the-deployed-commit-sha-here
-git clone https://github.com/quirq-ai/xo.git && cd xo && git checkout --detach "$SHA"
-bash docs/test-xo-server.sh
+git clone https://github.com/quirq-ai/xo.git && cd xo && git checkout --detach "$SHA" &&
+  bash docs/test-xo-server.sh
 ```
+
+The script runs only if the checkout worked, so a sha left as the placeholder stops it.
 
 It runs `xo` straight from the checkout (nothing is installed or downloaded, and it calls only
 `xo.quirq.dev`), checks `/healthz`, asks for the test user's `ak_...` key without echoing it, and

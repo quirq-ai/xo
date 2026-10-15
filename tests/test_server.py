@@ -360,6 +360,25 @@ def test_the_audit_line_records_what_the_caller_got(xo_server, clerk, status, ex
     assert (entry["outcome"], entry["clerk"]) == (expected, status)
 
 
+@pytest.mark.parametrize("status, expected", [(429, 503), (500, 502), (403, 503)])
+def test_the_audit_line_names_clerk_when_the_key_check_fails(xo_server, clerk, status, expected):
+    clerk.fail = status  # the key check itself fails
+    assert call(xo_server, "GET", "/user-metadata/user_alice", ADMIN_KEY)[0] == expected
+    entry = audits(xo_server)[-1]
+    assert (entry["outcome"], entry["clerk"], entry["keyId"]) == (expected, status, None)
+
+
+def test_the_audit_line_says_when_clerk_never_answered(xo_server, monkeypatch):
+    monkeypatch.setattr(xo_server.app.cfg, "clerk_url", "http://127.0.0.1:9")  # nothing listens there
+    assert call(xo_server, "GET", "/user-metadata/user_alice", ADMIN_KEY)[0] == 502
+    assert (audits(xo_server)[-1]["outcome"], audits(xo_server)[-1]["clerk"]) == (502, "unreachable")
+
+
+def test_a_refusal_before_clerk_has_no_clerk_field(xo_server):
+    call(xo_server, "GET", "/user-metadata/user_alice", "ak_unknown_and_unlisted")
+    assert "clerk" not in audits(xo_server)[-1]
+
+
 def test_the_key_check_is_never_cached(xo_server, monkeypatch):  # S6
     assert call(xo_server, "GET", "/me", USER_KEY)[0] == 200
     monkeypatch.setitem(KEYS, USER_KEY, {**KEYS[USER_KEY], "revoked": True})
