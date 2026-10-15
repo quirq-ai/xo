@@ -10,6 +10,9 @@ Read `README.md` first.
   `docs/deploy-vercel.md` and `docs/test-xo-server.sh` true. Once the Vercel project exists, every
   merge to `main` deploys production at `xo.quirq.dev`: a merge is a deploy, so a change to the
   server is ready only when it is safe to run there.
+- The status page (`src/xo/status_page.py`, served at `/`) is public: it may show only a request's
+  time, method, route template, status and duration, never a key, key id, user id, path or
+  address. Its script and style are pinned by hash in its Content-Security-Policy.
 - `CLERK_SECRET_KEY` lives only in the `xo serve` deployment's environment. Never print, log or
   return it; tests assert it never reaches output or the audit log.
 - The API key is a secret. Never print, log, commit or write it to a file; tests assert it never

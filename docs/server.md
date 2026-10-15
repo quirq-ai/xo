@@ -21,6 +21,8 @@ xo codex, ... ──────┴─ XO_API_KEY ─► app.xo.builders (unchan
 | Method | Path | Who | Returns |
 |---|---|---|---|
 | GET | `/healthz` | anyone | `{"status": "ok"}`, with no Clerk call |
+| GET | `/` | anyone | the status page: health, counts and the latest requests, refreshed every 5 seconds |
+| GET | `/status` | anyone | what the page shows, as JSON; no Clerk call |
 | GET | `/me` | any user key | `id`, `username`, `firstName`, `lastName`, `imageUrl`, `createdAt`; never email or metadata |
 | GET | `/user-metadata/{userId}` | admin keys | `publicMetadata`, `privateMetadata` |
 | PATCH | `/user-metadata/{userId}` | admin keys | both buckets after a deep merge; `null` removes a key |
@@ -31,6 +33,15 @@ admin key), 404 (no such user), 405, 413 (body over 32KB), 422 (bad body, a key 
 editable, a bad user id, or over Clerk's 8KB per bucket), 429 (this key's rate limit), 502 (Clerk
 did not answer) and 503 (the server is busy, or misconfigured: Clerk refused its Secret Key, which
 it also says in one line on stderr).
+
+## The status page
+
+`/` shows whether the server answers, how many requests and `/healthz` pings it has served, how
+many were refused or failed, and the last 100 requests. Each entry is only the time, method,
+route (`/me`, `/user-metadata/{userId}`, `/healthz` or `other`), status and duration: never a key,
+key id, user id, path or address, so it is public. The page and `/status` are not counted. The
+counts live in the process's memory: on Vercel each instance keeps its own and starts empty, so the
+page shows what the instance answering you has seen. The audit log stays in the logs only.
 
 ## Who can do what
 

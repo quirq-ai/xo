@@ -551,3 +551,65 @@ def test_vercel_entrypoint_exposes_a_wsgi_app(monkeypatch):
     monkeypatch.delenv("CLERK_SECRET_KEY", raising=False)
     module = runpy.run_path(str(pathlib.Path(__file__).resolve().parent.parent / "app.py"))
     assert callable(module["app"])
+
+
+# --- the status page: health, counts and recent requests, with nothing secret in them -----------
+
+def test_the_status_page_is_served_with_a_strict_policy(xo_server):
+    import base64
+    import hashlib
+    from xo import status_page
+    with urllib.request.urlopen(xo_server.url + "/", timeout=5) as resp:
+        page, headers = resp.read().decode(), resp.headers
+    assert headers["Content-Type"] == "text/html; charset=utf-8" and headers["Cache-Control"] == "no-store"
+    csp = headers["Content-Security-Policy"]
+    assert "default-src 'none'" in csp and "connect-src 'self'" in csp and "frame-ancestors 'none'" in csp
+    for part in (status_page.SCRIPT, status_page.STYLE):  # the hashes match what the page inlines
+        assert part in page
+        assert base64.b64encode(hashlib.sha256(part.encode()).digest()).decode() in csp
+    assert "innerHTML" not in page and "http" not in status_page.SCRIPT
+
+
+def test_status_lists_routes_and_counts_but_never_ids_or_keys(xo_server):
+    call(xo_server, "GET", "/healthz")
+    call(xo_server, "GET", "/me", USER_KEY)
+    call(xo_server, "GET", "/user-metadata/user_alice", USER_KEY)
+    call(xo_server, "GET", "/nope")
+    urllib.request.urlopen(xo_server.url + "/", timeout=5).read()
+    status, out = call(xo_server, "GET", "/status")
+    assert status == 200
+    data = out["data"]
+    assert [(a["method"], a["route"], a["status"]) for a in data["activity"]] == [
+        ("GET", "other", 404), ("GET", "/user-metadata/{userId}", 403), ("GET", "/me", 200),
+        ("GET", "/healthz", 200)]  # newest first; the page and /status itself are not listed
+    assert data["instance"]["requests"] == 4 and data["instance"]["pings"] == 1
+    assert data["instance"]["byStatus"] == {"2xx": 2, "3xx": 0, "4xx": 2, "5xx": 0}
+    text = json.dumps(out)
+    for secret in ("user_alice", "ak_user", USER_KEY, SECRET, "127.0.0.1"):
+        assert secret not in text
+
+
+def test_status_keeps_only_the_latest_requests(clerk, monkeypatch):
+    monkeypatch.setattr(server, "ACTIVITY_KEPT", 3)
+    app = server.App(server.Config(), audit=lambda line: None)
+    for _ in range(5):
+        app.handle("GET", "/healthz", {}, None)
+    status = app.status()
+    assert len(status["activity"]) == 3 and status["instance"]["pings"] == 5
+
+
+def test_a_body_refused_as_too_big_is_counted(xo_server):
+    call(xo_server, "PATCH", "/user-metadata/user_alice", ADMIN_KEY, raw=b" " * (server.MAX_BODY + 1))
+    activity = call(xo_server, "GET", "/status")[1]["data"]["activity"]
+    assert (activity[0]["route"], activity[0]["status"]) == ("/user-metadata/{userId}", 413)
+
+
+def test_wsgi_serves_the_page_even_when_misconfigured(monkeypatch):
+    monkeypatch.delenv("CLERK_SECRET_KEY", raising=False)
+    application = server.wsgi_app()
+    seen = {}
+    out = b"".join(application({"REQUEST_METHOD": "GET", "PATH_INFO": "/"},
+                               lambda status, headers: seen.update(status=status, headers=dict(headers))))
+    assert seen["status"] == "200 OK" and out.startswith(b"<!doctype html>")
+    assert "Content-Security-Policy" in seen["headers"]
+    assert wsgi_call(application, "GET", "/status")[0] == 503  # so the page shows "Unreachable"
