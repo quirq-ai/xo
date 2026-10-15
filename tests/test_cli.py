@@ -177,7 +177,8 @@ def test_api_key_from_stdin(fake, capsys, monkeypatch):
     assert "both read stdin" in run(capsys, "--api-key", "-", "api", "POST", "/x", "--data", "-")[2]
 
 
-@pytest.mark.parametrize("bad", [f"{KEY}\nX-Evil: 1", f"{KEY}\rX", "ak_with space", "ak_ünicode"])
+@pytest.mark.parametrize("bad", [f"{KEY}\nX-Evil: 1", f"{KEY}\rX", "ak_with space", "ak_ünicode",
+                                 "ak_FAKE+r4/enc=0123456789", 'ak_"quote\\0123456789'])
 def test_a_key_with_bad_characters_is_refused_unechoed(fake, capsys, monkeypatch, bad):
     monkeypatch.setenv("XO_API_KEY", bad)
     code, out, err = run(capsys, "call", "health")
@@ -459,7 +460,7 @@ def test_own_headers_get_no_flag_and_cannot_be_passed(fake, capsys, monkeypatch,
         {"name": "Host", "in": "header"}, {"name": "authorization ", "in": "header"},
         {"name": "Proxy-Authorization", "in": "header"}, {"name": "X-Ok", "in": "header"}]}}}))
     for flag in ("--host", "--authorization", "--proxy-authorization"):
-        assert flag in _argparse_err(capsys, "h", flag, "evil.example")
+        assert "unrecognized arguments" in _argparse_err(capsys, "h", flag, "evil.example")
     for name in ("Host", "Cookie", "Proxy-Thing", "Transfer-Encoding"):
         assert "cannot be set" in run(capsys, "call", "get_h", "--param", f"{name}=x")[2]
     fake.route("GET", "/h", body={})
@@ -596,3 +597,33 @@ def test_a_spec_that_breaks_argparse_leaves_the_builtins(fake, capsys, monkeypat
     with pytest.raises(SystemExit) as e:
         cli.main(["claude-code"])
     assert e.value.code == 1 and "TypeError: odd spec" in capsys.readouterr().err
+
+
+# --- audit round 4 -------------------------------------------------------------------------------
+
+@pytest.mark.parametrize("argv", [
+    ["call", "health", "--api-keySECRET"],
+    ["--api-keySECRET", "call", "health"],
+    ["templates", "--api-keySECRET", "list"],
+    ["call", "health", "--dry-runSECRET"],
+    ["call", "health", "--yesSECRET"],
+    ["call", "health", "--SECRET"],
+    ["call", "health", "--api-key:SECRET"],
+])
+def test_a_key_glued_to_an_option_name_is_not_echoed(fake, capsys, monkeypatch, argv):
+    monkeypatch.delenv("XO_API_KEY")
+    secret = "ak_FAKE_r4_0123456789abcdef"
+    err = _argparse_err(capsys, *[a.replace("SECRET", secret) for a in argv])
+    assert secret not in err and "<hidden>" in err
+
+
+def test_the_notice_before_a_change_is_redacted(fake, capsys):
+    fake.route("POST", f"/x/{KEY}", body={})
+    code, _, err = run(capsys, "api", "POST", f"/x/{KEY}", "--data", "{}")
+    assert code == 0 and err == f"xo: POST {fake.base}/x/<redacted>\n"
+
+
+def test_a_typo_still_lists_the_real_commands(fake, capsys):
+    err = _argparse_err(capsys, "template", "list")
+    assert "'templates'" in err and "'orgs-templates'" in err
+    assert "'template'" not in err

@@ -59,10 +59,29 @@ def _secrets(argv: list[str]) -> list[str]:
     return [s for s in found if len(s) >= 6]
 
 
+def _long_word(word: str) -> tuple[str, str]:
+    """A --word as it may be shown, and the value it may hold.
+
+    --name=value shows --name. A known option with text glued on (--api-keyK, --api-key:K) shows
+    --api-key<hidden>. Any other word shows only when it is shaped like a flag and no longer than
+    the longest one xo made; else --<hidden>.
+    """
+    name, _, value = word.partition("=")
+    if name in _Parser.flags:
+        return name, value
+    prefix = max((f for f in _Parser.flags if name.startswith(f)), key=len, default="")
+    if prefix:
+        return prefix + HIDDEN, word[len(prefix):]
+    longest = max(map(len, _Parser.flags), default=0)
+    if re.fullmatch(r"--[a-z0-9-]+", name) and len(name) <= longest:
+        return name, value
+    return "--" + HIDDEN, word[2:]
+
+
 def _option_name(word: str) -> str:
-    """--name=value -> --name; -kVALUE -> -k."""
+    """--name=value -> --name (see _long_word); -kVALUE -> -k."""
     if word.startswith("--"):
-        return word.partition("=")[0]
+        return _long_word(word)[0]
     return word[:2]
 
 
@@ -71,7 +90,7 @@ def _typed_values(argv: list[str]) -> list[str]:
     values = []
     for word in argv:
         if word.startswith("--"):
-            values.append(word.partition("=")[2])
+            values.append(_long_word(word)[1])
         elif word.startswith("-") and len(word) > 2:
             values.append(word[2:])
         elif not word.startswith("-"):
@@ -88,13 +107,15 @@ def safe_error(message: str, argv: list[str]) -> str:
     def unrecognized(m: re.Match) -> str:
         words = [_option_name(w) if w.startswith("-") else HIDDEN for w in m.group(2).split()]
         return m.group(1) + " ".join(words)
+    # "(choose from ...)" lists only names xo made: leave it whole, so a typo still shows the real names.
+    message, choose, choices = message.partition(" (choose from ")
     message = _UNRECOGNIZED.sub(unrecognized, message)
     message = _ECHOED.sub(lambda m: f"{m.group(1)}: {HIDDEN}", message)
     message = _JOINED.sub(lambda m: f"{m.group(1)}={HIDDEN}", message)
     for value in [*_secrets(argv), *_typed_values(argv)]:
         message = re.sub(r"(?<![\w-])" + re.escape(value) + r"(?![\w-])", HIDDEN, message)
         message = message.replace(value, HIDDEN) if len(value) >= 6 else message
-    return message
+    return message + choose + choices
 
 
 def _json(data: Any) -> str:
@@ -108,6 +129,12 @@ class _Parser(argparse.ArgumentParser):
     such as --s is never taken for --spec."""
 
     argv: list[str] = []
+    flags: set[str] = set()  # every --option any parser made, so an error can tell a flag from a value
+
+    def add_argument(self, *args: Any, **kwargs: Any) -> argparse.Action:
+        action = super().add_argument(*args, **kwargs)
+        _Parser.flags.update(s for s in action.option_strings if s.startswith("--"))
+        return action
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         kwargs.setdefault("allow_abbrev", False)
@@ -197,7 +224,7 @@ def _send(client: Client, args: argparse.Namespace, method: str, path: str, *, q
     if method == "DELETE" and not args.yes:
         raise XoError(f"DELETE {path} needs --yes (or --dry-run to see the request first)")
     if method != "GET":
-        print(f"xo: {method} {spec.clean(client.url(path))}", file=sys.stderr)
+        print(f"xo: {method} {spec.clean(client.scrub(client.url(path)))}", file=sys.stderr)
     resp = client.request(method, path, query=query, body=body, headers=headers)
     _print(client, resp.data, resp.text)
     return 0
@@ -340,6 +367,7 @@ def _endpoints(sub: argparse._SubParsersAction, common: argparse.ArgumentParser,
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     _Parser.argv = argv
+    _Parser.flags = set()
     common = _common()
     parser = _Parser(prog="xo", description=__doc__, parents=[common],
                      formatter_class=argparse.RawDescriptionHelpFormatter)

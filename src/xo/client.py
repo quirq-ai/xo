@@ -11,6 +11,7 @@ import getpass
 import http.client
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.parse
@@ -26,6 +27,7 @@ KEY_ENV = "XO_API_KEY"
 BASE_URL_ENV = "XO_BASE_URL"
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 REDACTED = "<redacted>"
+_KEY_CHARS = re.compile(r"[A-Za-z0-9_.-]+")
 
 
 class XoError(Exception):
@@ -67,9 +69,10 @@ def api_key(flag: str | None = None) -> str:
     if not key:
         raise XoError(f"no API key: set {KEY_ENV} or pass --api-key - to read it from stdin "
                       "(create one in XO Cloud under your account's API keys)")
-    if not (key.isascii() and key.isprintable()) or any(c.isspace() for c in key):
+    # Only characters that no URL, JSON or repr escapes, so redaction always finds the key as sent.
+    if not _KEY_CHARS.fullmatch(key):
         raise XoError(f"{source} holds characters an API key cannot have "
-                      "(spaces, line breaks or non-ASCII); the key is not shown")
+                      "(only letters, digits, _, . and - are allowed); the key is not shown")
     return key
 
 

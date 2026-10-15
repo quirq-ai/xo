@@ -87,8 +87,9 @@ or after the command.
 - The key goes only in the `Authorization: Bearer` header. It is redacted from any response or
   error that echoes it, and tests check it never reaches stdout or stderr, including on argument
   errors and unexpected failures. An argument error never repeats a value you typed, so a
-  mistyped key flag (`--api_key KEY`, `--token=KEY`) stays off the screen. A key with spaces, line breaks or non-ASCII characters is refused
-  without being shown.
+  mistyped key flag (`--api_key KEY`, `--token=KEY`, `--api-keyKEY`) stays off the screen. A key
+  with anything but letters, digits, `_`, `.` and `-` is refused without being shown, so no URL or
+  JSON escaping can hide the key from redaction.
 - xo never follows a redirect, so a redirect cannot carry the key to another host. A redirect to
   XO's sign-in page is reported as "this route does not accept an API key".
 - Plain `http://` is refused except to this machine.
