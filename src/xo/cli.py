@@ -15,6 +15,9 @@
                                             JSON body.
     xo api METHOD PATH [--query NAME=VALUE ...] [--data JSON|@FILE|-] [--field KEY=VALUE ...]
                                             send any request, spec or not.
+    xo serve [--host H] [--port P]          run the xo server that holds the Clerk credentials;
+                                            `xo me` and `xo user-metadata` go to it ($XO_SERVER_URL,
+                                            default https://xo.quirq.dev).
 
 A request that is not a GET changes things on XO, so it prints one line on stderr first; a create
 that stores your API key in the new space says so on a second line. --dry-run prints the request
@@ -43,11 +46,11 @@ from typing import Any, NoReturn
 
 from xo import __version__, commands, spec
 from xo.client import (DEFAULT_TIMEOUT, KEY_ENV, MAYBE_RECEIVED, MIN_SECRET, Client, XoError, api_key,
-                       base_url, redact)
+                       base_url, redact, server_url)
 
-GLOBAL_DEFAULTS = {"api_key": None, "base_url": None, "spec": None, "timeout": DEFAULT_TIMEOUT}
+GLOBAL_DEFAULTS = {"api_key": None, "base_url": None, "server_url": None, "spec": None, "timeout": DEFAULT_TIMEOUT}
 # Global options that take a value, so the word after one is never read as the command.
-_VALUED = {"--api-key", "--base-url", "--spec", "--timeout"}
+_VALUED = {"--api-key", "--base-url", "--server-url", "--spec", "--timeout"}
 HIDDEN = "<hidden>"
 _UNRECOGNIZED = re.compile(r"(unrecognized arguments: )(.*)\Z", re.S)
 _ECHOED = re.compile(r"(invalid choice|invalid [\w ]+ value|ignored explicit argument): ('(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\"|\S+)")
@@ -197,8 +200,9 @@ def _body(args: argparse.Namespace) -> Any:
     return body
 
 
-def _client(args: argparse.Namespace, *, need_key: bool = True) -> Client:
-    """A client for the API; a dry run needs no key."""
+def _client(args: argparse.Namespace, *, need_key: bool = True, op: spec.Operation | None = None) -> Client:
+    """A client for the API, or for an xo server when the operation is one of its routes; a dry run
+    needs no key."""
     readers = [*(["--api-key -"] if args.api_key == "-" else []),
                *(["--data -"] if getattr(args, "data", None) == "-" else []),
                *(f"--{f.flag} -" for f, v in getattr(args, "fields", []) if v == "-" and f.secret)]
@@ -212,7 +216,8 @@ def _client(args: argparse.Namespace, *, need_key: bool = True) -> Client:
             raise
         key = None
     args.resolved_key = key
-    args.client = Client(base_url(args.base_url), key, timeout=args.timeout)
+    base = server_url(args.server_url) if op is not None and op.server else base_url(args.base_url)
+    args.client = Client(base, key, timeout=args.timeout)
     return args.client
 
 
@@ -303,7 +308,7 @@ def _ops(args: argparse.Namespace) -> int:
 
 def _call(args: argparse.Namespace) -> int:
     op = spec.find(spec.load(args.spec), args.operation)
-    client = _client(args, need_key=not args.dry_run)
+    client = _client(args, need_key=not args.dry_run, op=op)
     path, query, headers = spec.build(op, _pairs(args.param, "--param"), label=f"call {op.op_id}")
     body = _body(args)
     if op.body_required and body is None:
@@ -362,11 +367,27 @@ def _unknown_fields(op: spec.Operation, body: dict, args: argparse.Namespace, la
                       + " (xo api sends any body as given)")
 
 
+def _objects(args: argparse.Namespace, body: dict) -> None:
+    """A field the spec types as an object must be one: null, [] or text that is not JSON could
+    wipe or corrupt what the server stores, so refuse it here."""
+    for f in args.flags:
+        if f.where != "body" or f.type != "object":
+            continue
+        node: Any = body
+        for part in f.path:
+            if not isinstance(node, dict) or part not in node:
+                break
+            node = node[part]
+        else:
+            if not isinstance(node, dict):
+                raise XoError(f"--{f.flag} must be a JSON object, like '{{\"plan\": \"pro\"}}'")
+
+
 def _endpoint(args: argparse.Namespace) -> int:
     op = args.op
     label = " ".join([args.command, *([args.action] if getattr(args, "action", None) else [])])
     params, args.fields = commands.values(args)
-    client = _client(args, need_key=not args.dry_run)
+    client = _client(args, need_key=not args.dry_run, op=op)
     path, query, headers = spec.build(op, params, lambda n: commands.flag_for(args, n), label=label)
     body = _body(args)
     if isinstance(body, dict):
@@ -389,7 +410,14 @@ def _endpoint(args: argparse.Namespace) -> int:
         missing = [name for name in op.required_fields if name not in body]
         if missing:
             raise XoError(f"{label} needs " + ", ".join(commands.flag_for(args, n, body=True) for n in missing))
+        _objects(args, body)
     return _send(client, args, op.method, path, query=query, body=body, headers=headers, op=op)
+
+
+def _serve(args: argparse.Namespace) -> int:
+    from xo import server  # imported only here: the CLI never loads server code
+
+    return server.serve(args.host, args.port)
 
 
 def _add_send(p: argparse.ArgumentParser) -> None:
@@ -410,6 +438,9 @@ def _common() -> argparse.ArgumentParser:
                    help="the XO API key; - reads it from stdin (default $XO_API_KEY, which is safer)")
     c.add_argument("--base-url", default=argparse.SUPPRESS,
                    help="the API base (default $XO_BASE_URL or https://app.xo.builders/api/core/v1)")
+    c.add_argument("--server-url", default=argparse.SUPPRESS,
+                   help="an xo server's base, for `xo me` and `xo user-metadata` "
+                        "(default $XO_SERVER_URL or https://xo.quirq.dev)")
     c.add_argument("--spec", default=argparse.SUPPRESS, metavar="FILE",
                    help="an OpenAPI JSON file (default $XO_SPEC, then the one bundled with xo)")
     c.add_argument("--timeout", type=float, default=argparse.SUPPRESS, help="seconds per request (default 30)")
@@ -495,6 +526,11 @@ def main(argv: list[str] | None = None) -> int:
     _add_send(a)
     a.add_argument("--yes", action="store_true", help="needed to send a DELETE")
     a.set_defaults(run=_api)
+
+    s = sub.add_parser("serve", help="run the xo server that holds the Clerk credentials (see docs/server.md)")
+    s.add_argument("--host", default="127.0.0.1", help="address to listen on (default 127.0.0.1)")
+    s.add_argument("--port", type=int, default=8787, help="port to listen on (default 8787)")
+    s.set_defaults(run=_serve)
 
     _endpoints(sub, common, argv)
 

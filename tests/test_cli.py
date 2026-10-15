@@ -175,13 +175,25 @@ def test_api_key_from_stdin(fake, capsys, monkeypatch):
 
 
 @pytest.mark.parametrize("bad", [f"{KEY}\nX-Evil: 1", f"{KEY}\rX", "ak_with space", "ak_ünicode",
-                                 "ak_FAKE+r4/enc=0123456789", 'ak_"quote\\0123456789'])
+                                 "ak_FAKE%r4enc0123456789", 'ak_"quote\\0123456789'])
 def test_a_key_with_bad_characters_is_refused_unechoed(fake, capsys, monkeypatch, bad):
     monkeypatch.setenv("XO_API_KEY", bad)
     code, out, err = run(capsys, "call", "health")
     assert code == 1 and "characters an API key cannot have" in err
     assert bad.strip() not in out + err and "Traceback" not in err
     assert fake.requests == []
+
+
+def test_a_base64_key_is_sent_and_redacted_in_every_echoed_form(fake, capsys, monkeypatch):
+    import urllib.parse
+    key = "ak_FAKE+r4/enc=0123456789"  # the shape of Clerk's own test key, with + / and =
+    monkeypatch.setenv("XO_API_KEY", key)
+    echoes = [key, urllib.parse.quote(key, safe=""), urllib.parse.quote_plus(key), key.replace("/", "\\/")]
+    fake.route("GET", "/health", status=500, body=" ".join(echoes))
+    code, out, err = run(capsys, "call", "health")
+    assert code == 1 and fake.requests[0]["headers"]["Authorization"] == f"Bearer {key}"
+    assert err.count("<redacted>") == 4
+    assert not any(e in out + err for e in echoes) and "FAKE" not in out + err
 
 
 def test_redaction_survives_truncation_and_json_escapes(fake, capsys):
@@ -653,7 +665,7 @@ def test_every_core_endpoint_is_a_command(core, capsys):
         cli.main(["--help"])
     out = capsys.readouterr().out
     for name in ("claude-code", "codex", "antigravity", "hermes", "openclaw", "xo-cowork",
-                 "nebius-openclaw", "spaces"):
+                 "nebius-openclaw", "spaces", "me", "user-metadata"):
         assert f"\n    {name}" in out
 
 
@@ -839,11 +851,15 @@ def test_a_secret_flag_reads_dash_from_stdin(core, capsys, monkeypatch):
 
 
 def test_a_create_that_times_out_may_have_happened(core, capsys):
+    import threading
     import time
-    core.route("POST", "/api/core/v1/codex", status=201, body=lambda req: time.sleep(1.5) or {})
+    done = threading.Event()
+    core.route("POST", "/api/core/v1/codex", status=201,
+               body=lambda req: time.sleep(1.5) or done.set() or {})
     err = run(capsys, "--timeout", "0.3", "codex", "--name", "c", "--volume-size", "20")[2]
     assert "the request may have been received, so check before you retry" in err
     assert len(core.requests) == 1
+    assert done.wait(5)  # the slow handler finishes inside this test, not during a later one
 
 
 def test_an_interrupted_create_may_have_happened(core, capsys, monkeypatch):
@@ -907,3 +923,87 @@ def test_only_near_misses_of_a_flag_are_shown(core, capsys):  # R5-N1, R5-N3
     assert long_word not in err and "--<hidden>" in err
     err = _argparse_err(capsys, "openclaw", "--providers_anthropic_api_key", ANTHROPIC)
     assert "--providers_anthropic_api_key <hidden>" in err and ANTHROPIC not in err
+
+
+# --- xo server routes (xo serve): me and user-metadata -------------------------------------------
+
+@pytest.fixture
+def xs(core, monkeypatch):
+    """The fake API standing in for an xo server under /xo."""
+    monkeypatch.setenv("XO_SERVER_URL", core.base + "/xo")
+    return core
+
+
+def test_me_goes_to_the_xo_server(xs, capsys):
+    xs.route("GET", "/xo/me", body={"success": True, "data": {"id": "user_1", "username": "sam"}})
+    code, out, _ = run(capsys, "me")
+    assert code == 0 and json.loads(out)["data"]["username"] == "sam"
+    assert xs.requests[0]["headers"]["Authorization"] == f"Bearer {KEY}"
+
+
+def test_server_commands_default_to_xo_quirq_dev(core, capsys, monkeypatch):
+    monkeypatch.delenv("XO_SERVER_URL", raising=False)
+    code, out, _ = run(capsys, "me", "--dry-run")
+    assert code == 0 and json.loads(out)["url"] == "https://xo.quirq.dev/me"
+    assert core.requests == []
+
+
+def test_the_server_url_must_be_https(core, capsys, monkeypatch):
+    monkeypatch.setenv("XO_SERVER_URL", "http://xo-server.example")
+    code, _, err = run(capsys, "me")
+    assert code == 1 and core.requests == []
+    assert err == "xo: XO_SERVER_URL must be https:// (or http:// to localhost)\n"
+    code, _, err = run(capsys, "me", "--server-url", "http://10.1.1.1")
+    assert code == 1 and err == "xo: --server-url must be https:// (or http:// to localhost)\n"
+
+
+def test_core_commands_ignore_the_server_url(xs, capsys):
+    xs.route("GET", "/api/core/v1/spaces/s1", body={"success": True, "data": {}})
+    assert run(capsys, "spaces", "--space-id", "s1")[0] == 0
+    assert xs.requests[0]["path"] == "/api/core/v1/spaces/s1"
+
+
+def test_user_metadata_get(xs, capsys):
+    xs.route("GET", "/xo/user-metadata/user_1",
+             body={"success": True, "data": {"publicMetadata": {"plan": "pro"}, "privateMetadata": {}}})
+    code, out, _ = run(capsys, "user-metadata", "get", "--user-id", "user_1")
+    assert code == 0 and json.loads(out)["data"]["publicMetadata"] == {"plan": "pro"}
+
+
+def test_user_metadata_update_sends_both_buckets_as_json(xs, capsys):
+    xs.route("PATCH", "/xo/user-metadata/user_1", body={"success": True, "data": {}})
+    code, _, err = run(capsys, "user-metadata", "update", "--user-id", "user_1",
+                       "--public-metadata", '{"plan": "pro", "beta": null}',
+                       "--private-metadata", '{"stripeId": "cus_1"}')
+    assert code == 0
+    assert err == f"xo: PATCH {xs.base}/xo/user-metadata/user_1\n"
+    assert xs.requests[0]["body"] == {"publicMetadata": {"plan": "pro", "beta": None},
+                                      "privateMetadata": {"stripeId": "cus_1"}}
+
+
+def test_user_metadata_update_dry_run_sends_nothing(xs, capsys):
+    code, out, _ = run(capsys, "user-metadata", "update", "--user-id", "user_1",
+                       "--private-metadata", '{"stripeId": "cus_1"}', "--dry-run")
+    assert code == 0 and json.loads(out)["body"] == {"privateMetadata": {"stripeId": "cus_1"}}
+    assert json.loads(out)["url"] == f"{xs.base}/xo/user-metadata/user_1"
+    assert xs.requests == []
+
+
+@pytest.mark.parametrize("value", ["{plan: pro}", "null", "[]", '"pro"', "3"])
+def test_user_metadata_update_refuses_a_bucket_that_is_not_an_object(xs, capsys, value):  # B-SF1
+    code, _, err = run(capsys, "user-metadata", "update", "--user-id", "user_1", "--public-metadata", value)
+    assert code != 0 and xs.requests == []
+    assert err == "xo: --public-metadata must be a JSON object, like '{\"plan\": \"pro\"}'\n"
+
+
+def test_user_metadata_update_refuses_a_non_object_bucket_in_data(xs, capsys):  # B-SF1
+    code, _, err = run(capsys, "user-metadata", "update", "--user-id", "user_1",
+                       "--data", '{"privateMetadata": null}')
+    assert code != 0 and xs.requests == []
+    assert "--private-metadata must be a JSON object" in err
+
+
+def test_an_empty_path_parameter_is_refused(xs, capsys):  # B-N4
+    code, _, err = run(capsys, "user-metadata", "get", "--user-id", "")
+    assert code != 0 and xs.requests == []
+    assert err == "xo: --user-id can't be empty\n"

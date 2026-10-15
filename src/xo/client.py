@@ -22,15 +22,19 @@ from typing import Any
 from xo import __version__
 
 DEFAULT_BASE_URL = "https://app.xo.builders/api/core/v1"
+DEFAULT_SERVER_URL = "https://xo.quirq.dev"
 DEFAULT_TIMEOUT = 30.0
 KEY_ENV = "XO_API_KEY"
 BASE_URL_ENV = "XO_BASE_URL"
+SERVER_URL_ENV = "XO_SERVER_URL"
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 REDACTED = "<redacted>"
 # A secret shorter than this is not looked for in text: replacing it would garble the message.
 MIN_SECRET = 4
 MAYBE_RECEIVED = "the request may have been received, so check before you retry"
-_KEY_CHARS = re.compile(r"[A-Za-z0-9_.-]+")
+# What an API key may hold: letters, digits, _ . - and base64's + / = (Clerk's own test key has / and
+# =). The server's check (server.API_KEY) uses the same characters.
+KEY_CHARS = re.compile(r"[A-Za-z0-9_.+/=-]+")
 
 
 class XoError(Exception):
@@ -47,6 +51,16 @@ class Response:
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D102
         raise urllib.error.HTTPError(req.full_url, code, msg, headers, fp)
+
+
+def server_url(flag: str | None = None) -> str:
+    """The base of an xo server (`xo serve`), for the routes that need Clerk."""
+    url = (flag or os.environ.get(SERVER_URL_ENV) or DEFAULT_SERVER_URL).rstrip("/")
+    try:
+        return base_url(url)
+    except XoError:
+        source = "--server-url" if flag else SERVER_URL_ENV
+        raise XoError(f"{source} must be https:// (or http:// to localhost)") from None
 
 
 def base_url(flag: str | None = None) -> str:
@@ -72,10 +86,11 @@ def api_key(flag: str | None = None) -> str:
     if not key:
         raise XoError(f"no API key: set {KEY_ENV} or pass --api-key - to read it from stdin "
                       "(get a key from the XO team)")
-    # Only characters that no URL, JSON or repr escapes, so redaction always finds the key as sent.
-    if not _KEY_CHARS.fullmatch(key):
+    # Only characters that JSON and repr never escape, so redaction finds the key as sent; redact()
+    # also looks for the forms a URL or an escaping JSON writer would give + / and =.
+    if not KEY_CHARS.fullmatch(key):
         raise XoError(f"{source} holds characters an API key cannot have "
-                      "(only letters, digits, _, . and - are allowed); the key is not shown")
+                      "(only letters, digits and _ . - + / = are allowed); the key is not shown")
     return key
 
 
@@ -84,12 +99,20 @@ def redact(value: Any, key: str | None) -> Any:
     if not key:
         return value
     if isinstance(value, str):
-        return value.replace(key, REDACTED)
+        for form in _forms(key):
+            value = value.replace(form, REDACTED)
+        return value
     if isinstance(value, list):
         return [redact(v, key) for v in value]
     if isinstance(value, dict):
         return {redact(k, key): redact(v, key) for k, v in value.items()}
     return value
+
+
+def _forms(key: str) -> list[str]:
+    """`key` as sent, and as a URL or a JSON writer that escapes / might show it; longest first."""
+    forms = {key, urllib.parse.quote(key, safe=""), urllib.parse.quote_plus(key), key.replace("/", "\\/")}
+    return sorted(forms, key=len, reverse=True)
 
 
 def _one_line(value: Any) -> str:

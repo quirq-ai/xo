@@ -43,6 +43,8 @@ xo spaces --space-id 6f1c2c1e-...   # connection URLs for a space you own
 | `xo xo-cowork` | `POST /xo-cowork` | name, volume size; providers; channels |
 | `xo nebius-openclaw` | `POST /nebius-openclaw` | name, Token Factory key, Telegram token (feature flagged) |
 | `xo spaces` | `GET /spaces/{spaceId}` | none |
+| `xo me` | `GET /me` on your xo server | none |
+| `xo user-metadata get` / `update` | `GET` / `PATCH /user-metadata/{userId}` on your xo server | publicMetadata, privateMetadata as JSON objects (admin keys only); try `--dry-run` first: a wrong `--user-id` edits another user |
 
 Each create prints the new space, `data.id` included. Keep that id: the API has no list, delete,
 start or stop endpoint, and `xo spaces --space-id ID` is the only way back to a space.
@@ -74,6 +76,14 @@ Things to know:
   the space without that setting; `xo api` sends any body as given.
 - If a create times out or is interrupted, the server may still have made the space: check before
   you retry.
+
+## Server mode
+
+`xo me` and `xo user-metadata` read your Clerk account, which needs Clerk's Secret Key. That key
+never goes on a user's machine: the same package runs as a server, `xo serve`, on one deployment
+that holds it, and the commands go there (`https://xo.quirq.dev`, or `XO_SERVER_URL`). Until that
+deployment holds XO's production Clerk key, it answers 401 to real XO keys. See
+[docs/server.md](docs/server.md) and, to deploy it, [docs/deploy-vercel.md](docs/deploy-vercel.md).
 
 ## How commands are named
 
@@ -115,6 +125,7 @@ Responses print as JSON on stdout. Any problem exits 1 with one line on stderr.
 |---|---|---|---|
 | API key | `XO_API_KEY` | `--api-key -` (asks without echo on a terminal, else reads one line from stdin) | none; required for every call but a dry run |
 | API base | `XO_BASE_URL` | `--base-url` | `https://app.xo.builders/api/core/v1` |
+| xo server | `XO_SERVER_URL` | `--server-url` | `https://xo.quirq.dev`; used only by `xo me` and `xo user-metadata` |
 | Spec | `XO_SPEC` | `--spec` | the copy bundled with xo |
 
 `--api-key KEY` also works, but the key then lands in your shell history and in the process list
@@ -128,8 +139,8 @@ or after the command.
   error that echoes it, and tests check it never reaches stdout or stderr, including on argument
   errors and unexpected failures. An argument error never repeats a value you typed, so a
   mistyped key flag (`--api_key KEY`, `--token=KEY`, `--api-keyKEY`) stays off the screen. A key
-  with anything but letters, digits, `_`, `.` and `-` is refused without being shown, so no URL or
-  JSON escaping can hide the key from redaction.
+  with anything but letters, digits and `_ . - + / =` is refused without being shown, and the key
+  is also redacted in the forms URL or JSON escaping gives `+ / =`.
 - xo never follows a redirect, so a redirect cannot carry the key to another host. A redirect to
   XO's sign-in page is reported as "this route does not accept an API key".
 - Plain `http://` is refused except to this machine.
