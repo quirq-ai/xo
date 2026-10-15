@@ -22,6 +22,7 @@ from typing import Any
 from xo import __version__
 
 DEFAULT_BASE_URL = "https://app.xo.builders/api/core/v1"
+DEFAULT_SERVER_URL = "https://xo.quirq.dev"
 DEFAULT_TIMEOUT = 30.0
 KEY_ENV = "XO_API_KEY"
 BASE_URL_ENV = "XO_BASE_URL"
@@ -51,11 +52,8 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def server_url(flag: str | None = None) -> str:
-    """The base of an xo server (`xo serve`), for the routes that need Clerk; it has no default."""
-    url = flag or os.environ.get(SERVER_URL_ENV)
-    if not url:
-        raise XoError(f"this command goes to an xo server: set {SERVER_URL_ENV} (or pass --server-url) "
-                      "to the URL of one running `xo serve`")
+    """The base of an xo server (`xo serve`), for the routes that need Clerk."""
+    url = (flag or os.environ.get(SERVER_URL_ENV) or DEFAULT_SERVER_URL).rstrip("/")
     try:
         return base_url(url)
     except XoError:

@@ -31,11 +31,13 @@ Configuration (environment only, so the secret never lands in shell history or t
     CLERK_API_URL             default https://api.clerk.com (tests point it at a fake)
 
 It listens on 127.0.0.1 by default: put it behind an HTTPS proxy before giving it any other host.
+On Vercel, the repo's root app.py serves the same routes through `wsgi_app()` (docs/deploy-vercel.md).
 """
 from __future__ import annotations
 
 import collections
 import hashlib
+import http
 import http.client
 import json
 import os
@@ -399,6 +401,52 @@ class _Server(ThreadingHTTPServer):
             super().process_request_thread(request, client_address)
         finally:
             self._slots.release()
+
+
+def wsgi_app(make_app=None):
+    """The same server as a WSGI app, for hosts that run Python functions (Vercel's root app.py).
+
+    The App is built on the first request, so a missing or bad setting answers 503 and says why on
+    stderr, instead of failing the import.
+    """
+    state: dict[str, Any] = {}
+    lock = threading.Lock()
+
+    def application(environ, start_response):
+        with lock:
+            if "app" not in state and "error" not in state:
+                try:
+                    state["app"] = (make_app or (lambda: App(Config())))()
+                except XoError as e:
+                    state["error"] = str(e)
+        if "error" in state:
+            print(f"xo serve: {state['error']}", file=sys.stderr, flush=True)
+            return _wsgi_reply(start_response, 503, {"success": False, "error": MISCONFIGURED})
+        app: App = state["app"]
+        method = environ.get("REQUEST_METHOD", "GET")
+        path = environ.get("PATH_INFO") or "/"
+        if environ.get("QUERY_STRING"):
+            path += "?" + environ["QUERY_STRING"]
+        headers = {k[5:].replace("_", "-").lower(): v for k, v in environ.items() if k.startswith("HTTP_")}
+        body = None
+        length = environ.get("CONTENT_LENGTH") or ""
+        if length:
+            size = int(length) if length.isdigit() else -1
+            if size < 0 or size > MAX_BODY:
+                app.refused(method, path, 413)
+                return _wsgi_reply(start_response, 413, {"success": False, "error": f"Body over {MAX_BODY} bytes"})
+            body = environ["wsgi.input"].read(size)
+        status, payload = app.handle(method, path, headers, body)
+        return _wsgi_reply(start_response, status, payload)
+
+    return application
+
+
+def _wsgi_reply(start_response, status: int, payload: dict) -> list[bytes]:
+    data = json.dumps(payload).encode()
+    start_response(f"{status} {http.HTTPStatus(status).phrase}", [
+        ("Content-Type", "application/json"), ("Content-Length", str(len(data))), ("Cache-Control", "no-store")])
+    return [data]
 
 
 def make_server(app: App, host: str, port: int) -> ThreadingHTTPServer:

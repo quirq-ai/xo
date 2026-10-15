@@ -16,7 +16,8 @@
     xo api METHOD PATH [--query NAME=VALUE ...] [--data JSON|@FILE|-] [--field KEY=VALUE ...]
                                             send any request, spec or not.
     xo serve [--host H] [--port P]          run the xo server that holds the Clerk credentials;
-                                            `xo me` and `xo user-metadata` go to it ($XO_SERVER_URL).
+                                            `xo me` and `xo user-metadata` go to it ($XO_SERVER_URL,
+                                            default https://xo.quirq.dev).
 
 A request that is not a GET changes things on XO, so it prints one line on stderr first; a create
 that stores your API key in the new space says so on a second line. --dry-run prints the request
@@ -438,7 +439,8 @@ def _common() -> argparse.ArgumentParser:
     c.add_argument("--base-url", default=argparse.SUPPRESS,
                    help="the API base (default $XO_BASE_URL or https://app.xo.builders/api/core/v1)")
     c.add_argument("--server-url", default=argparse.SUPPRESS,
-                   help="an xo server's base, for `xo me` and `xo user-metadata` (default $XO_SERVER_URL)")
+                   help="an xo server's base, for `xo me` and `xo user-metadata` "
+                        "(default $XO_SERVER_URL or https://xo.quirq.dev)")
     c.add_argument("--spec", default=argparse.SUPPRESS, metavar="FILE",
                    help="an OpenAPI JSON file (default $XO_SPEC, then the one bundled with xo)")
     c.add_argument("--timeout", type=float, default=argparse.SUPPRESS, help="seconds per request (default 30)")

@@ -5,6 +5,8 @@ Read `README.md` first.
 - Every change is a pull request against `main`. It lands only with the `presubmit` check green.
 - `src/xo/client.py` is the only CLI code that talks to the network, and `Clerk` in
   `src/xo/server.py` the only server code. Keep it that way.
+- The server runs on Vercel (`xo.quirq.dev`) through the root `app.py`; keep it a thin wrapper of
+  `xo.server.wsgi_app()`, and keep `docs/deploy-vercel.md` true.
 - `CLERK_SECRET_KEY` lives only in the `xo serve` deployment's environment. Never print, log or
   return it; tests assert it never reaches output or the audit log.
 - The API key is a secret. Never print, log, commit or write it to a file; tests assert it never

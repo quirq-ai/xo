@@ -81,7 +81,8 @@ Things to know:
 
 `xo me` and `xo user-metadata` read your Clerk account, which needs Clerk's Secret Key. That key
 never goes on a user's machine: the same package runs as a server, `xo serve`, on one deployment
-that holds it, and the commands go there (`XO_SERVER_URL`). See [docs/server.md](docs/server.md).
+that holds it, and the commands go there (`https://xo.quirq.dev`, or `XO_SERVER_URL`). See
+[docs/server.md](docs/server.md) and, to deploy it, [docs/deploy-vercel.md](docs/deploy-vercel.md).
 
 ## How commands are named
 
@@ -123,7 +124,7 @@ Responses print as JSON on stdout. Any problem exits 1 with one line on stderr.
 |---|---|---|---|
 | API key | `XO_API_KEY` | `--api-key -` (asks without echo on a terminal, else reads one line from stdin) | none; required for every call but a dry run |
 | API base | `XO_BASE_URL` | `--base-url` | `https://app.xo.builders/api/core/v1` |
-| xo server | `XO_SERVER_URL` | `--server-url` | none; needed only for `xo me` and `xo user-metadata` |
+| xo server | `XO_SERVER_URL` | `--server-url` | `https://xo.quirq.dev`; used only by `xo me` and `xo user-metadata` |
 | Spec | `XO_SPEC` | `--spec` | the copy bundled with xo |
 
 `--api-key KEY` also works, but the key then lands in your shell history and in the process list

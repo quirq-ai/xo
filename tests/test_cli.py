@@ -929,11 +929,11 @@ def test_me_goes_to_the_xo_server(xs, capsys):
     assert xs.requests[0]["headers"]["Authorization"] == f"Bearer {KEY}"
 
 
-def test_server_commands_need_a_server_url(core, capsys, monkeypatch):
+def test_server_commands_default_to_xo_quirq_dev(core, capsys, monkeypatch):
     monkeypatch.delenv("XO_SERVER_URL", raising=False)
-    code, _, err = run(capsys, "me")
-    assert code == 1 and core.requests == []
-    assert "set XO_SERVER_URL (or pass --server-url)" in err
+    code, out, _ = run(capsys, "me", "--dry-run")
+    assert code == 0 and json.loads(out)["url"] == "https://xo.quirq.dev/me"
+    assert core.requests == []
 
 
 def test_the_server_url_must_be_https(core, capsys, monkeypatch):

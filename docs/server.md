@@ -6,8 +6,8 @@ One package, two deployments:
 - **The server**, `xo serve`, runs once, on a machine XO controls, with Clerk's Secret Key. It is
   the only place that key exists.
 
-`xo me` and `xo user-metadata` go to the server (`XO_SERVER_URL`). Every other command still goes
-to the core API at app.xo.builders, as before.
+`xo me` and `xo user-metadata` go to the server (`https://xo.quirq.dev`, or `XO_SERVER_URL`).
+Every other command still goes to the core API at app.xo.builders, as before.
 
 ```
 xo me ──────────────┐                      ┌── POST /v1/api_keys/verify
@@ -99,7 +99,9 @@ the command line. Never bake it into the image (`ARG` or `ENV`) or a file in it.
 - **Keep the audit lines.** They go to stderr, which a container loses on restart: ship stderr to
   the platform's log store and keep it as long as you would keep an access log.
 
-TODO(suraj): where the server is deployed, and its public URL for `XO_SERVER_URL`.
+The production server runs on Vercel at `https://xo.quirq.dev`: see
+[deploy-vercel.md](deploy-vercel.md). There, Vercel is the HTTPS proxy, and the limits in this
+process apply per function instance, so the per-address limit is a Vercel Firewall rule.
 
 ## Guards
 
@@ -123,18 +125,15 @@ TODO(suraj): where the server is deployed, and its public URL for `XO_SERVER_URL
 
 ## The admin key
 
-An admin key is minted by whoever holds the Secret Key, for example with Clerk's backend SDK:
+No admin key is issued yet, and nothing in this repo makes one. Until a key has the claim
+`xo_admin: true` and its id is in `XO_ADMIN_KEY_IDS`, `/user-metadata` answers 403 to everyone,
+and only `/me` is in use.
 
-```ts
-clerkClient.apiKeys.create({ subject: "<your user id>", name: "xo admin", createdBy: "<your user id>",
-  secondsUntilExpiration: 7776000, claims: { issued_by: "xo", xo_admin: true } })
-```
+When admin keys come, keep each one apart from the everyday `XO_API_KEY` (every create on
+app.xo.builders copies the caller's key into the new space), give it a 90-day expiry, and pass it to
+`xo user-metadata` with `--api-key -`.
 
-Then add its id to `XO_ADMIN_KEY_IDS`. Keep it separate from your everyday `XO_API_KEY` (every
-create copies the caller's key into the new space): give it only to `xo user-metadata`, with
-`--api-key -`. It expires after 90 days; revoke it at once if it leaks.
-
-TODO(suraj): who mints the admin key, and whether creates on app.xo.builders should refuse it.
+TODO(suraj): how admin keys are issued, and whether creates on app.xo.builders should refuse them.
 
 Before relying on admin keys, check once on a Clerk development instance that a key a user makes
 for themselves, with `claims` added to the request by hand, comes back with `claims: null`.

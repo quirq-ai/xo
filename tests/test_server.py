@@ -415,3 +415,47 @@ def test_the_startup_line_never_shows_the_secret(clerk, monkeypatch, capfd):  # 
     assert server.serve("0.0.0.0", 8787) == 0
     err = capfd.readouterr().err
     assert "listening on" in err and "behind HTTPS" in err and SECRET not in err
+
+
+# --- Vercel: the same server as a WSGI app (root app.py) -----------------------------------------
+
+def wsgi_call(application, method: str, path: str, key: str | None = None, body: bytes | None = None):
+    import io
+    environ = {"REQUEST_METHOD": method, "PATH_INFO": path, "QUERY_STRING": "",
+               "wsgi.input": io.BytesIO(body or b""), "CONTENT_LENGTH": str(len(body)) if body else ""}
+    if key:
+        environ["HTTP_AUTHORIZATION"] = f"Bearer {key}"
+    seen = {}
+
+    def start_response(status, headers):
+        seen["status"], seen["headers"] = status, dict(headers)
+    out = b"".join(application(environ, start_response))
+    return int(seen["status"].split()[0]), json.loads(out), seen["headers"]
+
+
+def test_wsgi_serves_the_same_routes(clerk, capfd):
+    application = server.wsgi_app()
+    assert wsgi_call(application, "GET", "/healthz")[:2] == (200, {"success": True, "data": {"status": "ok"}})
+    status, out, headers = wsgi_call(application, "GET", "/me", USER_KEY)
+    assert status == 200 and out["data"]["username"] == "alice"
+    assert headers["Cache-Control"] == "no-store"
+    assert wsgi_call(application, "GET", "/user-metadata/user_alice", USER_KEY)[0] == 403
+    assert wsgi_call(application, "PATCH", "/user-metadata/user_alice", ADMIN_KEY,
+                     body=b" " * (server.MAX_BODY + 1))[0] == 413
+    _no_secret(*capfd.readouterr())
+
+
+def test_wsgi_without_the_secret_answers_503_and_says_why(monkeypatch, capfd):
+    monkeypatch.delenv("CLERK_SECRET_KEY", raising=False)
+    application = server.wsgi_app()  # building the app must not fail the import
+    status, out, _ = wsgi_call(application, "GET", "/healthz")
+    assert (status, out["error"]) == (503, server.MISCONFIGURED)
+    assert "xo serve needs CLERK_SECRET_KEY" in capfd.readouterr().err
+
+
+def test_vercel_entrypoint_exposes_a_wsgi_app(monkeypatch):
+    import pathlib
+    import runpy
+    monkeypatch.delenv("CLERK_SECRET_KEY", raising=False)
+    module = runpy.run_path(str(pathlib.Path(__file__).resolve().parent.parent / "app.py"))
+    assert callable(module["app"])
