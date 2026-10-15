@@ -20,7 +20,7 @@ For a step-by-step setup on your own Mac or Linux machine, see [docs/quickstart.
 ## Commands
 
 ```sh
-export XO_API_KEY=ak_...        # your XO API key; never printed
+export XO_API_KEY=ak_...        # an XO API key, from the XO team; never printed
 
 xo --help                       # every command
 xo openclaw --help              # the flags one command takes

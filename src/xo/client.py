@@ -70,7 +70,8 @@ def api_key(flag: str | None = None) -> str:
     else:
         source, key = KEY_ENV, (os.environ.get(KEY_ENV) or "").strip()
     if not key:
-        raise XoError(f"no API key: set {KEY_ENV} or pass --api-key - to read it from stdin")
+        raise XoError(f"no API key: set {KEY_ENV} or pass --api-key - to read it from stdin "
+                      "(get a key from the XO team)")
     # Only characters that no URL, JSON or repr escapes, so redaction always finds the key as sent.
     if not _KEY_CHARS.fullmatch(key):
         raise XoError(f"{source} holds characters an API key cannot have "

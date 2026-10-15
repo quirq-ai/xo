@@ -6,7 +6,7 @@ You need:
 - Python 3.11 or newer. Check with `python3 --version`. Stock macOS ships Python 3.9, which is too old: install 3.11 or newer from python.org, or run `brew install python@3.13` and use `python3.13` in place of `python3` below.
 - git. On a Mac, `xcode-select --install` provides it.
 - On Debian or Ubuntu, the venv module: `sudo apt install python3-venv`.
-- An XO API key. Each user needs their own key.
+- An XO API key from the XO team. Each user needs their own key.
 
 ## 1. Install (once)
 
