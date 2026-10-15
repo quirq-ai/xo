@@ -43,7 +43,7 @@ import sys
 from pathlib import Path
 from typing import Any, NoReturn
 
-from xo import __version__, commands, server, spec
+from xo import __version__, commands, spec
 from xo.client import (DEFAULT_TIMEOUT, KEY_ENV, MAYBE_RECEIVED, MIN_SECRET, Client, XoError, api_key,
                        base_url, redact, server_url)
 
@@ -413,6 +413,12 @@ def _endpoint(args: argparse.Namespace) -> int:
     return _send(client, args, op.method, path, query=query, body=body, headers=headers, op=op)
 
 
+def _serve(args: argparse.Namespace) -> int:
+    from xo import server  # imported only here: the CLI never loads server code
+
+    return server.serve(args.host, args.port)
+
+
 def _add_send(p: argparse.ArgumentParser) -> None:
     p.add_argument("--data", metavar="JSON|@FILE|-", help="the JSON body, inline, from a file, or stdin")
     p.add_argument("--field", action="append", metavar="KEY=VALUE",
@@ -522,7 +528,7 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("serve", help="run the xo server that holds the Clerk credentials (see docs/server.md)")
     s.add_argument("--host", default="127.0.0.1", help="address to listen on (default 127.0.0.1)")
     s.add_argument("--port", type=int, default=8787, help="port to listen on (default 8787)")
-    s.set_defaults(run=lambda a: server.serve(a.host, a.port))
+    s.set_defaults(run=_serve)
 
     _endpoints(sub, common, argv)
 

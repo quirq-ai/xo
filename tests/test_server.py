@@ -284,3 +284,10 @@ def test_the_cli_and_the_server_work_together(xo_server, monkeypatch, capfd):
     monkeypatch.setenv("XO_API_KEY", USER_KEY)
     assert cli.main(["me"]) == 0
     assert json.loads(capfd.readouterr().out)["data"]["username"] == "alice"
+
+
+def test_client_mode_never_loads_the_server():
+    import subprocess
+    import sys
+    code = "import sys, xo.cli; xo.cli.main(['ops']); sys.exit('xo.server' in sys.modules)"
+    assert subprocess.run([sys.executable, "-c", code], capture_output=True).returncode == 0
