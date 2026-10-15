@@ -7,6 +7,7 @@ refuses plain http except to this machine.
 """
 from __future__ import annotations
 
+import functools
 import getpass
 import http.client
 import json
@@ -87,7 +88,7 @@ def api_key(flag: str | None = None) -> str:
         raise XoError(f"no API key: set {KEY_ENV} or pass --api-key - to read it from stdin "
                       "(get a key from the XO team)")
     # Only characters that JSON and repr never escape, so redaction finds the key as sent; redact()
-    # also looks for the forms a URL or an escaping JSON writer would give + / and =.
+    # also looks for the forms a URL, an escaping JSON writer or an HTML writer would give + / and =.
     if not KEY_CHARS.fullmatch(key):
         raise XoError(f"{source} holds characters an API key cannot have "
                       "(only letters, digits and _ . - + / = are allowed); the key is not shown")
@@ -99,9 +100,7 @@ def redact(value: Any, key: str | None) -> Any:
     if not key:
         return value
     if isinstance(value, str):
-        for form in _forms(key):
-            value = value.replace(form, REDACTED)
-        return value
+        return _pattern(key).sub(lambda _: REDACTED, value)
     if isinstance(value, list):
         return [redact(v, key) for v in value]
     if isinstance(value, dict):
@@ -109,10 +108,23 @@ def redact(value: Any, key: str | None) -> Any:
     return value
 
 
-def _forms(key: str) -> list[str]:
-    """`key` as sent, and as a URL or a JSON writer that escapes / might show it; longest first."""
-    forms = {key, urllib.parse.quote(key, safe=""), urllib.parse.quote_plus(key), key.replace("/", "\\/")}
-    return sorted(forms, key=len, reverse=True)
+@functools.lru_cache(maxsize=32)
+def _pattern(key: str) -> re.Pattern[str]:
+    """`key` as sent, or as a URL, a JSON writer or an HTML writer might show it, in any mix.
+
+    Each character a URL may escape matches itself or its %XX form in either case (a space also as
+    +), and / also matches JSON's \\/ and HTML's &#x2F; and &#47;.
+    """
+    parts = []
+    for c in key:
+        if c.isascii() and (c.isalnum() or c in "_.-~"):
+            parts.append(re.escape(c))
+            continue
+        hexed = "".join(f"%{b:02X}" for b in c.encode())
+        forms = {c, hexed, hexed.lower(), *(("+",) if c == " " else ()),
+                 *(("\\/", "&#x2F;", "&#x2f;", "&#47;") if c == "/" else ())}
+        parts.append("(?:" + "|".join(re.escape(f) for f in sorted(forms, key=len, reverse=True)) + ")")
+    return re.compile("".join(parts))
 
 
 def _one_line(value: Any) -> str:

@@ -188,11 +188,13 @@ def test_a_base64_key_is_sent_and_redacted_in_every_echoed_form(fake, capsys, mo
     import urllib.parse
     key = "ak_FAKE+r4/enc=0123456789"  # the shape of Clerk's own test key, with + / and =
     monkeypatch.setenv("XO_API_KEY", key)
-    echoes = [key, urllib.parse.quote(key, safe=""), urllib.parse.quote_plus(key), key.replace("/", "\\/")]
+    echoes = [key, urllib.parse.quote(key, safe=""), urllib.parse.quote_plus(key), key.replace("/", "\\/"),
+              urllib.parse.quote(key), "ak_FAKE%2br4%2fenc%3d0123456789", "ak_FAKE+r4%2fenc%3d0123456789",
+              "ak_FAKE+r4&#x2F;enc=0123456789", "ak_FAKE+r4&#47;enc=0123456789"]
     fake.route("GET", "/health", status=500, body=" ".join(echoes))
     code, out, err = run(capsys, "call", "health")
     assert code == 1 and fake.requests[0]["headers"]["Authorization"] == f"Bearer {key}"
-    assert err.count("<redacted>") == 4
+    assert err.count("<redacted>") == len(echoes)
     assert not any(e in out + err for e in echoes) and "FAKE" not in out + err
 
 

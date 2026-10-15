@@ -351,6 +351,15 @@ def test_clerk_failures_on_the_key_check(xo_server, clerk, status, expected):  #
     assert call(xo_server, "GET", "/me", USER_KEY)[0] == expected
 
 
+@pytest.mark.parametrize("status, expected", [(429, 503), (500, 502), (403, 503)])
+def test_the_audit_line_records_what_the_caller_got(xo_server, clerk, status, expected):  # #6
+    xo_server.app.clerk.verify_key = lambda secret: KEYS[secret]
+    clerk.fail = status
+    assert call(xo_server, "GET", "/user-metadata/user_alice", ADMIN_KEY)[0] == expected
+    entry = audits(xo_server)[-1]
+    assert (entry["outcome"], entry["clerk"]) == (expected, status)
+
+
 def test_the_key_check_is_never_cached(xo_server, monkeypatch):  # S6
     assert call(xo_server, "GET", "/me", USER_KEY)[0] == 200
     monkeypatch.setitem(KEYS, USER_KEY, {**KEYS[USER_KEY], "revoked": True})
@@ -461,10 +470,42 @@ def test_control_characters_in_the_request_line_are_escaped_in_the_log(xo_server
     import socket
     port = xo_server.server_address[1]
     with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
-        s.sendall(b"GET /a\x01b\x1bc HTTP/1.1\r\nHost: x\r\n\r\n")
+        s.sendall(b"GET /a\x01b\x1bc\x85d\\x41e HTTP/1.1\r\nHost: x\r\n\r\n")  # C0, ESC, C1, backslash
         s.recv(100)
     err = capfd.readouterr().err
-    assert "\\x01" in err and "\\x1b" in err and "\x01" not in err and "\x1b" not in err
+    assert '"GET /a\\x01b\\x1bc\\x85d\\\\x41e HTTP/1.1" 400' in err  # the access line
+    assert not any(c in err for c in "\x01\x1b\x85")
+
+
+def test_the_deadline_timer_is_cancelled_when_a_request_ends(clerk, monkeypatch):  # #6 SF3
+    timers = []
+
+    class Timer(threading.Timer):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.cancelled = False
+            timers.append(self)
+
+        def cancel(self):
+            self.cancelled = True
+            super().cancel()
+
+    monkeypatch.setattr(server.threading, "Timer", Timer)
+    httpd = server.make_server(server.App(server.Config(), audit=lambda line: None), "127.0.0.1", 0)
+    threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
+    port = httpd.server_address[1]
+    import socket
+    for ending in (b"Host: x\r\n\r\n", b""):  # answered, and closed before the request ended
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
+            s.sendall(b"GET /healthz HTTP/1.1\r\n" + ending)
+            if ending:
+                s.recv(100)
+    import time
+    deadline = time.monotonic() + 3  # a handler finishes just after its client sees the close
+    while not (len(timers) == 2 and all(t.cancelled for t in timers)):
+        assert time.monotonic() < deadline, f"{sum(t.cancelled for t in timers)} of {len(timers)} cancelled"
+        time.sleep(0.01)
+    httpd.shutdown()
 
 
 def test_a_base64_shaped_key_reaches_clerk(xo_server, clerk, monkeypatch):

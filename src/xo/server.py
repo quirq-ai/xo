@@ -83,8 +83,9 @@ REQUEST_TIMEOUT = 10  # seconds a client may wait between bytes of its request
 # Seconds a connection to `xo serve` may stay open in all: a client that trickles one byte at a time
 # cannot hold a slot past it. Room for two Clerk calls of CLERK_TIMEOUT each.
 REQUEST_DEADLINE = 30
-# Control characters in a request line are logged as \xNN, as the standard library does.
-_LOG_ESCAPES = {c: f"\\x{c:02x}" for c in (*range(0x20), *range(0x7F, 0xA0))}
+# Control characters in a request line are logged as \xNN, as the standard library does, and a
+# backslash as \\, so a logged \xNN always means an escaped character.
+_LOG_ESCAPES = {c: f"\\x{c:02x}" for c in (*range(0x20), *range(0x7F, 0xA0))} | {0x5C: "\\\\"}
 
 
 def _list_env(name: str) -> frozenset[str]:
@@ -385,8 +386,10 @@ class App:
         try:
             u = self.clerk.update_metadata(user_id, changes) if changes else self.clerk.user(user_id)
         except ClerkError as e:
-            self.audit(**who, outcome=e.status, **extra)
-            raise self._clerk_reply(e) from None
+            reply = self._clerk_reply(e)
+            # The outcome is what the caller got; `clerk` is what Clerk (or our own budget) said.
+            self.audit(**who, outcome=reply.status, clerk=e.status, **extra)
+            raise reply from None
         data = {"publicMetadata": u.get("public_metadata") or {}, "privateMetadata": u.get("private_metadata") or {}}
         self.audit(**who, outcome=200, **extra)  # after the reply is built
         return data

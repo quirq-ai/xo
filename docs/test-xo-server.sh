@@ -62,12 +62,21 @@ if [ -z "$key" ]; then
 fi
 
 # 3. The key's format, without showing it: xo and the server accept ak_ followed by letters,
-#    digits and _ . - + / = only.
+#    digits and _ . - + / = only. Anything else stops here, before the key is sent anywhere (a
+#    Secret Key pasted by mistake must not reach even your own server).
 case "$key" in
-  ak_*[!A-Za-z0-9_.+/=-]*) fail "your key has characters xo does not accept yet (tell Claude which kinds; do not paste the key)" ;;
-  ak_?*) pass "your key's format is one xo accepts" ;;
-  *) fail "your key does not start with ak_ (tell Claude; do not paste the key)" ;;
+  ak_*[!A-Za-z0-9_.+/=-]*) bad="your key has characters xo does not accept yet (tell Claude which kinds; do not paste the key)" ;;
+  ak_?*) bad="" ;;
+  ak_) bad="your key is only ak_, with nothing after it (was the paste cut short?)" ;;
+  *) bad="your key does not start with ak_ (tell Claude; do not paste the key)" ;;
 esac
+if [ -n "$bad" ]; then
+  key=""
+  fail "$bad"
+  echo "Stopping: the key was not sent. Run the script again with the test user's ak_ key."
+  exit 1
+fi
+pass "your key's format is one xo accepts"
 
 # 4. xo me shows the key's own account, and no email or metadata.
 if XO_API_KEY="$key" xo me >"$work/me.json" 2>"$work/me.err"; then
@@ -102,26 +111,32 @@ expect "your key cannot read metadata (no admin keys yet)" "HTTP 403" "$key" -- 
   user-metadata get --user-id user_test
 key=""; with=""
 
-# 6. The Firewall rule: 70 requests to /me with no key (each a 401 from the server, with no Clerk
-#    call) must run into Vercel's limit of 60 a minute. Last, because it holds your address back
-#    for up to a minute.
-echo "Sending 70 requests without a key to check the Firewall rule..."
+# 6. The Firewall rule: requests to /me with no key (each a 401 from the server, with no Clerk call)
+#    must run into Vercel's limit of 60 a minute. Its window is fixed, so one that ends mid-burst
+#    lets up to 60 more through: up to 130 are sent, and the first 429 (or 403, if the rule denies)
+#    ends it. Any other answer stops the check, so a server error is never taken for the rule. Last,
+#    because it holds your address back for up to a minute.
+echo "Sending up to 130 requests without a key to check the Firewall rule..."
 limited=""
+other=""
 i=0
-while [ "$i" -lt 70 ]; do
+while [ "$i" -lt 130 ]; do
   code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$server/me")"
+  i=$((i + 1))
   case "$code" in
     401) ;;
-    *) limited="$code"; break ;;
+    429|403) limited="$code"; break ;;
+    *) other="$code"; break ;;
   esac
-  i=$((i + 1))
 done
-if [ -n "$limited" ] && [ "$i" -ge 50 ]; then
-  pass "the Firewall rule is active (request $((i + 1)) got $limited)"
-elif [ -n "$limited" ]; then
-  fail "request $((i + 1)) got $limited, before the limit of 60; check the rule and the server's Logs"
+if [ -n "$other" ]; then
+  fail "request $i got $other (not 401, 429 or 403), so the rule could not be checked; see the server's Logs, wait a minute and run the script again"
+elif [ -z "$limited" ]; then
+  fail "130 requests in a row got 401: the Firewall rule is not active (is it published?)"
+elif [ "$i" -le 50 ]; then
+  fail "request $i got $limited, well before the limit of 60; check the rule (if you ran the script within the last minute, wait a minute and run it again)"
 else
-  fail "70 requests in a row got 401: the Firewall rule is not active (is it published?)"
+  pass "the Firewall rule is active (request $i got $limited)"
 fi
 
 echo
