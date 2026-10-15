@@ -44,7 +44,7 @@ xo spaces --space-id 6f1c2c1e-...   # connection URLs for a space you own
 | `xo nebius-openclaw` | `POST /nebius-openclaw` | name, Token Factory key, Telegram token (feature flagged) |
 | `xo spaces` | `GET /spaces/{spaceId}` | none |
 | `xo me` | `GET /me` | none (proposed: not on XO yet) |
-| `xo user-metadata get` / `update` | `GET` / `PATCH /user-metadata/{userId}` | publicMetadata, privateMetadata as JSON (admin keys; proposed: not on XO yet) |
+| `xo user-metadata get` / `update` | `GET` / `PATCH /user-metadata/{userId}` | publicMetadata, privateMetadata as JSON objects (admin keys; proposed: not on XO yet); try `--dry-run` first: a wrong `--user-id` edits another user |
 
 Each create prints the new space, `data.id` included. Keep that id: the API has no list, delete,
 start or stop endpoint, and `xo spaces --space-id ID` is the only way back to a space.

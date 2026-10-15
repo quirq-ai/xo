@@ -940,3 +940,36 @@ def test_user_metadata_update_dry_run_sends_nothing(core, capsys):
                        "--private-metadata", '{"stripeId": "cus_1"}', "--dry-run")
     assert code == 0 and json.loads(out)["body"] == {"privateMetadata": {"stripeId": "cus_1"}}
     assert core.requests == []
+
+
+@pytest.mark.parametrize("value", ["{plan: pro}", "null", "[]", '"pro"', "3"])
+def test_user_metadata_update_refuses_a_bucket_that_is_not_an_object(core, capsys, value):  # B-SF1
+    code, _, err = run(capsys, "user-metadata", "update", "--user-id", "user_1", "--public-metadata", value)
+    assert code != 0 and core.requests == []
+    assert err == "xo: --public-metadata must be a JSON object, like '{\"plan\": \"pro\"}'\n"
+
+
+def test_user_metadata_update_refuses_a_non_object_bucket_in_data(core, capsys):  # B-SF1
+    code, _, err = run(capsys, "user-metadata", "update", "--user-id", "user_1",
+                       "--data", '{"privateMetadata": null}')
+    assert code != 0 and core.requests == []
+    assert "--private-metadata must be a JSON object" in err
+
+
+def test_a_proposed_route_that_answers_404_says_so(core, capsys):  # B-SF2
+    core.route("GET", "/api/core/v1/me", status=404, body={"success": False, "error": "Not found"})
+    code, _, err = run(capsys, "me")
+    assert code != 0
+    assert err == "xo: GET /me: HTTP 404: Not found (this command is PROPOSED and may not be on XO yet)\n"
+
+
+def test_a_404_from_a_live_route_has_no_proposed_hint(core, capsys):  # B-SF2
+    core.route("GET", "/api/core/v1/spaces/s1", status=404, body={"success": False, "error": "Not found"})
+    err = run(capsys, "spaces", "--space-id", "s1")[2]
+    assert "HTTP 404" in err and "PROPOSED" not in err
+
+
+def test_an_empty_path_parameter_is_refused(core, capsys):  # B-N4
+    code, _, err = run(capsys, "user-metadata", "get", "--user-id", "")
+    assert code != 0 and core.requests == []
+    assert err == "xo: --user-id can't be empty\n"

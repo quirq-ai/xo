@@ -276,7 +276,12 @@ def _send(client: Client, args: argparse.Namespace, method: str, path: str, *, q
         print(f"xo: {method} {spec.clean(client.scrub(client.url(path)))}", file=sys.stderr)
     if copies:
         print(f"xo: {commands.COPIES_KEY}", file=sys.stderr)
-    resp = client.request(method, path, query=query, body=body, headers=headers)
+    try:
+        resp = client.request(method, path, query=query, body=body, headers=headers)
+    except XoError as e:
+        if op is not None and "PROPOSED" in op.summary and ": HTTP 404" in str(e):
+            raise XoError(f"{e} (this command is PROPOSED and may not be on XO yet)") from None
+        raise
     _print(client, resp.data, resp.text)
     return 0
 
@@ -362,6 +367,22 @@ def _unknown_fields(op: spec.Operation, body: dict, args: argparse.Namespace, la
                       + " (xo api sends any body as given)")
 
 
+def _objects(args: argparse.Namespace, body: dict) -> None:
+    """A field the spec types as an object must be one: null, [] or text that is not JSON could
+    wipe or corrupt what the server stores, so refuse it here."""
+    for f in args.flags:
+        if f.where != "body" or f.type != "object":
+            continue
+        node: Any = body
+        for part in f.path:
+            if not isinstance(node, dict) or part not in node:
+                break
+            node = node[part]
+        else:
+            if not isinstance(node, dict):
+                raise XoError(f"--{f.flag} must be a JSON object, like '{{\"plan\": \"pro\"}}'")
+
+
 def _endpoint(args: argparse.Namespace) -> int:
     op = args.op
     label = " ".join([args.command, *([args.action] if getattr(args, "action", None) else [])])
@@ -389,6 +410,7 @@ def _endpoint(args: argparse.Namespace) -> int:
         missing = [name for name in op.required_fields if name not in body]
         if missing:
             raise XoError(f"{label} needs " + ", ".join(commands.flag_for(args, n, body=True) for n in missing))
+        _objects(args, body)
     return _send(client, args, op.method, path, query=query, body=body, headers=headers, op=op)
 
 

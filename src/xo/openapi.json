@@ -819,13 +819,19 @@
           "users"
         ],
         "summary": "Show the account this API key belongs to (PROPOSED: not on XO yet)",
-        "description": "Returns the key's user: id, username, first and last name, image URL, created time, plus any fields XO allow-lists. Proposed in vision/xo-cli/xo-clerk-user-info-proposal.md; the server route does not exist yet.",
+        "description": "Returns the key's user: id, username, first and last name, image URL, created time, plus any fields XO allow-lists. Until XO adds this route it answers 404.",
         "responses": {
           "200": {
             "description": "data.id, data.username, data.firstName, data.lastName, data.imageUrl, data.createdAt"
           },
           "401": {
             "description": "Bad key, or a key not tied to a user"
+          },
+          "404": {
+            "description": "The route is not on XO yet"
+          },
+          "429": {
+            "description": "Over the per-key rate limit"
           }
         }
       }
@@ -837,6 +843,7 @@
           "users"
         ],
         "summary": "Show a user's public and private Clerk metadata (admin keys only; PROPOSED: not on XO yet)",
+        "description": "Admin keys only. Until XO adds this route it answers 404.",
         "parameters": [
           {
             "name": "userId",
@@ -857,6 +864,9 @@
           },
           "404": {
             "description": "No such user"
+          },
+          "429": {
+            "description": "Over the per-key rate limit"
           }
         }
       },
@@ -866,7 +876,7 @@
           "users"
         ],
         "summary": "Merge changes into a user's public and private Clerk metadata (admin keys only; PROPOSED: not on XO yet)",
-        "description": "Clerk deep-merges the objects you send into the stored ones; a key set to null is removed. Each bucket holds at most 8KB.",
+        "description": "Clerk deep-merges the objects you send into the stored ones; a key set to null is removed, and {} changes nothing. Each bucket holds at most 8KB. Until XO adds this route it answers 404.",
         "parameters": [
           {
             "name": "userId",
@@ -911,7 +921,10 @@
             "description": "No such user"
           },
           "422": {
-            "description": "Body is not two JSON objects, or a bucket would pass 8KB"
+            "description": "Body is not one or two JSON objects, or a bucket would pass 8KB"
+          },
+          "429": {
+            "description": "Over the per-key rate limit"
           }
         }
       }

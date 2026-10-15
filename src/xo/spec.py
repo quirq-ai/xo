@@ -333,6 +333,9 @@ def build(op: Operation, values: dict[str, str], flag: Callable[[str], str] = la
     missing = [n for n, p in known.items() if p.required and n not in given]
     if missing:
         raise XoError(f"{label} needs {clean(', '.join(flag(n) for n in missing))}")
+    empty = [n for n in op.path_params if n in given and not given[n]]
+    if empty:
+        raise XoError(f"{clean(flag(empty[0]))} can't be empty")
     path = op.path
     for name in op.path_params:
         path = path.replace("{" + name + "}", quote(given[name], safe=""))
