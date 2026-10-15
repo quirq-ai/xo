@@ -27,6 +27,8 @@ class Flag(NamedTuple):
     wire: str   # the name the API uses
     flag: str   # the flag, without --
     type: str   # a body field's schema type
+    path: tuple[str, ...] = ()  # a body field's path, top level first
+    defaults: dict | None = None  # the spec's defaults for the field's siblings
 
 
 def kebab(text: str) -> str:
@@ -115,13 +117,13 @@ def _operation(p: argparse.ArgumentParser, op: Operation, add_send: Callable[[ar
                        help=_esc(f"{prm.where} parameter {clean(prm.name)}{need}. {prm.description}".strip()))
         flags.append(Flag(dest, prm.where, prm.name, flag, ""))
     for bf in op.body_fields:
-        flag = _unique(kebab(bf.name), taken)
+        flag = _unique(kebab("-".join(bf.path)), taken)
         dest = f"p_{len(flags)}"
         need = " (required)" if bf.required else ""
         how = "text" if bf.type == "string" else "JSON when it parses"
         p.add_argument(f"--{flag}", dest=dest, metavar="VALUE",
                        help=_esc(f"body field {clean(bf.name)}{need}; {how}. {bf.description}".strip()))
-        flags.append(Flag(dest, "body", bf.name, flag, bf.type))
+        flags.append(Flag(dest, "body", bf.name, flag, bf.type, bf.path, bf.defaults))
     if op.has_body:
         add_send(p)
     else:
@@ -159,4 +161,8 @@ def flag_for(args: argparse.Namespace, wire: str, *, body: bool = False) -> str:
     for f in args.flags:
         if f.wire == wire and (f.where == "body") == body:
             return f"--{f.flag}"
+    # A body object set through its fields' flags: name a few of them.
+    inner = [f"--{f.flag}" for f in args.flags if body and f.where == "body" and f.path[:1] == (wire,)]
+    if inner:
+        return "one of " + ", ".join(inner[:3]) + (", ..." if len(inner) > 3 else "")
     return f"--{kebab(wire)}"

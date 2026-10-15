@@ -1,10 +1,12 @@
-"""xo: the command line for the XO Cloud API (app.xo.builders).
+"""xo: the command line for the XO Cloud core API (app.xo.builders/api/core/v1).
 
     xo ENDPOINT [ACTION] [--flag VALUE ...]  one command per API endpoint, made from the spec:
-                                            POST /claude-code is `xo claude-code`, and a path with
-                                            several methods has actions (list, get, create,
-                                            update, replace, delete). Its parameters and body
-                                            fields are its flags; `xo ENDPOINT --help` lists them.
+                                            POST /openclaw is `xo openclaw`, GET /spaces/{spaceId}
+                                            is `xo spaces --space-id ID`. Its parameters and body
+                                            fields are its flags, nested fields too
+                                            (--providers-anthropic-api-key); `xo ENDPOINT --help`
+                                            lists them. A path with several methods has actions
+                                            (list, get, create, update, replace, delete).
     xo ops [FILTER]                         list the API's operations: id, method, path, summary.
                                             FILTER keeps those whose id, path or tag contains it.
     xo call OPERATION [--param NAME=VALUE ...] [--data JSON|@FILE|-] [--field KEY=VALUE ...]
@@ -20,8 +22,8 @@ on stderr first. --dry-run prints the request and sends nothing; a DELETE also n
 The API key comes from $XO_API_KEY, or from --api-key - (one line on stdin). --api-key KEY also
 works but lands in your shell history and the process list; prefer the variable. xo sends the key
 as a bearer token, never prints it, and never follows a redirect. The API base is $XO_BASE_URL or
-https://app.xo.builders. The spec comes from --spec FILE, $XO_SPEC, the copy bundled with xo, or
-the API itself.
+https://app.xo.builders/api/core/v1. The spec comes from --spec FILE, $XO_SPEC, or the copy
+bundled with xo.
 
 Prints the response as JSON on stdout. Exit 1 on any problem, with one line on stderr saying why.
 """
@@ -271,6 +273,20 @@ def _api(args: argparse.Namespace) -> int:
     return _send(client, args, args.method, args.path, query=_pairs(args.query, "--query"), body=_body(args))
 
 
+def _set(body: dict, flag: commands.Flag, value: Any, label: str) -> None:
+    """Put one field flag's value at its path in the body, with the spec's defaults for its siblings
+    (so --providers-anthropic-api-key K also sends "enabled": true)."""
+    node = body
+    for i, part in enumerate(flag.path[:-1]):
+        child = node.setdefault(part, {})
+        if not isinstance(child, dict):
+            raise XoError(f"{label}: --{flag.flag} needs {'.'.join(flag.path[:i + 1])} to be a JSON object")
+        node = child
+    node[flag.path[-1]] = value
+    for name, default in (flag.defaults or {}).items():
+        node.setdefault(name, default)
+
+
 def _endpoint(args: argparse.Namespace) -> int:
     client = _client(args, need_key=not args.dry_run)
     op = args.op
@@ -285,13 +301,13 @@ def _endpoint(args: argparse.Namespace) -> int:
             raise XoError(f"{label}: body field flags need --data to be a JSON object")
         for wire, (flag, value) in fields.items():
             # A string field keeps the text as typed: --prompt true sends "true", not true.
-            body[wire] = value if flag.type == "string" else _value(value)
+            _set(body, flag, value if flag.type == "string" else _value(value), label)
     if body is None and op.body_required:
-        if not any(bf.required for bf in op.body_fields):
+        if not op.required_fields:
             raise XoError(f"{label} needs a body: its field flags, --data or --field")
         body = {}
     if isinstance(body, dict):
-        missing = [bf.name for bf in op.body_fields if bf.required and bf.name not in body]
+        missing = [name for name in op.required_fields if name not in body]
         if missing:
             raise XoError(f"{label} needs " + ", ".join(commands.flag_for(args, n, body=True) for n in missing))
     return _send(client, args, op.method, path, query=query, body=body, headers=headers)
@@ -311,9 +327,9 @@ def _common() -> argparse.ArgumentParser:
     c.add_argument("--api-key", default=argparse.SUPPRESS, metavar="KEY|-",
                    help="the XO API key; - reads it from stdin (default $XO_API_KEY, which is safer)")
     c.add_argument("--base-url", default=argparse.SUPPRESS,
-                   help="the API base (default $XO_BASE_URL or https://app.xo.builders)")
+                   help="the API base (default $XO_BASE_URL or https://app.xo.builders/api/core/v1)")
     c.add_argument("--spec", default=argparse.SUPPRESS, metavar="FILE",
-                   help="an OpenAPI JSON file (default $XO_SPEC, then bundled, then the API)")
+                   help="an OpenAPI JSON file (default $XO_SPEC, then the one bundled with xo)")
     c.add_argument("--timeout", type=float, default=argparse.SUPPRESS, help="seconds per request (default 30)")
     return c
 

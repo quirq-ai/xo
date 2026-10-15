@@ -1,8 +1,7 @@
 # xo
 
-`xo` is the command line for the [XO Cloud](https://app.xo.builders) API. It reads the API's
-OpenAPI spec, so every operation the API documents is a command, and it sends your XO API key on
-each request without ever printing it.
+`xo` is the command line for the [XO Cloud](https://app.xo.builders) core API. Every endpoint is a
+command, and xo sends your XO API key on each request without ever printing it.
 
 It follows the shape of quirq's own tools (`qq fetch`, `qqsync`): one Python package, one
 argparse command, standard library only, Apache-2.0. Unlike them the command is plain `xo`.
@@ -16,67 +15,94 @@ pip install "quirq-xo @ git+https://github.com/quirq-ai/xo"
 Python 3.11 or newer. The package is `quirq-xo`, not `xo`: PyPI's `xo` is an unrelated game, and
 `pip install -U xo` would replace this tool with it. The command it installs is `xo`.
 
-## The spec
-
-xo does not bundle XO's spec yet. `https://app.xo.builders/api/openapi` opens only in a signed-in
-browser, so until a copy is bundled: download the OpenAPI JSON there while signed in, and pass
-`--spec FILE` or set `XO_SPEC=FILE`. Without one, `xo ops` and `xo call` stop and say so; `xo api`
-needs no spec.
-
-## One command per endpoint
-
-With a spec, every endpoint is a command, named after its path:
+## Commands
 
 ```sh
-export XO_API_KEY=ak_...        # from your XO account's API keys; never printed
-export XO_SPEC=~/xo-openapi.json
+export XO_API_KEY=ak_...        # an XO API key, from the XO team; never printed
 
-xo --help                                   # every endpoint command
-xo claude-code --prompt "hello"             # POST /claude-code {"prompt": "hello"}
-xo templates list --limit 5                 # GET  /api/v1/templates?limit=5
-xo templates create --name demo --public false
-xo templates get --template-id t1           # GET  /api/v1/templates/t1
-xo templates delete --template-id t1 --yes
-xo templates create --help                  # the flags an endpoint takes
+xo --help                       # every command
+xo openclaw --help              # the flags one command takes
+
+xo codex --name my-codex --volume-size 20
+xo claude-code --name my-cc --volume-size 20 --providers-anthropic-api-key ""
+xo openclaw --name my-claw --volume-size 20 \
+  --providers-anthropic-api-key "$ANTHROPIC_API_KEY" \
+  --notification-channels-telegram-bot-token "$TELEGRAM_BOT_TOKEN"
+xo spaces --space-id 6f1c2c1e-...   # connection URLs for a space you own
 ```
+
+| Command | Request | Body |
+|---|---|---|
+| `xo claude-code` | `POST /claude-code` | name, volume size; Anthropic provider |
+| `xo codex` | `POST /codex` | name, volume size |
+| `xo antigravity` | `POST /antigravity` | name, volume size |
+| `xo hermes` | `POST /hermes` | name, volume size; providers; Telegram or Slack |
+| `xo openclaw` | `POST /openclaw` | name, volume size; at least one provider and one channel |
+| `xo xo-cowork` | `POST /xo-cowork` | name, volume size; providers; channels |
+| `xo nebius-openclaw` | `POST /nebius-openclaw` | name, Token Factory key, Telegram token (feature flagged) |
+| `xo spaces` | `GET /spaces/{spaceId}` | none |
+
+Each create prints the new space, `data.id` included. Keep that id: the API has no list, delete,
+start or stop endpoint, and `xo spaces --space-id ID` is the only way back to a space.
+
+The API is `https://app.xo.builders/api/core/v1`. Its spec is bundled with xo as
+`src/xo/openapi.json`, written from the xo-swarm source (`app/api/[[...slugs]]/route.ts` and
+`types/*-schema.ts` at 6dddd07aa) because the interactive docs sit behind a browser sign-in. To use
+another spec, pass `--spec FILE` or set `XO_SPEC=FILE`.
+
+Things to know:
+- A name is 1 to 32 letters, digits or hyphens, starting with a letter or digit. The server
+  lowercases it and returns the stored name in `data.name`. A name you already use fails with 500.
+- `--volume-size` is in GB, 20 to 100.
+- A provider or channel flag sends that object with `"enabled": true`, so
+  `--providers-openai-api-key K` sends `{"openai": {"enabled": true, "apiKey": "K"}}`.
+- The API checks the body before the key, so a bad body answers 422 with every problem listed,
+  even with no key.
+- A Coder-backed space receives the API key you create it with as its own `xo_api_key`.
+- `xo spaces` prints `spaceApiUrl` and `openClawRestartUrl`, which carry a session token that
+  expires within the hour. Treat them as secrets.
+- Provider keys and bot tokens given as flags land in your shell history. Pass them from variables,
+  as above, or give the whole body with `--data @body.json`.
+
+## How commands are named
 
 The command is the path without a leading `/api` or `/vN` and without its `{placeholders}`, joined
 with dashes. When several methods share a path, each is an action: `list` and `get` (GET on the
 collection or one item), `create` (POST), `update` (PATCH), `replace` (PUT), `delete` (DELETE).
-Path, query and header parameters and the top-level fields of a JSON body are the flags. A body
-field the spec types as a string keeps the text you type; other values are JSON when they parse.
-Required ones are checked before anything is sent. A spec that cannot be read leaves `ops`, `call`
-and `api` working and makes any other command stop with one line saying why.
+Path, query and header parameters and the fields of a JSON body are the flags; a field nested in an
+object is named by its path (`providers.anthropic.apiKey` is `--providers-anthropic-api-key`). A
+body field the spec types as a string keeps the text you type; other values are JSON when they
+parse. Required ones are checked before anything is sent. A spec that cannot be read leaves `ops`,
+`call` and `api` working and makes any other command stop with one line saying why.
 
 ## Lower level
 
 ```sh
-
 xo ops                          # every operation: id, method, path, summary
-xo ops template                 # only those whose id, path or tag mentions "template"
-xo ops template --json          # the same with their parameters
+xo ops openclaw                 # only those whose id, path or tag mentions "openclaw"
+xo ops spaces --json            # the same with their parameters
 
-xo call OPERATION_ID --param NAME=VALUE --data '{"name": "demo"}'
-xo call OPERATION_ID --field name=demo --field public=false   # build the body field by field
-xo call OPERATION_ID --data @body.json                         # or from a file, or - for stdin
-xo call OPERATION_ID --field name=demo --dry-run               # print the request, send nothing
+xo call create_codex --data '{"name": "my-codex", "volumeSize": 20}'
+xo call create_codex --field name=my-codex --field volumeSize=20   # the body field by field
+xo call create_openclaw --data @body.json                           # or from a file, or - for stdin
+xo call get_space --param spaceId=ID
+xo call create_codex --field name=x --field volumeSize=20 --dry-run # print the request, send nothing
 
-xo api GET /some/path --query limit=5                          # any request, spec or not
-xo api DELETE /some/path/1 --yes                               # a DELETE needs --yes
+xo api GET /spaces/ID                                               # any request, spec or not
 ```
 
 `--param` fills path, query and header parameters, never `Authorization`, `Host`, `Cookie`,
 `Proxy-*` or the other headers xo and HTTP own.
 `--field` values are JSON when they parse (`false`, `5`, `["a"]`) and plain strings otherwise.
 A request that is not a GET changes things on XO, so it prints one line on stderr before it goes.
-`--dry-run` needs no key and sends nothing, so it never fetches the spec from the API either.
+`--dry-run` needs no key and sends nothing. It prints the body as given, provider keys included.
 Responses print as JSON on stdout. Any problem exits 1 with one line on stderr.
 
 | Setting | Variable | Flag | Default |
 |---|---|---|---|
 | API key | `XO_API_KEY` | `--api-key -` (asks without echo on a terminal, else reads one line from stdin) | none; required for every call but a dry run |
-| API base | `XO_BASE_URL` | `--base-url` | `https://app.xo.builders` |
-| Spec | `XO_SPEC` | `--spec` | the copy bundled with xo, else `<base>/api/openapi` |
+| API base | `XO_BASE_URL` | `--base-url` | `https://app.xo.builders/api/core/v1` |
+| Spec | `XO_SPEC` | `--spec` | the copy bundled with xo |
 
 `--api-key KEY` also works, but the key then lands in your shell history and in the process list
 other users of the machine can read. Prefer the variable, or `--api-key -`. The options go before

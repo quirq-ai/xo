@@ -634,3 +634,86 @@ def test_a_typed_choose_from_cannot_carry_a_value_past_the_hiding(fake, capsys, 
     secret = "ak_FAKE_r5_0123456789abcdef"
     err = _argparse_err(capsys, f"x (choose from {secret}")
     assert secret not in err and "'templates'" in err
+
+
+# --- the bundled core API spec -------------------------------------------------------------------
+
+@pytest.fixture
+def core(fake, monkeypatch):
+    """The spec bundled with xo, against the fake API under the core API's base path."""
+    monkeypatch.delenv("XO_SPEC")
+    monkeypatch.setenv("XO_BASE_URL", fake.base + "/api/core/v1")
+    return fake
+
+
+def test_the_default_base_is_the_core_api():
+    from xo.client import DEFAULT_BASE_URL
+    assert DEFAULT_BASE_URL == "https://app.xo.builders/api/core/v1"
+
+
+def test_every_core_endpoint_is_a_command(core, capsys):
+    with pytest.raises(SystemExit):
+        cli.main(["--help"])
+    out = capsys.readouterr().out
+    for name in ("claude-code", "codex", "antigravity", "hermes", "openclaw", "xo-cowork",
+                 "nebius-openclaw", "spaces"):
+        assert f"\n    {name}" in out
+
+
+def test_a_create_sends_the_body_under_the_base_path(core, capsys):
+    core.route("POST", "/api/core/v1/codex", status=201,
+               body={"success": True, "data": {"id": "s1", "name": "my-codex", "type": "codex"}})
+    code, out, err = run(capsys, "codex", "--name", "my-codex", "--volume-size", "20")
+    assert code == 0 and json.loads(out)["data"]["id"] == "s1"
+    assert err == f"xo: POST {core.base}/api/core/v1/codex\n"
+    assert core.requests[0]["body"] == {"name": "my-codex", "volumeSize": 20}
+
+
+def test_nested_flags_build_enabled_objects(core, capsys):
+    code, out, _ = run(capsys, "openclaw", "--name", "c", "--volume-size", "20",
+                       "--providers-anthropic-api-key", "sk-ant-x",
+                       "--notification-channels-slack-bot-token", "xoxb-1",
+                       "--notification-channels-slack-app-token", "xapp-1", "--dry-run")
+    assert code == 0
+    assert json.loads(out)["body"] == {
+        "name": "c", "volumeSize": 20,
+        "providers": {"anthropic": {"apiKey": "sk-ant-x", "enabled": True}},
+        "notificationChannels": {"slack": {"botToken": "xoxb-1", "appToken": "xapp-1", "enabled": True}}}
+    assert core.requests == []
+
+
+def test_an_explicit_enabled_wins_over_the_default(core, capsys):
+    code, out, _ = run(capsys, "xo-cowork", "--name", "c", "--volume-size", "20",
+                       "--providers-openai-enabled", "false", "--providers-openai-api-key", "k", "--dry-run")
+    assert json.loads(out)["body"]["providers"] == {"openai": {"enabled": False, "apiKey": "k"}}
+
+
+def test_required_objects_name_their_flags(core, capsys):
+    err = run(capsys, "openclaw", "--name", "c", "--volume-size", "20")[2]
+    assert err.startswith("xo: openclaw needs one of --providers-anthropic-enabled,")
+    assert "one of --notification-channels-telegram-enabled," in err
+    assert core.requests == []
+
+
+def test_a_nested_flag_needs_its_parent_to_be_an_object(core, capsys):
+    err = run(capsys, "hermes", "--name", "c", "--volume-size", "20", "--data", '{"providers": 1}',
+              "--providers-openai-api-key", "k")[2]
+    assert "needs providers to be a JSON object" in err
+
+
+def test_hermes_has_no_whatsapp_flag(core, capsys):
+    assert "unrecognized arguments" in _argparse_err(
+        capsys, "hermes", "--name", "c", "--volume-size", "20", "--notification-channels-whatsapp-creds", "x")
+
+
+def test_get_a_space(core, capsys):
+    core.route("GET", "/api/core/v1/spaces/s1", body={"success": True, "data": {"spaceName": "c"}})
+    code, out, _ = run(capsys, "spaces", "--space-id", "s1")
+    assert code == 0 and json.loads(out)["data"]["spaceName"] == "c"
+
+
+def test_a_422_shows_the_servers_error(core, capsys):
+    core.route("POST", "/api/core/v1/codex", status=422,
+               body={"success": False, "error": "name: Invalid input"})
+    err = run(capsys, "codex", "--name=-x", "--volume-size", "2")[2]
+    assert err.endswith("HTTP 422: name: Invalid input\n")

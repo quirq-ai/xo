@@ -8,7 +8,8 @@ Read `README.md` first.
   reaches stdout or stderr. Never follow a redirect with it attached.
 - Tests mock the API (`tests/conftest.py`, a server on 127.0.0.1). No test reaches XO.
 - Standard library only. A new dependency needs a reason in the PR.
-- A spec copied from XO goes in `src/xo/openapi.json`, with the date and source in the PR. Test
-  fixtures that are not copies say "SYNTHETIC".
+- `src/xo/openapi.json` is the bundled spec of the core API, written from xo-swarm's route and Zod
+  schemas. Change it with the xo-swarm commit it follows in the PR. Test fixtures that are not
+  copies say "SYNTHETIC".
 - Mark a decision you cannot make with a one-line `TODO(suraj):`.
 - This repo is public: no secrets, tokens or internal hostnames.

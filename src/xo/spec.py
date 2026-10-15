@@ -38,10 +38,16 @@ class Param:
 
 @dataclass
 class BodyField:
-    name: str
-    required: bool
+    name: str  # the field's path, dotted: name, or providers.anthropic.apiKey
+    required: bool  # only top-level fields can be required; see Operation.required_fields
     description: str = ""
     type: str = ""  # the schema's type; "string" fields keep their text as given
+    path: tuple[str, ...] = ()
+    # Defaults the spec gives this field's siblings, set when this field is (enabled: true beside an apiKey).
+    defaults: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.path = self.path or (self.name,)
 
 
 @dataclass
@@ -54,9 +60,10 @@ class Operation:
     params: list[Param] = field(default_factory=list)
     body_required: bool = False
     has_body: bool = False
-    # Top-level fields of a JSON object body. Empty when the body is not a plain object, so it can
-    # only be given whole with --data.
+    # The leaf fields of a JSON object body: top-level fields, and the fields of objects nested up to
+    # three deep. Empty when the body is not a plain object, so it can only be given whole with --data.
     body_fields: list[BodyField] = field(default_factory=list)
+    required_fields: list[str] = field(default_factory=list)  # top-level names the body must hold
 
     @property
     def path_params(self) -> list[str]:
@@ -182,29 +189,60 @@ def operations(spec: dict) -> list[Operation]:
                 has_body=body is not None,
                 body_required=bool(body and body.get("required")),
                 body_fields=_body_fields(spec, body),
+                required_fields=_required_fields(spec, body),
             ))
     return sorted(ops, key=lambda o: (o.path, o.method))
 
 
-def _body_fields(spec: dict, body: dict | None) -> list[BodyField]:
+def _body_schema(spec: dict, body: dict | None) -> dict:
     if not body:
-        return []
+        return {}
     content = _dict(body.get("content"))
     media = _dict(content.get("application/json") or (next(iter(content.values()), {}) if content else {}))
-    schema = _dict(_resolve(spec, media.get("schema")))
+    return _dict(_resolve(spec, media.get("schema")))
+
+
+def _object_parts(spec: dict, schema: dict) -> list[dict]:
+    """The object parts of a schema: itself and its allOf branches."""
     parts = [schema, *(_dict(_resolve(spec, s)) for s in _list(schema.get("allOf")))]
-    fields: dict[str, BodyField] = {}
-    for part in parts:
-        if part.get("type", "object") != "object":
-            continue
-        required = {r for r in _list(part.get("required")) if isinstance(r, str)}
+    return [p for p in parts if p.get("type", "object") == "object"]
+
+
+def _properties(spec: dict, schema: dict) -> dict[str, dict]:
+    props: dict[str, dict] = {}
+    for part in _object_parts(spec, schema):
         for name, prop in _dict(part.get("properties")).items():
-            if not isinstance(name, str) or not name.strip():
+            if isinstance(name, str) and name.strip():
+                props[name] = _dict(_resolve(spec, prop))
+    return props
+
+
+def _required_fields(spec: dict, body: dict | None) -> list[str]:
+    names: list[str] = []
+    for part in _object_parts(spec, _body_schema(spec, body)):
+        names += [r for r in _list(part.get("required")) if isinstance(r, str) and r not in names]
+    return names
+
+
+def _body_fields(spec: dict, body: dict | None) -> list[BodyField]:
+    schema = _body_schema(spec, body)
+    if not schema or not _object_parts(spec, schema):
+        return []
+    required = set(_required_fields(spec, body))
+    fields: list[BodyField] = []
+
+    def walk(props: dict[str, dict], path: tuple[str, ...]) -> None:
+        defaults = {n: p["default"] for n, p in props.items() if "default" in p}
+        for name, prop in props.items():
+            inner = _properties(spec, prop) if prop.get("type") == "object" else {}
+            if inner and len(path) < 2:  # an object with fields: a flag per field, not one for the object
+                walk(inner, (*path, name))
                 continue
-            prop = _dict(_resolve(spec, prop))
-            fields[name] = BodyField(name, name in required, _first_line(prop.get("description") or prop.get("title")),
-                                     _kind(spec, prop))
-    return list(fields.values())
+            fields.append(BodyField(".".join((*path, name)), not path and name in required,
+                                    _first_line(prop.get("description") or prop.get("title")), _kind(spec, prop),
+                                    (*path, name), {k: v for k, v in defaults.items() if k != name} if path else {}))
+    walk(_properties(spec, schema), ())
+    return fields
 
 
 def _kind(spec: dict, prop: dict) -> str:

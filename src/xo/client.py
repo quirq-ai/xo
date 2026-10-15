@@ -21,7 +21,7 @@ from typing import Any
 
 from xo import __version__
 
-DEFAULT_BASE_URL = "https://app.xo.builders"
+DEFAULT_BASE_URL = "https://app.xo.builders/api/core/v1"
 DEFAULT_TIMEOUT = 30.0
 KEY_ENV = "XO_API_KEY"
 BASE_URL_ENV = "XO_BASE_URL"
