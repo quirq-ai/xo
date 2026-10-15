@@ -46,6 +46,11 @@ class FakeClerk:
         self.redirect: str | None = None  # answer every call with a redirect here
         self.redirect_status = 307
         self.raw: bytes | None = None  # answer every call with these bytes and a 200
+        # The fake core API (XO_CORE_API_URL is under /core here): every request it got, and what it
+        # answers: (status, body bytes, extra headers), or a number of seconds to stall first.
+        self.core: list[dict] = []
+        self.core_answer: tuple[int, bytes, dict] = (200, b'{"success": true, "data": {"id": "space_1"}}', {})
+        self.core_stall = 0.0
 
 
 @pytest.fixture
@@ -55,6 +60,23 @@ def clerk(monkeypatch):
     class Handler(server.BaseHTTPRequestHandler):
         def _serve(self) -> None:
             raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            if self.path.startswith("/core/"):
+                state.core.append({"method": self.command, "path": self.path, "headers": dict(self.headers),
+                                   "body": raw})
+                if state.core_stall:
+                    import time
+                    time.sleep(state.core_stall)
+                status, data, extra = state.core_answer
+                try:
+                    self.send_response(status)
+                    for k, v in extra.items():
+                        self.send_header(k, v)
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+                except OSError:
+                    pass
+                return
             body = json.loads(raw) if raw else None
             state.calls.append({"method": self.command, "path": self.path, "headers": dict(self.headers),
                                 "body": body})
@@ -99,6 +121,7 @@ def clerk(monkeypatch):
     threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
     monkeypatch.setenv("CLERK_SECRET_KEY", SECRET)
     monkeypatch.setenv("CLERK_API_URL", f"http://127.0.0.1:{httpd.server_address[1]}")
+    monkeypatch.setenv("XO_CORE_API_URL", f"http://127.0.0.1:{httpd.server_address[1]}/core")
     monkeypatch.setenv("XO_EDITABLE_PUBLIC_KEYS", "plan,beta")
     monkeypatch.setenv("XO_EDITABLE_PRIVATE_KEYS", "stripeId")
     monkeypatch.setenv("XO_ADMIN_KEY_IDS", "ak_admin,ak_listed")
@@ -294,7 +317,7 @@ def _no_secret(*texts: str) -> None:
 
 
 def test_the_cli_and_the_server_work_together(xo_server, monkeypatch, capfd):
-    monkeypatch.setenv("XO_SERVER_URL", xo_server.url)
+    monkeypatch.setenv("XO_URL", xo_server.url)
     monkeypatch.setenv("XO_API_KEY", ADMIN_KEY)
     assert cli.main(["user-metadata", "update", "--user-id", "user_suraj",
                      "--public-metadata", '{"beta": true}']) == 0
@@ -777,3 +800,121 @@ def test_wsgi_serves_the_page_even_when_misconfigured(monkeypatch):
     assert b"".join(application({"REQUEST_METHOD": "HEAD", "PATH_INFO": "/"},
                                 lambda status, headers: head.update(status=status))) == b""
     assert head["status"] == "200 OK"
+
+
+# --- the core API, passed on to XO -----------------------------------------------------------------
+
+def test_a_create_is_passed_on_as_sent(xo_server, clerk):
+    body = {"name": "my-codex", "volumeSize": 20, "providers": {"openai": {"enabled": True, "apiKey": "sk-x"}}}
+    status, out = call(xo_server, "POST", "/api/core/v1/codex?x=1", USER_KEY, body)
+    assert (status, out) == (200, {"success": True, "data": {"id": "space_1"}})
+    sent = clerk.core[0]
+    assert (sent["method"], sent["path"]) == ("POST", "/core/codex")  # no query passed on
+    assert sent["headers"]["Authorization"] == f"Bearer {USER_KEY}"
+    assert sent["headers"]["Content-Type"] == "application/json"
+    assert json.loads(sent["body"]) == body
+    assert not [c for c in clerk.calls if c["path"].startswith("/v1/")]  # Clerk is not asked
+
+
+def test_only_the_callers_key_and_body_go_on(xo_server, clerk):
+    req = urllib.request.Request(xo_server.url + "/api/core/v1/spaces/abc-123", method="GET", headers={
+        "Authorization": f"Bearer {USER_KEY}", "Cookie": "session=1", "X-Forwarded-For": "1.2.3.4",
+        "X-Custom": "y"})
+    with urllib.request.urlopen(req, timeout=5) as resp:
+        assert resp.status == 200
+    sent = clerk.core[0]
+    assert sent["path"] == "/core/spaces/abc-123" and sent["body"] == b""
+    assert {k.lower() for k in sent["headers"]} <= {"accept", "user-agent", "authorization", "host",
+                                                    "connection", "accept-encoding"}
+
+
+@pytest.mark.parametrize("method,path", [
+    ("GET", "/api/core/v1/codex"), ("POST", "/api/core/v1/spaces/x"), ("GET", "/api/core/v1/me"),
+    ("POST", "/api/core/v1/unknown"), ("DELETE", "/api/core/v1/spaces/x"), ("PUT", "/api/core/v1/codex"),
+    ("GET", "/api/core/v1/spaces/a%2Fb"), ("GET", "/api/core/v1/spaces/..%2Fadmin"),
+    ("POST", "/api/core/v1/codex/extra"), ("GET", "/api/core/v1/spaces/" + "a" * 65), ("POST", "/api/core/v1/"),
+])
+def test_nothing_else_under_the_core_path_leaves_the_server(xo_server, clerk, method, path):
+    assert call(xo_server, method, path, USER_KEY, {} if method != "GET" else None)[0] in (404, 405)
+    assert clerk.core == []
+
+
+@pytest.mark.parametrize("key,error", [(None, "Missing API key"), ("not-a-key", "Invalid API key")])
+def test_a_core_request_without_an_api_key_stays_here(xo_server, clerk, key, error):
+    assert call(xo_server, "POST", "/api/core/v1/codex", key, {}) == (401, {"success": False, "error": error})
+    assert clerk.core == []
+
+
+def test_xos_answer_comes_back_as_it_was(xo_server, clerk):
+    clerk.core_answer = (422, b'{"success": false, "errors": ["name: too long"]}', {})
+    assert call(xo_server, "POST", "/api/core/v1/codex", USER_KEY, {}) == \
+        (422, {"success": False, "errors": ["name: too long"]})
+    clerk.core_answer = (500, b"<html>oops</html>", {})
+    assert call(xo_server, "POST", "/api/core/v1/codex", USER_KEY, {}) == \
+        (500, {"success": False, "error": "XO answered 500 without a JSON object"})
+    clerk.core_answer = (599, b"{}", {})
+    assert call(xo_server, "GET", "/api/core/v1/spaces/s1", USER_KEY)[0] == 502
+
+
+def test_a_redirect_from_xo_is_not_followed(xo_server, clerk):
+    clerk.core_answer = (307, b"", {"Location": "https://evil.example/steal"})
+    assert call(xo_server, "POST", "/api/core/v1/codex", USER_KEY, {}) == \
+        (502, {"success": False, "error": "XO redirected the request (307); not followed"})
+    assert len(clerk.core) == 1
+
+
+def test_xo_unreachable_or_slow(xo_server, clerk, monkeypatch):
+    monkeypatch.setattr(xo_server.app.cfg, "core_url", "http://127.0.0.1:9")
+    assert call(xo_server, "POST", "/api/core/v1/codex", USER_KEY, {}) == (502, {
+        "success": False, "error": "XO did not answer; it may have been received, so check before you retry"})
+    assert call(xo_server, "GET", "/api/core/v1/spaces/s1", USER_KEY) == (502, {
+        "success": False, "error": "XO did not answer"})
+    monkeypatch.undo()
+    monkeypatch.setattr(server, "CORE_TIMEOUT", 0.2)
+    clerk.core_stall = 0.5
+    assert call(xo_server, "POST", "/api/core/v1/codex", USER_KEY, {}) == (504, {
+        "success": False, "error": "XO did not answer in time; it may have been received, so check before you retry"})
+
+
+def test_core_requests_are_rate_limited_per_key(xo_server, clerk):
+    for _ in range(server.LIMITS["core"]):
+        assert call(xo_server, "GET", "/api/core/v1/spaces/s1", USER_KEY)[0] == 200
+    assert call(xo_server, "GET", "/api/core/v1/spaces/s1", USER_KEY)[0] == 429
+    assert len(clerk.core) == server.LIMITS["core"]
+    assert call(xo_server, "GET", "/me", USER_KEY)[0] == 200  # a separate budget
+
+
+def test_the_status_page_names_core_routes_not_ids(xo_server, clerk):
+    call(xo_server, "GET", "/api/core/v1/spaces/secret-space-id", USER_KEY)
+    call(xo_server, "POST", "/api/core/v1/codex", USER_KEY, {})
+    call(xo_server, "GET", "/api/core/v1/nope/secret-path", USER_KEY)
+    routes = [a["route"] for a in call(xo_server, "GET", "/status")[1]["data"]["activity"]]
+    assert routes == ["other", "/api/core/v1/codex", "/api/core/v1/spaces/{spaceId}"]
+
+
+def test_the_core_routes_are_the_specs(clerk):
+    from xo import spec
+    ops = [o for o in spec.operations(spec.load()) if not o.server]
+    assert {(o.method, o.path) for o in ops} == {
+        (m, "/spaces/{spaceId}" if name else "/" + n)
+        for m, pattern, name in server.CORE_ROUTES
+        for n in (pattern.pattern[2:-1].split("|") if not name else ["x"])}
+
+
+def test_the_core_url_must_be_https(clerk, monkeypatch):
+    monkeypatch.setenv("XO_CORE_API_URL", "http://app.xo.example/api")
+    with pytest.raises(server.XoError, match="XO_CORE_API_URL must be https://"):
+        server.Config()
+
+
+def test_a_cli_create_goes_through_the_server(xo_server, clerk, monkeypatch, capfd):
+    monkeypatch.setenv("XO_URL", xo_server.url)
+    monkeypatch.setenv("XO_API_KEY", USER_KEY)
+    assert cli.main(["codex", "--name", "my-codex", "--volume-size", "20"]) == 0
+    out, err = capfd.readouterr()
+    _no_secret(out, err)
+    assert json.loads(out)["data"]["id"] == "space_1"
+    assert clerk.core[0]["path"] == "/core/codex"
+    assert json.loads(clerk.core[0]["body"]) == {"name": "my-codex", "volumeSize": 20}
+    assert cli.main(["spaces", "--space-id", "space_1"]) == 0
+    assert clerk.core[1]["path"] == "/core/spaces/space_1"

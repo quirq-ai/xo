@@ -7,6 +7,7 @@ refuses plain http except to this machine.
 """
 from __future__ import annotations
 
+import dataclasses
 import functools
 import getpass
 import http.client
@@ -14,6 +15,7 @@ import json
 import os
 import re
 import secrets
+import stat
 import sys
 import urllib.error
 import urllib.parse
@@ -24,12 +26,13 @@ from typing import Any
 
 from xo import __version__
 
-DEFAULT_BASE_URL = "https://app.xo.builders/api/core/v1"
-DEFAULT_SERVER_URL = "https://xo.quirq.dev"
+# One address for everything: the xo server, which answers `xo me` and `xo user-metadata` itself and
+# passes the core API on to XO (app.xo.builders/api/core/v1) under CORE_PATH.
+DEFAULT_URL = "https://xo.quirq.dev"
+CORE_PATH = "/api/core/v1"
 DEFAULT_TIMEOUT = 30.0
 KEY_ENV = "XO_API_KEY"
-BASE_URL_ENV = "XO_BASE_URL"
-SERVER_URL_ENV = "XO_SERVER_URL"
+URL_ENV = "XO_URL"
 CONFIG_ENV = "XDG_CONFIG_HOME"
 SAVED = "the key saved by xo login"
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
@@ -58,37 +61,43 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         raise urllib.error.HTTPError(req.full_url, code, msg, headers, fp)
 
 
-def server_url(flag: str | None = None) -> str:
-    """The base of an xo server (`xo serve`), for the routes that need Clerk."""
-    url = (flag or os.environ.get(SERVER_URL_ENV) or DEFAULT_SERVER_URL).rstrip("/")
-    try:
-        return base_url(url)
-    except XoError:
-        source = "--server-url" if flag else SERVER_URL_ENV
-        raise XoError(f"{source} must be https:// (or http:// to localhost)") from None
-
-
-def base_url(flag: str | None = None) -> str:
-    url = (flag or os.environ.get(BASE_URL_ENV) or DEFAULT_BASE_URL).rstrip("/")
+def xo_url(flag: str | None = None, saved: str | None = None) -> str:
+    """The one address every command uses: --url, else $XO_URL, else the one xo login saved, else
+    https://xo.quirq.dev. Only https://, or http:// to this machine."""
+    if flag:
+        source, url = "--url", flag
+    elif os.environ.get(URL_ENV, "").strip():
+        source, url = URL_ENV, os.environ[URL_ENV].strip()
+    elif saved:
+        source, url = "the URL saved by xo login", saved
+    else:
+        source, url = "the default URL", DEFAULT_URL
+    url = url.rstrip("/")
     parts = urllib.parse.urlsplit(url)
-    if parts.scheme == "https" and parts.hostname:
-        return url
-    if parts.scheme == "http" and parts.hostname in LOCAL_HOSTS:
-        return url
-    raise XoError(f"base URL must be https:// (or http:// to localhost), not {url!r}")
+    ok = parts.scheme == "https" or (parts.scheme == "http" and parts.hostname in LOCAL_HOSTS)
+    if not ok or not parts.hostname or parts.query or parts.fragment or parts.username or parts.password:
+        raise XoError(f"{source} must be an https:// address (or http:// to localhost) with no query, "
+                      f"not {url!r}")
+    return url
 
 
-def api_key(flag: str | None = None) -> str:
-    """The key from --api-key (`-` reads one line from stdin), $XO_API_KEY, or the file `xo login`
-    saved, in that order. Never echoed."""
+def api_key(flag: str | None = None, url: str | None = None, saved: "Login | None" = None) -> str:
+    """The key from --api-key (`-` reads one line from stdin), $XO_API_KEY, or the one `xo login`
+    saved, in that order. Never echoed. The saved key goes only to the URL it was saved with: a
+    different `url` (from --url or $XO_URL) is refused rather than sent the key."""
     if flag == "-":
         source, key = "the key read from stdin", read_key()
     elif flag:
         source, key = "--api-key", flag.strip()
     elif (os.environ.get(KEY_ENV) or "").strip():
         source, key = KEY_ENV, os.environ[KEY_ENV].strip()
+    elif saved is not None:
+        if url is not None and url != saved.url:
+            raise XoError(f"the key xo login saved is only sent to {saved.url}, not {url}; "
+                          f"run xo login --url {url} to use this address")
+        source, key = SAVED, saved.key
     else:
-        source, key = SAVED, saved_key() or ""
+        source, key = SAVED, ""
     if not key:
         raise XoError(f"no API key: run xo login, set {KEY_ENV}, or pass --api-key - to read it from stdin "
                       "(get a key from the XO team)")
@@ -125,26 +134,45 @@ def _private(st: os.stat_result) -> bool:
     return st.st_mode & 0o077 == 0 and st.st_uid == os.getuid()
 
 
-def saved_key() -> str | None:
-    """The key `xo login` saved, or None when there is none. A file other users could read is
-    refused rather than used: the key in it should be treated as leaked."""
+@dataclass(frozen=True)
+class Login:
+    """What `xo login` saved: the address and the key that goes only to it."""
+    url: str
+    key: str = dataclasses.field(repr=False)
+
+
+def saved_login() -> Login | None:
+    """What `xo login` saved, or None when nothing is. A file other users could read is refused
+    rather than used: the key in it should be treated as leaked."""
     path = credentials_path()
     try:
-        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        # Non-blocking, so a FIFO put there cannot hang every command.
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
     except FileNotFoundError:
         return None
     except OSError as e:
         raise XoError(f"cannot read {path} ({e.strerror}); run xo logout, then xo login") from None
+    st = os.fstat(fd)
+    if not stat.S_ISREG(st.st_mode):
+        os.close(fd)
+        raise XoError(f"{path} is not a file xo login wrote; run xo logout, then xo login")
     with os.fdopen(fd) as f:
-        if not _private(os.fstat(f.fileno())):
+        if not _private(st):
             raise XoError(f"{path} can be read by other users, so xo will not use it; run xo logout, "
                           "ask the XO team for a new key, then xo login")
-        text = f.read(4096)
-    return text.strip() or None
+        text = f.read(8192)
+    try:
+        data = json.loads(text)
+    except ValueError:
+        data = None
+    if not (isinstance(data, dict) and isinstance(data.get("url"), str) and isinstance(data.get("key"), str)
+            and data["url"] and data["key"]):
+        raise XoError(f"{path} is not a file xo login wrote; run xo logout, then xo login")
+    return Login(data["url"], data["key"])
 
 
-def save_key(key: str) -> Path:
-    """Write `key` where saved_key() reads it: the folder 0700, the file 0600 from the start, and
+def save_login(login: Login) -> Path:
+    """Write `login` where saved_login() reads it: the folder 0700, the file 0600 from the start, and
     swapped in whole (rename), so no other user and no half-written file ever sees it."""
     path = credentials_path()
     tmp = path.with_name(f".credentials.{secrets.token_hex(8)}.tmp")
@@ -153,8 +181,10 @@ def save_key(key: str) -> Path:
         if os.name != "nt":
             os.chmod(path.parent, 0o700)
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        if os.name != "nt":
+            os.fchmod(fd, 0o600)  # whatever the umask took away, the owner can read it back
         with os.fdopen(fd, "w") as f:
-            f.write(key + "\n")
+            f.write(json.dumps({"url": login.url, "key": login.key}) + "\n")
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, path)
@@ -167,13 +197,15 @@ def save_key(key: str) -> Path:
     return path
 
 
-def forget_key() -> Path | None:
-    """Delete the saved key; the path it was at, or None when there was none."""
+def forget_login() -> Path | None:
+    """Delete what xo login saved (a folder put there is left for the user); the path it was at, or None when there was none."""
     path = credentials_path()
     try:
         path.unlink()
     except FileNotFoundError:
         return None
+    except IsADirectoryError:
+        raise XoError(f"{path} is a folder, not a file xo login wrote; remove it yourself") from None
     except OSError as e:
         raise XoError(f"cannot delete {path} ({e.strerror})") from None
     return path

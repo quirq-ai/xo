@@ -44,14 +44,15 @@ xo spaces --space-id 6f1c2c1e-...   # connection URLs for a space you own
 | `xo xo-cowork` | `POST /xo-cowork` | name, volume size; providers; channels |
 | `xo nebius-openclaw` | `POST /nebius-openclaw` | name, Token Factory key, Telegram token (feature flagged) |
 | `xo spaces` | `GET /spaces/{spaceId}` | none |
-| `xo login` / `logout` | `GET /me` on your xo server, then saves the key / deletes it | none |
+| `xo login` / `logout` | checks the key with XO (a space that doesn't exist), then saves it with the address / deletes them | none |
 | `xo me` | `GET /me` on your xo server | none |
 | `xo user-metadata get` / `update` | `GET` / `PATCH /user-metadata/{userId}` on your xo server | publicMetadata, privateMetadata as JSON objects (admin keys only); try `--dry-run` first: a wrong `--user-id` edits another user |
 
 Each create prints the new space, `data.id` included. Keep that id: the API has no list, delete,
 start or stop endpoint, and `xo spaces --space-id ID` is the only way back to a space.
 
-The API is `https://app.xo.builders/api/core/v1`. Its spec is bundled with xo as
+The API is `https://app.xo.builders/api/core/v1`; xo reaches it through the xo server (see Server
+mode). Its spec is bundled with xo as
 `src/xo/openapi.json`, written from the xo-swarm source (`app/api/[[...slugs]]/route.ts` and
 `types/*-schema.ts` at 6dddd07aa) because the interactive docs sit behind a browser sign-in. To use
 another spec, pass `--spec FILE` or set `XO_SPEC=FILE`.
@@ -81,10 +82,13 @@ Things to know:
 
 ## Server mode
 
-`xo me` and `xo user-metadata` read your Clerk account, which needs Clerk's Secret Key. That key
-never goes on a user's machine: the same package runs as a server, `xo serve`, on one deployment
-that holds it, and the commands go there (`https://xo.quirq.dev`, or `XO_SERVER_URL`). Until that
-deployment holds XO's production Clerk key, it answers 401 to real XO keys. See
+Every command goes to one address, the xo server (`https://xo.quirq.dev`, or `XO_URL`, or the one
+`xo login --url` saved). `xo me` and `xo user-metadata` read your Clerk account, which needs Clerk's
+Secret Key. That key never goes on a user's machine: the same package runs as a server, `xo serve`,
+on one deployment that holds it. The server passes every other command (the creates and
+`xo spaces`) on to XO's core API under its `/api/core/v1`, with your key, as sent. Until that
+deployment holds XO's production Clerk key, `xo me` answers 401 to real XO keys; the creates do not
+need it. See
 [docs/server.md](docs/server.md) and, to deploy it, [docs/deploy-vercel.md](docs/deploy-vercel.md).
 
 ## How commands are named
@@ -126,14 +130,13 @@ Responses print as JSON on stdout. Any problem exits 1 with one line on stderr.
 | Setting | Variable | Flag | Default |
 |---|---|---|---|
 | API key | `XO_API_KEY` | `--api-key -` (asks without echo on a terminal, else reads one line from stdin) | the key `xo login` saved in `$XDG_CONFIG_HOME/xo/credentials` (`~/.config/xo/credentials`); required for every call but a dry run |
-| API base | `XO_BASE_URL` | `--base-url` | `https://app.xo.builders/api/core/v1` |
-| xo server | `XO_SERVER_URL` | `--server-url` | `https://xo.quirq.dev`; used only by `xo login`, `xo me` and `xo user-metadata` |
+| Address | `XO_URL` | `--url` | the one `xo login` saved, then `https://xo.quirq.dev`; the core API is under its `/api/core/v1` |
 | Spec | `XO_SPEC` | `--spec` | the copy bundled with xo |
 
 `--api-key KEY` also works, but the key then lands in your shell history and in the process list
 other users of the machine can read. Prefer `xo login`, the variable, or `--api-key -`. The flag wins
-over the variable, and the variable over the saved key. xo refuses a saved key file that other
-users could read, or that is a symlink. The options go before or after the command.
+over the variable, and the variable over the saved key. The saved key is only sent to the address
+it was saved with. xo refuses a saved key file that other users could read, or that is a symlink. The options go before or after the command.
 
 ## Safety
 

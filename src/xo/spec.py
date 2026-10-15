@@ -67,7 +67,7 @@ class Operation:
     top_fields: list[str] = field(default_factory=list)  # every top-level name the body schema lists
     secret_paths: list[tuple[str, ...]] = field(default_factory=list)  # where the body holds keys or tokens
     copies_key: bool = False  # x-xo-copies-api-key: the server stores the caller's API key in what it creates
-    server: bool = False  # x-xo-server: served by an xo server (`xo serve`, $XO_SERVER_URL), not the core API
+    server: bool = False  # x-xo-server: answered by the xo server itself, not passed on to the core API
 
     @property
     def path_params(self) -> list[str]:

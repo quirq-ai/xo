@@ -7,8 +7,9 @@ on `main` goes to production by itself, so every merge to `main` ships `xo.quirq
 this repo deploys it, and the steps below are yours, followed by the test script.
 
 Use **development** credentials only (`sk_test_...`) until the test passes and the production gate
-at the end is passed. Until then, `xo.quirq.dev` answers 401 to real XO keys, although `xo`
-already uses it by default. The Secret Key and the API key you test with must come from the same
+at the end is passed. Until then, `xo.quirq.dev` answers `xo me` with 401 to real XO keys, although
+`xo` already uses it by default; the creates and `xo spaces` work, since XO checks those keys
+itself. The Secret Key and the API key you test with must come from the same
 Clerk instance: a key from another instance is refused as "Invalid API key".
 
 ## What you need
@@ -48,7 +49,8 @@ once. So these limits slow a flood down; they do not stop it. The per-address li
 Vercel's:
 
 1. **Firewall → Rules → New rule**, named `xo per-IP limit`:
-   - **If** Request Path **starts with** `/me`, **or** Request Path **starts with** `/user-metadata`;
+   - **If** Request Path **starts with** `/me`, **or** Request Path **starts with** `/user-metadata`,
+     **or** Request Path **starts with** `/api/core`;
    - **Then** **Rate Limit**: fixed window, **60 requests per 60 seconds**, keyed by **IP**;
    - past the limit: the default action (`rate_limit`, "too many requests"). Deny also works.
 2. **Save**, then **Review Changes → Publish**. A rule is a draft and does nothing until it is
@@ -61,11 +63,16 @@ source and not run by Claude; the dashboard steps above are enough):
 ```bash
 vercel firewall rules add "xo per-IP limit" \
   --condition '{"type":"path","op":"pre","value":"/me"}' --or \
-  --condition '{"type":"path","op":"pre","value":"/user-metadata"}' \
+  --condition '{"type":"path","op":"pre","value":"/user-metadata"}' --or \
+  --condition '{"type":"path","op":"pre","value":"/api/core"}' \
   --action rate_limit --rate-limit-window 60 --rate-limit-requests 60 \
   --rate-limit-keys ip --rate-limit-action rate_limit --yes
 vercel firewall publish
 ```
+
+If the rule already exists without `/api/core`, edit it to add that condition and publish again:
+the server passes anything under `/api/core` that looks like an API key on to XO, so without it one
+address can send XO as many requests as the per-key limit allows for each made-up key.
 
 If your plan does not offer rate limit rules, stop and tell Claude: without the rule, anyone can
 make the server spend Clerk requests (1000 Backend API calls per 10 seconds for the whole instance)
@@ -103,7 +110,7 @@ git clone https://github.com/quirq-ai/xo.git && cd xo && git checkout --detach "
 The script runs only if the checkout worked, so a sha left as the placeholder stops it.
 
 It runs `xo` straight from the checkout (nothing is installed or downloaded, and it calls only
-`xo.quirq.dev`), checks `/healthz`, asks for the test user's `ak_...` key without echoing it, and
+`xo.quirq.dev`, which passes one request with a made-up key on to XO), checks `/healthz`, asks for the test user's `ak_...` key without echoing it, and
 checks:
 
 | Check | Expected |
@@ -111,6 +118,7 @@ checks:
 | `/healthz` | `ok` |
 | your key's format | `ak_`, then letters, digits and `_ . - + / =` only (checked without showing it; anything else stops the script before the key is sent) |
 | `xo me` with your key | your account: `id`, `username`, `firstName`, `lastName`, `imageUrl`, `createdAt`, nothing else |
+| `xo spaces` with a made-up key | XO's 401 (or its 404 "Space not found"), passed back by the server; your key is not used. A bare "Not found" means the deployment is older than the forwarding |
 | a wrong `ak_` key | 401 |
 | a string that is not a Clerk key | 401, without a call to Clerk |
 | `xo user-metadata get` with your key | 403 (no admin keys yet) |
@@ -128,10 +136,12 @@ missing or refused; the project's **Logs** say which.
 |---|---|
 | The Secret Key | only in Vercel's environment; never printed, logged or returned |
 | Who can read or edit metadata | nobody until an admin key exists (403) |
-| Junk tokens | refused without a Clerk call |
+| Junk tokens | refused without a Clerk call, and never passed on to XO |
+| What reaches XO | only the creates and `GET /spaces/{id}` under `/api/core/v1`, with an `ak_` key; anything else there is a 404 from the server |
 | Big bodies | over 32KB refused (413) |
 | Requests per address | the Firewall rule in step 3, once published |
-| **Not protected** | a flood from many addresses spread over many instances; only Clerk's own limits stop it |
+| **Not protected** | a flood from many addresses spread over many instances; only Clerk's and XO's own limits stop it |
+| **Changed for XO** | every xo user now reaches app.xo.builders from Vercel's addresses, not their own, so a per-address limit on XO's side would count all of them together |
 | **Not rate limited** | `/` (the status page), `/status` and `/healthz`: public, one function invocation each, never a Clerk call. An open status page tab polls `/status` every 5 seconds while it is visible (about 17,000 invocations a day per tab left open) and stops while hidden. To cap them too, add a second rule of its own (Request Path **starts with** `/status`, 60 requests per 60 seconds per IP, so `/status/` is capped too); the page stays well under that. Do not add `/status` to the rule in step 3: it would share one per-address budget with `/me`, and an open status tab could then make the test script's Firewall check fail. |
 
 ## Logs and audit lines
@@ -144,9 +154,10 @@ not part of this setup.
 
 ## Limits
 
-- Each request makes at most two Clerk calls, each with a 10-second timeout. Vercel's function time
-  and request size limits are not checked here; 20 seconds and 32KB (the server's body cap) are
-  small, but confirm them for your plan.
+- Each request makes at most two Clerk calls, each with a 10-second timeout, or one call to XO with
+  a 25-second timeout (a create that takes longer answers 504 and may still have happened). Vercel's
+  function time and request size limits are not checked here; 25 seconds and 32KB (the server's
+  body cap) are small, but confirm them for your plan.
 
 ## Before production credentials (a gate)
 
