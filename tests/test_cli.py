@@ -653,7 +653,7 @@ def test_every_core_endpoint_is_a_command(core, capsys):
         cli.main(["--help"])
     out = capsys.readouterr().out
     for name in ("claude-code", "codex", "antigravity", "hermes", "openclaw", "xo-cowork",
-                 "nebius-openclaw", "spaces"):
+                 "nebius-openclaw", "spaces", "me", "user-metadata"):
         assert f"\n    {name}" in out
 
 
@@ -907,3 +907,36 @@ def test_only_near_misses_of_a_flag_are_shown(core, capsys):  # R5-N1, R5-N3
     assert long_word not in err and "--<hidden>" in err
     err = _argparse_err(capsys, "openclaw", "--providers_anthropic_api_key", ANTHROPIC)
     assert "--providers_anthropic_api_key <hidden>" in err and ANTHROPIC not in err
+
+
+# --- proposed user routes (server side not on XO yet) ---------------------------------------------
+
+def test_me_shows_the_keys_account(core, capsys):
+    core.route("GET", "/api/core/v1/me", body={"success": True, "data": {"id": "user_1", "username": "sam"}})
+    code, out, _ = run(capsys, "me")
+    assert code == 0 and json.loads(out)["data"]["username"] == "sam"
+
+
+def test_user_metadata_get(core, capsys):
+    core.route("GET", "/api/core/v1/user-metadata/user_1",
+               body={"success": True, "data": {"publicMetadata": {"plan": "pro"}, "privateMetadata": {}}})
+    code, out, _ = run(capsys, "user-metadata", "get", "--user-id", "user_1")
+    assert code == 0 and json.loads(out)["data"]["publicMetadata"] == {"plan": "pro"}
+
+
+def test_user_metadata_update_sends_both_buckets_as_json(core, capsys):
+    core.route("PATCH", "/api/core/v1/user-metadata/user_1", body={"success": True, "data": {}})
+    code, _, err = run(capsys, "user-metadata", "update", "--user-id", "user_1",
+                       "--public-metadata", '{"plan": "pro", "beta": null}',
+                       "--private-metadata", '{"stripeId": "cus_1"}')
+    assert code == 0
+    assert err == f"xo: PATCH {core.base}/api/core/v1/user-metadata/user_1\n"
+    assert core.requests[0]["body"] == {"publicMetadata": {"plan": "pro", "beta": None},
+                                        "privateMetadata": {"stripeId": "cus_1"}}
+
+
+def test_user_metadata_update_dry_run_sends_nothing(core, capsys):
+    code, out, _ = run(capsys, "user-metadata", "update", "--user-id", "user_1",
+                       "--private-metadata", '{"stripeId": "cus_1"}', "--dry-run")
+    assert code == 0 and json.loads(out)["body"] == {"privateMetadata": {"stripeId": "cus_1"}}
+    assert core.requests == []

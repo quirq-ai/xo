@@ -811,6 +811,110 @@
           }
         }
       }
+    },
+    "/me": {
+      "get": {
+        "operationId": "get_me",
+        "tags": [
+          "users"
+        ],
+        "summary": "Show the account this API key belongs to (PROPOSED: not on XO yet)",
+        "description": "Returns the key's user: id, username, first and last name, image URL, created time, plus any fields XO allow-lists. Proposed in vision/xo-cli/xo-clerk-user-info-proposal.md; the server route does not exist yet.",
+        "responses": {
+          "200": {
+            "description": "data.id, data.username, data.firstName, data.lastName, data.imageUrl, data.createdAt"
+          },
+          "401": {
+            "description": "Bad key, or a key not tied to a user"
+          }
+        }
+      }
+    },
+    "/user-metadata/{userId}": {
+      "get": {
+        "operationId": "get_user_metadata",
+        "tags": [
+          "users"
+        ],
+        "summary": "Show a user's public and private Clerk metadata (admin keys only; PROPOSED: not on XO yet)",
+        "parameters": [
+          {
+            "name": "userId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "A Clerk user id (user_...)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "data.publicMetadata, data.privateMetadata"
+          },
+          "403": {
+            "description": "The key is not an XO admin key"
+          },
+          "404": {
+            "description": "No such user"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "update_user_metadata",
+        "tags": [
+          "users"
+        ],
+        "summary": "Merge changes into a user's public and private Clerk metadata (admin keys only; PROPOSED: not on XO yet)",
+        "description": "Clerk deep-merges the objects you send into the stored ones; a key set to null is removed. Each bucket holds at most 8KB.",
+        "parameters": [
+          {
+            "name": "userId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "A Clerk user id (user_...)"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "publicMetadata": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "JSON object merged into public metadata (readable by the user's browser)"
+                  },
+                  "privateMetadata": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "JSON object merged into private metadata (server-only)"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "data.publicMetadata, data.privateMetadata after the change"
+          },
+          "403": {
+            "description": "The key is not an XO admin key"
+          },
+          "404": {
+            "description": "No such user"
+          },
+          "422": {
+            "description": "Body is not two JSON objects, or a bucket would pass 8KB"
+          }
+        }
+      }
     }
   }
 }
