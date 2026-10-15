@@ -43,8 +43,13 @@ key id, user id, path or address, so it is public. The page and `/status` are no
 counts live in the process's memory: on Vercel each instance keeps its own and starts empty, so the
 page shows what the instance answering you has seen. The audit log stays in the logs only.
 
-The badge says **Operational**, **Degraded** when any of the latest 20 requests failed with a 5xx
-(a refused Clerk secret looks like this), or **Unreachable** when `/status` does not answer. The
+The badge says **Operational**, **Degraded** when a request to `/me` or `/user-metadata` (the
+routes that call Clerk) failed with a 5xx in the last 5 minutes (a refused Clerk secret, Clerk
+down, or the server's own Clerk budget used up), or **Unreachable** when `/status` does not answer.
+Other traffic does not count, so it cannot hide a failure, and a failure stops counting 5 minutes
+later without any further requests. `recent` in `/status` holds those two counts, and the badge
+reads "Degraded: 3 of 11 failed in 5 min": 3 of the 11 requests to those routes in the last 5
+minutes. The
 page refreshes every 5 seconds while its tab is visible, stops while it is hidden, and slows to
 every 30 seconds after three failures in a row. `/`, `/status` and `/healthz` also answer `HEAD`,
 for uptime monitors. Public by design: the version, each instance's start time and traffic volume,
@@ -139,7 +144,9 @@ process apply per function instance, so the per-address limit is a Vercel Firewa
 - **Audit log.** Every request to `/user-metadata`, refused and failed ones included (a bad or
   missing key, a rate limit, a wrong method, a body too big), is one JSON line on stderr: time,
   method, outcome, the key's id and the caller (null before the key is verified), the target user,
-  and for a PATCH the bucket and key names changed. Never values or keys, so a key removed with `null`
+  and for a PATCH the bucket and key names changed. When Clerk fails, `outcome` is the status the
+  caller got (502 or 503) and `clerk` is the status Clerk answered (or 429 for the server's own
+  Clerk budget). Never values or keys, so a key removed with `null`
   cannot be restored from the log.
 - **No secrets in metadata.** Never store API keys, tokens or passwords in private metadata: an
   admin key reads every user's private metadata in full.

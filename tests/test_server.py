@@ -351,6 +351,15 @@ def test_clerk_failures_on_the_key_check(xo_server, clerk, status, expected):  #
     assert call(xo_server, "GET", "/me", USER_KEY)[0] == expected
 
 
+@pytest.mark.parametrize("status, expected", [(429, 503), (500, 502), (403, 503)])
+def test_the_audit_line_records_what_the_caller_got(xo_server, clerk, status, expected):  # #6
+    xo_server.app.clerk.verify_key = lambda secret: KEYS[secret]
+    clerk.fail = status
+    assert call(xo_server, "GET", "/user-metadata/user_alice", ADMIN_KEY)[0] == expected
+    entry = audits(xo_server)[-1]
+    assert (entry["outcome"], entry["clerk"]) == (expected, status)
+
+
 def test_the_key_check_is_never_cached(xo_server, monkeypatch):  # S6
     assert call(xo_server, "GET", "/me", USER_KEY)[0] == 200
     monkeypatch.setitem(KEYS, USER_KEY, {**KEYS[USER_KEY], "revoked": True})
@@ -461,10 +470,42 @@ def test_control_characters_in_the_request_line_are_escaped_in_the_log(xo_server
     import socket
     port = xo_server.server_address[1]
     with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
-        s.sendall(b"GET /a\x01b\x1bc HTTP/1.1\r\nHost: x\r\n\r\n")
+        s.sendall(b"GET /a\x01b\x1bc\x85d\\x41e HTTP/1.1\r\nHost: x\r\n\r\n")  # C0, ESC, C1, backslash
         s.recv(100)
     err = capfd.readouterr().err
-    assert "\\x01" in err and "\\x1b" in err and "\x01" not in err and "\x1b" not in err
+    assert '"GET /a\\x01b\\x1bc\\x85d\\\\x41e HTTP/1.1" 400' in err  # the access line
+    assert not any(c in err for c in "\x01\x1b\x85")
+
+
+def test_the_deadline_timer_is_cancelled_when_a_request_ends(clerk, monkeypatch):  # #6 SF3
+    timers = []
+
+    class Timer(threading.Timer):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.cancelled = False
+            timers.append(self)
+
+        def cancel(self):
+            self.cancelled = True
+            super().cancel()
+
+    monkeypatch.setattr(server.threading, "Timer", Timer)
+    httpd = server.make_server(server.App(server.Config(), audit=lambda line: None), "127.0.0.1", 0)
+    threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
+    port = httpd.server_address[1]
+    import socket
+    for ending in (b"Host: x\r\n\r\n", b""):  # answered, and closed before the request ended
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
+            s.sendall(b"GET /healthz HTTP/1.1\r\n" + ending)
+            if ending:
+                s.recv(100)
+    import time
+    deadline = time.monotonic() + 3  # a handler finishes just after its client sees the close
+    while not (len(timers) == 2 and all(t.cancelled for t in timers)):
+        assert time.monotonic() < deadline, f"{sum(t.cancelled for t in timers)} of {len(timers)} cancelled"
+        time.sleep(0.01)
+    httpd.shutdown()
 
 
 def test_a_base64_shaped_key_reaches_clerk(xo_server, clerk, monkeypatch):
@@ -591,7 +632,7 @@ def test_status_lists_routes_and_counts_but_never_ids_or_keys(xo_server):
     assert first[0] == status == 200
     data = out["data"]
     assert set(data) == STATUS_KEYS and set(data["instance"]) == INSTANCE_KEYS
-    assert data["recent"] == {"entries": 6, "failed": 0} and data["status"] == "ok"
+    assert data["recent"] == {"entries": 3, "failed": 0} and data["status"] == "ok"
     assert all(set(a) == ENTRY_KEYS for a in data["activity"])
     assert [(a["method"], a["route"], a["status"]) for a in data["activity"]] == [
         ("GET", "other", 404), ("POST", "/healthz", 404), ("GET", "/user-metadata/{userId}", 200),
@@ -617,17 +658,70 @@ def test_status_says_degraded_when_recent_requests_fail(xo_server, clerk):
         assert call(xo_server, "GET", "/me", USER_KEY)[0] == 503
     data = call(xo_server, "GET", "/status")[1]["data"]
     assert data["status"] == "degraded" and data["recent"] == {"entries": 3, "failed": 3}
-    clerk.fail = None
-    for _ in range(server.DEGRADED_WINDOW):
+    for _ in range(40):  # other traffic, anonymous or refused, does not push the failures out (#6 D2)
+        call(xo_server, "GET", "/nope")
         call(xo_server, "GET", "/healthz")
-    assert call(xo_server, "GET", "/status")[1]["data"]["status"] == "ok"  # the failures aged out
+        call(xo_server, "POST", "/me")
+    data = call(xo_server, "GET", "/status")[1]["data"]
+    assert data["status"] == "degraded" and data["recent"] == {"entries": 43, "failed": 3}
 
 
-def test_head_is_answered_without_a_body(xo_server):
-    for path in ("/", "/healthz", "/status"):
-        req = urllib.request.Request(xo_server.url + path, method="HEAD")
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            assert resp.status == 200 and resp.read() == b"" and int(resp.headers["Content-Length"]) > 0
+def test_a_failure_heals_after_five_minutes(clerk):  # #6 D2
+    now = [1000.0]
+    app = server.App(server.Config(), audit=lambda line: None, clock=lambda: now[0])
+    app.record("GET", "/me", 503, now[0])
+    app.record("GET", "/healthz", 500, now[0])  # a route that does not call Clerk never counts
+    assert app.status()["status"] == "degraded" and app.status()["recent"] == {"entries": 1, "failed": 1}
+    now[0] += server.DEGRADED_SECONDS - 1
+    assert app.status()["status"] == "degraded"
+    now[0] += 1
+    assert app.status()["status"] == "ok" and app.status()["recent"] == {"entries": 0, "failed": 0}
+
+
+def test_the_degraded_counts_are_bounded(clerk, monkeypatch):  # #6 audit nit 4
+    monkeypatch.setattr(server, "DEGRADED_KEPT", 5)
+    app = server.App(server.Config(), audit=lambda line: None, clock=lambda: 1000.0)
+    for _ in range(20):
+        app.record("GET", "/me", 503, 0)
+    assert (len(app._seen), len(app._failed)) == (5, 5)
+    assert app.status()["recent"] == {"entries": 5, "failed": 5}
+
+
+def _raw_head(srv, path: str, extra: bytes = b"") -> tuple[bytes, bytes]:
+    """A HEAD request over a raw socket, read to the end: urllib never reads a body on HEAD (#6 D1)."""
+    import socket
+    with socket.create_connection(("127.0.0.1", srv.server_address[1]), timeout=5) as s:
+        s.sendall(b"HEAD " + path.encode() + b" HTTP/1.0\r\nHost: x\r\n" + extra + b"\r\n")
+        data = b""
+        while chunk := s.recv(65536):
+            data += chunk
+    head, _, body = data.partition(b"\r\n\r\n")
+    return head, body
+
+
+@pytest.mark.parametrize("path, status", [("/", 200), ("/healthz", 200), ("/status", 200), ("/me", 405),
+                                          ("/user-metadata/user_alice", 405), ("/nope", 404)])
+def test_head_is_answered_without_a_body(xo_server, clerk, path, status):
+    head, body = _raw_head(xo_server, path, f"Authorization: Bearer {ADMIN_KEY}\r\n".encode())
+    assert head.startswith(f"HTTP/1.0 {status}".encode()) and b"Content-Length: " in head and body == b""
+    assert clerk.calls == []  # HEAD never reaches the key check
+
+
+@pytest.mark.parametrize("path, status", [("/", 200), ("/healthz", 200), ("/status", 200), ("/me", 405),
+                                          ("/user-metadata/user_alice", 405), ("/nope", 404)])
+def test_wsgi_head_is_answered_without_a_body(clerk, path, status):
+    import io
+    application = server.wsgi_app()
+    seen = {}
+    environ = {"REQUEST_METHOD": "HEAD", "PATH_INFO": path, "QUERY_STRING": "", "wsgi.input": io.BytesIO(b""),
+               "CONTENT_LENGTH": "", "HTTP_AUTHORIZATION": f"Bearer {ADMIN_KEY}"}
+    out = b"".join(application(environ, lambda s, headers: seen.update(status=s, headers=dict(headers))))
+    assert seen["status"].startswith(str(status)) and int(seen["headers"]["Content-Length"]) > 0 and out == b""
+    if path != "/":  # the page is served before the body is looked at
+        environ.update({"wsgi.input": io.BytesIO(b""), "CONTENT_LENGTH": str(server.MAX_BODY + 1)})
+        assert b"".join(application(environ, lambda s, headers: seen.update(status=s))) == b""
+        assert seen["status"].startswith("413")
+    assert clerk.calls == []
 
 
 def test_the_page_never_writes_html_from_data():

@@ -140,7 +140,9 @@ or after the command.
   errors and unexpected failures. An argument error never repeats a value you typed, so a
   mistyped key flag (`--api_key KEY`, `--token=KEY`, `--api-keyKEY`) stays off the screen. A key
   with anything but letters, digits and `_ . - + / =` is refused without being shown, and the key
-  is also redacted in the forms URL or JSON escaping gives `+ / =`.
+  is also redacted where escaping changes any of its characters, in any mix: URL escaping (`%2F`,
+  in either case, or double-encoded as `%252F`, and `+` read as a space), JSON (`\/`, `\u002f`)
+  and HTML (`&#x2F;`, `&#47;`, zero-padded or not, and `&sol;`).
 - xo never follows a redirect, so a redirect cannot carry the key to another host. A redirect to
   XO's sign-in page is reported as "this route does not accept an API key".
 - Plain `http://` is refused except to this machine.

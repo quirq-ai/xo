@@ -2,8 +2,9 @@
 
 The xo server (`xo serve`, see [server.md](server.md)) runs on Vercel at `https://xo.quirq.dev`.
 Vercel runs the repo's root `app.py`, which serves the same routes as a Python function, on
-Python 3.12 (pinned by `.python-version`). Nothing in this repo deploys it: you do, with the steps
-below, and then run the test script.
+Python 3.12 (pinned by `.python-version`). Vercel's GitHub integration deploys it: every commit
+on `main` goes to production by itself, so every merge to `main` ships `xo.quirq.dev`. Nothing in
+this repo deploys it, and the steps below are yours, followed by the test script.
 
 Use **development** credentials only (`sk_test_...`) until the test passes and the production gate
 at the end is passed. Until then, `xo.quirq.dev` answers 401 to real XO keys, although `xo`
@@ -17,8 +18,6 @@ Clerk instance: a key from another instance is refused as "Invalid API key".
 - From XO's Clerk **development** instance: its Secret Key (`sk_test_...`), and an API key
   (`ak_...`) that belongs to a test user of that instance.
 - Python 3.11 or newer and `curl`, for the test script.
-- **The commit to deploy**: the full 40-character sha Claude gives you with these steps. It is the
-  commit that was audited; never deploy a branch head you were not given.
 
 ## 1. Create the Vercel project
 
@@ -30,8 +29,8 @@ Clerk instance: a key from another instance is refused as "Invalid API key".
 3. **Environment Variables:** add exactly one, `CLERK_SECRET_KEY` = the `sk_test_...` key, for the
    **Production** environment only, marked **Sensitive**. Add no admin key ids: with none, the
    metadata routes answer 403 to everyone and only `/me` is in use.
-4. Let the first deploy run. It builds `main`, which has no `app.py` until this PR is merged, so it
-   fails or serves nothing; step 4 deploys the audited commit.
+4. Leave the **Production Branch** at `main` (**Settings → Git**) and the GitHub integration on.
+   The first deploy builds `main`.
 
 ## 2. Add xo.quirq.dev
 
@@ -53,9 +52,10 @@ Vercel's:
    - **Then** **Rate Limit**: fixed window, **60 requests per 60 seconds**, keyed by **IP**;
    - past the limit: the default action (`rate_limit`, "too many requests"). Deny also works.
 2. **Save**, then **Review Changes → Publish**. A rule is a draft and does nothing until it is
-   published. The test script's last check sends 70 requests and fails if the rule is not active.
+   published. The test script's last check sends up to 130 requests and fails if the rule is not
+   active.
 
-The same rule from the Vercel CLI, run inside the linked checkout of step 4 (taken from the CLI's
+The same rule from the Vercel CLI, run inside a checkout linked with `vercel link` (taken from the CLI's
 source and not run by Claude; the dashboard steps above are enough):
 
 ```bash
@@ -72,36 +72,30 @@ make the server spend Clerk requests (1000 Backend API calls per 10 seconds for 
 and, past 100,000 a month, paid key checks. On development credentials that is the development
 instance only.
 
-## 4. Deploy the audited commit to production (before the merge)
+## 4. How it deploys
 
-Preview deployments sit behind Vercel's login, so the `xo` command cannot reach them. Deploy the
-commit you were given to production from a checkout. Paste its full sha into the first line:
-
-```bash
-SHA=paste-the-40-character-sha-here
-git clone https://github.com/quirq-ai/xo.git xo-deploy
-cd xo-deploy
-git checkout --detach "$SHA"
-[ "$(git rev-parse HEAD)" = "$SHA" ] && echo "OK: at $SHA" || echo "STOP: not at the audited commit"
-```
-
-Go on only if it printed `OK`. Then:
-
-```bash
-vercel link
-[ "$(git rev-parse HEAD)" = "$SHA" ] && vercel --prod
-```
-
-`vercel link` asks for the team and the `xo` project. The second line deploys only if the checkout
-is still at the audited commit. `.vercelignore` keeps `.env` files and the tests out of the upload.
-
-After the PR is merged, every merge to `main` deploys production by itself.
+- **Production:** every commit on `main` (each merged pull request) deploys to production and
+  `xo.quirq.dev` by itself. A merge is a release: merge only what was reviewed.
+- **Previews:** every other branch and pull request gets a preview deployment. Previews have no
+  `CLERK_SECRET_KEY` (it is set for Production only), so they answer 503 "xo server
+  misconfigured". That is expected, and it keeps the Secret Key out of any branch's build.
+- **Rolling back:** in **Deployments**, pick the last good production deployment and choose
+  **Instant Rollback**, then fix `main`. Vercel's documentation says a rollback turns off the
+  automatic assignment of production domains: later merges to `main` still build, but they do not
+  reach `xo.quirq.dev`. Once the fix is merged and its deployment is **Ready**, **Promote** it to
+  production (or choose **Undo Rollback**) to turn automatic deploys back on, then run the test
+  script. Also from the documentation: on the Hobby plan, Instant Rollback can go back only to the
+  previous production deployment.
+- `.vercelignore` keeps `.env` files and the tests out of every upload.
 
 ## 5. Test
 
-From the same checkout (the one at the audited commit):
+From a checkout at the commit that is deployed: its sha is on the production deployment in
+**Deployments**. Paste it into the first line:
 
 ```bash
+SHA=paste-the-deployed-commit-sha-here
+git clone https://github.com/quirq-ai/xo.git && cd xo && git checkout --detach "$SHA"
 bash docs/test-xo-server.sh
 ```
 
@@ -112,12 +106,12 @@ checks:
 | Check | Expected |
 |---|---|
 | `/healthz` | `ok` |
-| your key's format | `ak_`, then letters, digits and `_ . - + / =` only (checked without showing it) |
+| your key's format | `ak_`, then letters, digits and `_ . - + / =` only (checked without showing it; anything else stops the script before the key is sent) |
 | `xo me` with your key | your account: `id`, `username`, `firstName`, `lastName`, `imageUrl`, `createdAt`, nothing else |
 | a wrong `ak_` key | 401 |
 | a string that is not a Clerk key | 401, without a call to Clerk |
 | `xo user-metadata get` with your key | 403 (no admin keys yet) |
-| 70 requests to `/me` with no key | refused by the Firewall rule after about 60 (this holds your address back for up to a minute) |
+| up to 130 requests to `/me` with no key | refused (429, or 403 for a Deny rule) after about 60, or up to 120 if the rule's minute ends mid-burst; any other answer is a FAIL. This holds your address back for up to a minute |
 
 It prints PASS or FAIL per line and ends with "All checks passed." The key is never printed, saved,
 put on a command line or exported; only the `xo` calls that need it get it. If the format check
@@ -135,7 +129,7 @@ missing or refused; the project's **Logs** say which.
 | Big bodies | over 32KB refused (413) |
 | Requests per address | the Firewall rule in step 3, once published |
 | **Not protected** | a flood from many addresses spread over many instances; only Clerk's own limits stop it |
-| **Not rate limited** | `/` (the status page), `/status` and `/healthz`: public, one function invocation each, never a Clerk call. An open status page tab polls `/status` every 5 seconds while it is visible (about 17,000 invocations a day per tab left open) and stops while hidden. To cap them too, add `/status` to the Firewall rule in step 3; the page stays well under 60 a minute. |
+| **Not rate limited** | `/` (the status page), `/status` and `/healthz`: public, one function invocation each, never a Clerk call. An open status page tab polls `/status` every 5 seconds while it is visible (about 17,000 invocations a day per tab left open) and stops while hidden. To cap them too, add a second rule of its own (Request Path **starts with** `/status`, 60 requests per 60 seconds per IP, so `/status/` is capped too); the page stays well under that. Do not add `/status` to the rule in step 3: it would share one per-address budget with `/me`, and an open status tab could then make the test script's Firewall check fail. |
 
 ## Logs and audit lines
 
