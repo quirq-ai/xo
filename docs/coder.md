@@ -1,0 +1,62 @@
+# Deploy a GitHub repository
+
+`xo coder github <url>` creates and starts a workspace from the `xo-github` Coder template,
+then prints its dashboard and public app URLs. This is separate from XO Cloud's core API.
+
+## Setup
+
+Install xo using the [quickstart](quickstart.md), using a revision that includes this command,
+and install the [Coder CLI](https://coder.com/docs/install/cli). Coder 2.36.4 is tested. Your chosen
+deployment must have the `xo-github` template and its `xo-cowork` app slug. The default deployment
+is Dev Coder; the command does not install or publish templates.
+
+```sh
+coder login https://dev-coder.xo.builders
+xo coder github https://github.com/OWNER/REPO --dry-run
+xo coder github https://github.com/OWNER/REPO --name my-preview
+```
+
+No XO API key is required. Coder manages authentication through its existing login/keyring or
+`CODER_SESSION_TOKEN`. Configure that with Coder, not with `xo --api-key`.
+
+For another deployment, use `--coder-url` or set `XO_CODER_URL`. The resolution order is:
+`--coder-url`, `XO_CODER_URL`, `CODER_URL`, `https://dev-coder.xo.builders`. These settings affect
+only Coder commands. XO API commands use `--url`, `XO_URL`, or the address saved by `xo login`;
+that address and the saved XO key are not used by Coder commands. The positional GitHub URL is
+independent of both deployment settings.
+HTTPS is required except for HTTP to localhost, and credentials/query strings/fragments in the
+deployment URL are refused. There is no additional xo configuration file.
+
+## Output and lifecycle
+
+Progress goes to stderr. Success prints JSON on stdout, for example:
+
+```json
+{
+  "name": "my-preview",
+  "repoUrl": "https://github.com/OWNER/REPO",
+  "workspaceUrl": "https://coder.example.com/@alice/my-preview",
+  "appUrl": "https://generated-preview.example.com/"
+}
+```
+
+Coder resolves `appUrl` from the workspace app and region configuration. It carries no session
+token. The template exposes port 3000 publicly and serves a status page while no app is listening.
+The initial clone/install/build may continue after Coder reports that the workspace has started.
+The command does not open a browser automatically.
+
+Use `xo coder github --help` for options. Shared capacity, a small workspace and a 5 GB disk are
+the defaults. `--start-command auto` detects Node apps; `--start-command manual` only clones.
+Pass `--ref BRANCH_OR_TAG` to select a Git ref. Custom startup commands must listen on port 3000.
+Use a new `--name` for a second deployment of the same repository; an existing workspace is never
+changed. Manage existing workspaces with the Coder dashboard or `coder start`, `stop`, `ssh` and
+`delete`, using the same deployment URL you gave xo.
+
+`--timeout` sets the limit for each Coder account/app URL lookup (default 30 seconds).
+`--wait-timeout` sets the create/start limit (default 600 seconds). If a create fails, times out or
+is interrupted, inspect the dashboard before retrying. If only app URL resolution fails, xo says
+the workspace was created and gives its dashboard URL; do not create it again.
+
+Provider keys belong in Coder secrets or private workspace env files. Template parameters,
+including startup commands, are visible in Coder. Native provisioner output is deliberately
+omitted from xo's output; use the dashboard to inspect build details.

@@ -33,11 +33,11 @@ xo login
 
 xo first prints the address it logs in to (`https://xo.quirq.dev`). Paste your key at the `XO API key:` prompt and press Enter. Nothing shows while you type, and the key stays out of your shell history. xo refuses anything that isn't an XO API key (those start with `ak_`) without sending it anywhere. Then it checks the key with XO, through that address, and saves the key and the address in `~/.config/xo/credentials`, which only you can read. If the check fails, nothing is saved. It also prints the account the key belongs to, when the xo server can tell.
 
-Every later `xo` command, in any terminal, uses the saved key and sends it only to the saved address. To use a different key, run `xo login` again. `xo logout` deletes the saved key. A key in `XO_API_KEY` wins over the saved one, so a terminal where you set that variable uses it instead.
+Every later XO API command, in any terminal, uses the saved key and sends it only to the saved address. To use a different key, run `xo login` again. `xo logout` deletes the saved key. A key in `XO_API_KEY` wins over the saved one, so a terminal where you set that variable uses it instead.
 
 ### One address for everything
 
-Every command goes to one address: your creates, `xo spaces`, `xo me` and `xo user-metadata` alike. The xo server answers `xo me` and `xo user-metadata` itself and passes the rest on to XO (`app.xo.builders`). To use another address, log in to it with `xo login --url https://...`. `XO_URL` or `--url` changes it for one terminal or one command, and the saved key is never sent to a different address than the one you logged in to.
+XO API commands go to one address: your creates, `xo spaces`, `xo me` and `xo user-metadata` alike. The xo server answers `xo me` and `xo user-metadata` itself and passes the rest on to XO (`app.xo.builders`). To use another address, log in to it with `xo login --url https://...`. `XO_URL` or `--url` changes it for one terminal or one command, and the saved key is never sent to a different address than the one you logged in to. Coder commands use their own login and deployment setting; see [Deploy a GitHub repository](coder.md).
 
 ## 3. Check it works (creates nothing)
 
@@ -75,6 +75,11 @@ xo spaces --space-id THE_ID
 ```
 
 ## The commands
+
+To deploy a GitHub repository through Coder instead of the XO core API, see
+[Deploy a GitHub repository](coder.md). `xo coder github URL` uses a separate Coder login and
+needs no XO API key. It requires a revision of xo that includes the command; the install pin
+above predates it.
 
 | Command | Creates |
 |---|---|
