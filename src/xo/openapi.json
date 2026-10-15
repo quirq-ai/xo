@@ -1,0 +1,816 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "XO Swarm Core API",
+    "version": "v1",
+    "description": "Hand-written from xo-swarm app/api/[[...slugs]]/route.ts and types/*-schema.ts at 6dddd07aa (2026-10-09), checked against https://app.xo.builders on 2026-10-15. Paths are relative to https://app.xo.builders/api/core/v1."
+  },
+  "servers": [
+    {
+      "url": "https://app.xo.builders/api/core/v1"
+    }
+  ],
+  "security": [
+    {
+      "bearer": []
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "bearer": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    }
+  },
+  "paths": {
+    "/claude-code": {
+      "post": {
+        "operationId": "create_claude_code",
+        "summary": "Create a Claude Code space",
+        "tags": [
+          "spaces"
+        ],
+        "x-xo-copies-api-key": true,
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "volumeSize"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 32,
+                    "pattern": "^[a-zA-Z0-9][a-zA-Z0-9-]*$",
+                    "description": "Space name: 1-32 letters, digits or hyphens, starting with a letter or digit; not new or create. The server lowercases it; use data.name from the response"
+                  },
+                  "volumeSize": {
+                    "type": "integer",
+                    "minimum": 20,
+                    "maximum": 100,
+                    "description": "Disk size in GB, 20 to 100"
+                  },
+                  "providers": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "description": "Only anthropic",
+                    "properties": {
+                      "anthropic": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "enabled"
+                        ],
+                        "properties": {
+                          "enabled": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Defaults to true: xo sends it when another field of this object is given"
+                          },
+                          "apiKey": {
+                            "type": "string",
+                            "format": "password",
+                            "writeOnly": true,
+                            "description": "Secret; no whitespace. Empty or omitted uses XO's default key"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Space created: data.id, data.name, data.owner, data.type"
+          },
+          "422": {
+            "description": "Body validation failed; error lists every issue"
+          }
+        }
+      }
+    },
+    "/codex": {
+      "post": {
+        "operationId": "create_codex",
+        "summary": "Create a Codex space",
+        "tags": [
+          "spaces"
+        ],
+        "x-xo-copies-api-key": true,
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "volumeSize"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 32,
+                    "pattern": "^[a-zA-Z0-9][a-zA-Z0-9-]*$",
+                    "description": "Space name: 1-32 letters, digits or hyphens, starting with a letter or digit; not new or create. The server lowercases it; use data.name from the response"
+                  },
+                  "volumeSize": {
+                    "type": "integer",
+                    "minimum": 20,
+                    "maximum": 100,
+                    "description": "Disk size in GB, 20 to 100"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Space created: data.id, data.name, data.owner, data.type"
+          },
+          "422": {
+            "description": "Body validation failed; error lists every issue"
+          }
+        }
+      }
+    },
+    "/antigravity": {
+      "post": {
+        "operationId": "create_antigravity",
+        "summary": "Create a Google Antigravity space",
+        "tags": [
+          "spaces"
+        ],
+        "x-xo-copies-api-key": true,
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "volumeSize"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 32,
+                    "pattern": "^[a-zA-Z0-9][a-zA-Z0-9-]*$",
+                    "description": "Space name: 1-32 letters, digits or hyphens, starting with a letter or digit; not new or create. The server lowercases it; use data.name from the response"
+                  },
+                  "volumeSize": {
+                    "type": "integer",
+                    "minimum": 20,
+                    "maximum": 100,
+                    "description": "Disk size in GB, 20 to 100"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Space created: data.id, data.name, data.owner, data.type"
+          },
+          "422": {
+            "description": "Body validation failed; error lists every issue"
+          }
+        }
+      }
+    },
+    "/hermes": {
+      "post": {
+        "operationId": "create_hermes",
+        "summary": "Create a Hermes space",
+        "tags": [
+          "spaces"
+        ],
+        "x-xo-copies-api-key": true,
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "volumeSize"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 32,
+                    "pattern": "^[a-zA-Z0-9][a-zA-Z0-9-]*$",
+                    "description": "Space name: 1-32 letters, digits or hyphens, starting with a letter or digit; not new or create. The server lowercases it; use data.name from the response"
+                  },
+                  "volumeSize": {
+                    "type": "integer",
+                    "minimum": 20,
+                    "maximum": 100,
+                    "description": "Disk size in GB, 20 to 100"
+                  },
+                  "providers": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "description": "anthropic, openai, openrouter",
+                    "properties": {
+                      "anthropic": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "enabled"
+                        ],
+                        "properties": {
+                          "enabled": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Defaults to true: xo sends it when another field of this object is given"
+                          },
+                          "apiKey": {
+                            "type": "string",
+                            "format": "password",
+                            "writeOnly": true,
+                            "description": "Secret; no whitespace."
+                          }
+                        }
+                      },
+                      "openai": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "enabled"
+                        ],
+                        "properties": {
+                          "enabled": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Defaults to true: xo sends it when another field of this object is given"
+                          },
+                          "apiKey": {
+                            "type": "string",
+                            "format": "password",
+                            "writeOnly": true,
+                            "description": "Secret; no whitespace."
+                          }
+                        }
+                      },
+                      "openrouter": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "enabled"
+                        ],
+                        "properties": {
+                          "enabled": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Defaults to true: xo sends it when another field of this object is given"
+                          },
+                          "apiKey": {
+                            "type": "string",
+                            "format": "password",
+                            "writeOnly": true,
+                            "description": "Secret; no whitespace."
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "notificationChannels": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "description": "telegram and slack only",
+                    "properties": {
+                      "telegram": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "enabled"
+                        ],
+                        "properties": {
+                          "enabled": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Defaults to true: xo sends it when another field of this object is given"
+                          },
+                          "botToken": {
+                            "type": "string",
+                            "format": "password",
+                            "writeOnly": true,
+                            "description": "Secret; no whitespace."
+                          }
+                        }
+                      },
+                      "slack": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "enabled"
+                        ],
+                        "properties": {
+                          "enabled": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Defaults to true: xo sends it when another field of this object is given"
+                          },
+                          "botToken": {
+                            "type": "string",
+                            "format": "password",
+                            "writeOnly": true,
+                            "description": "Secret; no whitespace. Slack needs both botToken and appToken"
+                          },
+                          "appToken": {
+                            "type": "string",
+                            "format": "password",
+                            "writeOnly": true,
+                            "description": "Secret; no whitespace. Slack needs both botToken and appToken"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Space created: data.id, data.name, data.owner, data.type"
+          },
+          "422": {
+            "description": "Body validation failed; error lists every issue"
+          }
+        }
+      }
+    },
+    "/openclaw": {
+      "post": {
+        "operationId": "create_openclaw",
+        "summary": "Create an OpenClaw space (one provider and one channel must be enabled)",
+        "tags": [
+          "spaces"
+        ],
+        "x-xo-copies-api-key": true,
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "volumeSize",
+                  "providers",
+                  "notificationChannels"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 32,
+                    "pattern": "^[a-zA-Z0-9][a-zA-Z0-9-]*$",
+                    "description": "Space name: 1-32 letters, digits or hyphens, starting with a letter or digit; not new or create. The server lowercases it; use data.name from the response"
+                  },
+                  "volumeSize": {
+                    "type": "integer",
+                    "minimum": 20,
+                    "maximum": 100,
+                    "description": "Disk size in GB, 20 to 100"
+                  },
+                  "providers": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "description": "At least one must be enabled",
+                    "properties": {
+                      "anthropic": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "enabled"
+                        ],
+                        "properties": {
+                          "enabled": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Defaults to true: xo sends it when another field of this object is given"
+                          },
+                          "apiKey": {
+                            "type": "string",
+                            "format": "password",
+                            "writeOnly": true,
+                            "description": "Secret; no whitespace."
+                          }
+                        }
+                      },
+                      "openai": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "enabled"
+                        ],
+                        "properties": {
+                          "enabled": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Defaults to true: xo sends it when another field of this object is given"
+                          },
+                          "apiKey": {
+                            "type": "string",
+                            "format": "password",
+                            "writeOnly": true,
+                            "description": "Secret; no whitespace."
+                          }
+                        }
+                      },
+                      "openrouter": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "enabled"
+                        ],
+                        "properties": {
+                          "enabled": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Defaults to true: xo sends it when another field of this object is given"
+                          },
+                          "apiKey": {
+                            "type": "string",
+                            "format": "password",
+                            "writeOnly": true,
+                            "description": "Secret; no whitespace."
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "notificationChannels": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "description": "At least one must be enabled",
+                    "properties": {
+                      "telegram": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "enabled"
+                        ],
+                        "properties": {
+                          "enabled": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Defaults to true: xo sends it when another field of this object is given"
+                          },
+                          "botToken": {
+                            "type": "string",
+                            "format": "password",
+                            "writeOnly": true,
+                            "description": "Secret; no whitespace."
+                          }
+                        }
+                      },
+                      "whatsapp": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "enabled"
+                        ],
+                        "properties": {
+                          "enabled": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Defaults to true: xo sends it when another field of this object is given"
+                          },
+                          "creds": {
+                            "type": "string",
+                            "format": "password",
+                            "writeOnly": true,
+                            "description": "Secret; no whitespace. The creds string from the XO connect flow"
+                          }
+                        }
+                      },
+                      "slack": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "enabled"
+                        ],
+                        "properties": {
+                          "enabled": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Defaults to true: xo sends it when another field of this object is given"
+                          },
+                          "botToken": {
+                            "type": "string",
+                            "format": "password",
+                            "writeOnly": true,
+                            "description": "Secret; no whitespace. Slack needs both botToken and appToken"
+                          },
+                          "appToken": {
+                            "type": "string",
+                            "format": "password",
+                            "writeOnly": true,
+                            "description": "Secret; no whitespace. Slack needs both botToken and appToken"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Space created: data.id, data.name, data.owner, data.type"
+          },
+          "422": {
+            "description": "Body validation failed; error lists every issue"
+          }
+        }
+      }
+    },
+    "/xo-cowork": {
+      "post": {
+        "operationId": "create_xo_cowork",
+        "summary": "Create an XO Cowork space",
+        "tags": [
+          "spaces"
+        ],
+        "x-xo-copies-api-key": true,
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "volumeSize"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 32,
+                    "pattern": "^[a-zA-Z0-9][a-zA-Z0-9-]*$",
+                    "description": "Space name: 1-32 letters, digits or hyphens, starting with a letter or digit; not new or create. The server lowercases it; use data.name from the response"
+                  },
+                  "volumeSize": {
+                    "type": "integer",
+                    "minimum": 20,
+                    "maximum": 100,
+                    "description": "Disk size in GB, 20 to 100"
+                  },
+                  "providers": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "description": "anthropic, openai, openrouter",
+                    "properties": {
+                      "anthropic": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "enabled"
+                        ],
+                        "properties": {
+                          "enabled": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Defaults to true: xo sends it when another field of this object is given"
+                          },
+                          "apiKey": {
+                            "type": "string",
+                            "format": "password",
+                            "writeOnly": true,
+                            "description": "Secret; no whitespace."
+                          }
+                        }
+                      },
+                      "openai": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "enabled"
+                        ],
+                        "properties": {
+                          "enabled": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Defaults to true: xo sends it when another field of this object is given"
+                          },
+                          "apiKey": {
+                            "type": "string",
+                            "format": "password",
+                            "writeOnly": true,
+                            "description": "Secret; no whitespace."
+                          }
+                        }
+                      },
+                      "openrouter": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "enabled"
+                        ],
+                        "properties": {
+                          "enabled": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Defaults to true: xo sends it when another field of this object is given"
+                          },
+                          "apiKey": {
+                            "type": "string",
+                            "format": "password",
+                            "writeOnly": true,
+                            "description": "Secret; no whitespace."
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "notificationChannels": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "description": "telegram, whatsapp, slack",
+                    "properties": {
+                      "telegram": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "enabled"
+                        ],
+                        "properties": {
+                          "enabled": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Defaults to true: xo sends it when another field of this object is given"
+                          },
+                          "botToken": {
+                            "type": "string",
+                            "format": "password",
+                            "writeOnly": true,
+                            "description": "Secret; no whitespace."
+                          }
+                        }
+                      },
+                      "whatsapp": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "enabled"
+                        ],
+                        "properties": {
+                          "enabled": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Defaults to true: xo sends it when another field of this object is given"
+                          },
+                          "creds": {
+                            "type": "string",
+                            "format": "password",
+                            "writeOnly": true,
+                            "description": "Secret; no whitespace. The creds string from the XO connect flow"
+                          }
+                        }
+                      },
+                      "slack": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "enabled"
+                        ],
+                        "properties": {
+                          "enabled": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Defaults to true: xo sends it when another field of this object is given"
+                          },
+                          "botToken": {
+                            "type": "string",
+                            "format": "password",
+                            "writeOnly": true,
+                            "description": "Secret; no whitespace. Slack needs both botToken and appToken"
+                          },
+                          "appToken": {
+                            "type": "string",
+                            "format": "password",
+                            "writeOnly": true,
+                            "description": "Secret; no whitespace. Slack needs both botToken and appToken"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Space created: data.id, data.name, data.owner, data.type"
+          },
+          "422": {
+            "description": "Body validation failed; error lists every issue"
+          }
+        }
+      }
+    },
+    "/nebius-openclaw": {
+      "post": {
+        "operationId": "create_nebius_openclaw",
+        "summary": "Create a Nebius OpenClaw space (feature flagged; 404 when off)",
+        "tags": [
+          "spaces"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "tokenFactoryApiKey"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 32,
+                    "pattern": "^[a-zA-Z0-9][a-zA-Z0-9-]*$",
+                    "description": "Space name: 1-32 letters, digits or hyphens, starting with a letter or digit; not new or create. The server lowercases it; use data.name from the response"
+                  },
+                  "tokenFactoryApiKey": {
+                    "type": "string",
+                    "format": "password",
+                    "writeOnly": true,
+                    "description": "Nebius Token Factory key; secret, no whitespace"
+                  },
+                  "telegramBotToken": {
+                    "type": "string",
+                    "format": "password",
+                    "writeOnly": true,
+                    "description": "Optional; secret, no whitespace"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Space created: data.id, data.name, data.owner, data.type"
+          },
+          "422": {
+            "description": "Body validation failed; error lists every issue"
+          }
+        }
+      }
+    },
+    "/spaces/{spaceId}": {
+      "get": {
+        "operationId": "get_space",
+        "tags": [
+          "spaces"
+        ],
+        "summary": "Get a space's connection URLs and sharing info (owner only; URLs carry a session token)",
+        "parameters": [
+          {
+            "name": "spaceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The id a create call returned"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "userId, spaceName, spaceApiUrl, openClawRestartUrl, sharedUsers"
+          }
+        }
+      }
+    }
+  }
+}
