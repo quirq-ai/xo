@@ -72,8 +72,7 @@ function message(text) {
 }
 function render(d) {
   if (d.status === "ok") setBadge("ok", "Operational");
-  else setBadge("warn", "Degraded: " + d.recent.failed + " of " + d.recent.entries +
-                " account requests failed in the last 5 minutes");
+  else setBadge("warn", "Degraded: " + d.recent.failed + " of " + d.recent.entries + " failed in 5 min");
   $("since").textContent = "This instance started " + ago(d.instance.startedAt) + " (" + d.instance.startedAt + ")";
   $("requests").textContent = d.instance.requests;
   $("pings").textContent = d.instance.pings;

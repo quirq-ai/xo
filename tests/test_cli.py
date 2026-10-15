@@ -190,7 +190,10 @@ def test_a_base64_key_is_sent_and_redacted_in_every_echoed_form(fake, capsys, mo
     monkeypatch.setenv("XO_API_KEY", key)
     echoes = [key, urllib.parse.quote(key, safe=""), urllib.parse.quote_plus(key), key.replace("/", "\\/"),
               urllib.parse.quote(key), "ak_FAKE%2br4%2fenc%3d0123456789", "ak_FAKE+r4%2fenc%3d0123456789",
-              "ak_FAKE+r4&#x2F;enc=0123456789", "ak_FAKE+r4&#47;enc=0123456789"]
+              "ak_FAKE+r4&#x2F;enc=0123456789", "ak_FAKE+r4&#47;enc=0123456789",
+              "ak_FAKE\\u002Br4\\u002fenc\\u003D0123456789", "ak_FAKE&#43;r4&#X2F;enc&#61;0123456789",
+              "ak_FAKE+r4&#x002F;enc=0123456789", "ak_FAKE+r4&#047;enc=0123456789", "ak_FAKE+r4&sol;enc=0123456789",
+              "ak_FAKE%252Br4%252Fenc%253D0123456789", "ak_FAKE r4/enc=0123456789", "ak_%46AKE+r4/enc=0123456789"]
     fake.route("GET", "/health", status=500, body=" ".join(echoes))
     code, out, err = run(capsys, "call", "health")
     assert code == 1 and fake.requests[0]["headers"]["Authorization"] == f"Bearer {key}"

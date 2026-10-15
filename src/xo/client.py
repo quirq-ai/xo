@@ -88,7 +88,7 @@ def api_key(flag: str | None = None) -> str:
         raise XoError(f"no API key: set {KEY_ENV} or pass --api-key - to read it from stdin "
                       "(get a key from the XO team)")
     # Only characters that JSON and repr never escape, so redaction finds the key as sent; redact()
-    # also looks for the forms a URL, an escaping JSON writer or an HTML writer would give + / and =.
+    # also looks for the forms a URL, an escaping JSON writer or an HTML writer would give them.
     if not KEY_CHARS.fullmatch(key):
         raise XoError(f"{source} holds characters an API key cannot have "
                       "(only letters, digits and _ . - + / = are allowed); the key is not shown")
@@ -108,22 +108,37 @@ def redact(value: Any, key: str | None) -> Any:
     return value
 
 
+def _hex(value: int, width: int = 0) -> str:
+    """A regex for `value` in hex, either case, at least `width` digits."""
+    return "".join(f"[{d}{d.lower()}]" if d.isalpha() else d for d in f"{value:0{width}X}")
+
+
+# Named HTML references for the characters an API key may hold besides letters, digits and _ . -
+_NAMED = {"/": "&sol;", "+": "&plus;", "=": "&equals;"}
+
+
 @functools.lru_cache(maxsize=32)
 def _pattern(key: str) -> re.Pattern[str]:
     """`key` as sent, or as a URL, a JSON writer or an HTML writer might show it, in any mix.
 
-    Each character a URL may escape matches itself or its %XX form in either case (a space also as
-    +), and / also matches JSON's \\/ and HTML's &#x2F; and &#47;.
+    Each character also matches its %XX form in either case (or double-encoded as %25XX), JSON's
+    \\uXXXX, HTML's &#xHH; or &#DD; (zero-padded or not) and its named reference; / also matches
+    JSON's \\/, and + also a space, as a form decoder would turn it.
     """
     parts = []
     for c in key:
-        if c.isascii() and (c.isalnum() or c in "_.-~"):
-            parts.append(re.escape(c))
-            continue
-        hexed = "".join(f"%{b:02X}" for b in c.encode())
-        forms = {c, hexed, hexed.lower(), *(("+",) if c == " " else ()),
-                 *(("\\/", "&#x2F;", "&#x2f;", "&#47;") if c == "/" else ())}
-        parts.append("(?:" + "|".join(re.escape(f) for f in sorted(forms, key=len, reverse=True)) + ")")
+        forms = [re.escape(c),
+                 "".join(f"%(?:25)?{_hex(b, 2)}" for b in c.encode()),
+                 f"&#[xX]0*{_hex(ord(c))};", f"&#0*{ord(c)};"]
+        if ord(c) < 0x10000:
+            forms.append(f"\\\\[uU]{_hex(ord(c), 4)}")
+        if c in _NAMED:
+            forms.append(re.escape(_NAMED[c]))
+        if c == "/":
+            forms.append(re.escape("\\/"))
+        if c == "+":
+            forms.append(" ")
+        parts.append("(?:" + "|".join(forms) + ")")
     return re.compile("".join(parts))
 
 

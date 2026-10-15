@@ -56,6 +56,7 @@ esac
 printf 'Paste the test user'"'"'s API key (ak_..., nothing shows), then press Enter: '
 IFS= read -rs key
 echo
+key="${key%$'\r'}"  # a paste from some terminals ends in a carriage return; xo strips it too
 if [ -z "$key" ]; then
   echo "No key given; stopping."
   exit 1

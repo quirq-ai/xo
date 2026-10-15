@@ -678,6 +678,15 @@ def test_a_failure_heals_after_five_minutes(clerk):  # #6 D2
     assert app.status()["status"] == "ok" and app.status()["recent"] == {"entries": 0, "failed": 0}
 
 
+def test_the_degraded_counts_are_bounded(clerk, monkeypatch):  # #6 audit nit 4
+    monkeypatch.setattr(server, "DEGRADED_KEPT", 5)
+    app = server.App(server.Config(), audit=lambda line: None, clock=lambda: 1000.0)
+    for _ in range(20):
+        app.record("GET", "/me", 503, 0)
+    assert (len(app._seen), len(app._failed)) == (5, 5)
+    assert app.status()["recent"] == {"entries": 5, "failed": 5}
+
+
 def _raw_head(srv, path: str, extra: bytes = b"") -> tuple[bytes, bytes]:
     """A HEAD request over a raw socket, read to the end: urllib never reads a body on HEAD (#6 D1)."""
     import socket

@@ -80,17 +80,22 @@ instance only.
   `CLERK_SECRET_KEY` (it is set for Production only), so they answer 503 "xo server
   misconfigured". That is expected, and it keeps the Secret Key out of any branch's build.
 - **Rolling back:** in **Deployments**, pick the last good production deployment and choose
-  **Instant Rollback** (or **Promote to Production**), then fix `main`. Until a fix is merged, the
-  next merge to `main` deploys again.
+  **Instant Rollback**, then fix `main`. Vercel's documentation says a rollback turns off the
+  automatic assignment of production domains: later merges to `main` still build, but they do not
+  reach `xo.quirq.dev`. Once the fix is merged and its deployment is **Ready**, **Promote** it to
+  production (or choose **Undo Rollback**) to turn automatic deploys back on, then run the test
+  script. Also from the documentation: on the Hobby plan, Instant Rollback can go back only to the
+  previous production deployment.
 - `.vercelignore` keeps `.env` files and the tests out of every upload.
 
 ## 5. Test
 
-From a checkout of `main` at the commit that is deployed (the commit's sha is on the deployment in
-**Deployments**):
+From a checkout at the commit that is deployed: its sha is on the production deployment in
+**Deployments**. Paste it into the first line:
 
 ```bash
-git clone https://github.com/quirq-ai/xo.git && cd xo
+SHA=paste-the-deployed-commit-sha-here
+git clone https://github.com/quirq-ai/xo.git && cd xo && git checkout --detach "$SHA"
 bash docs/test-xo-server.sh
 ```
 
@@ -124,7 +129,7 @@ missing or refused; the project's **Logs** say which.
 | Big bodies | over 32KB refused (413) |
 | Requests per address | the Firewall rule in step 3, once published |
 | **Not protected** | a flood from many addresses spread over many instances; only Clerk's own limits stop it |
-| **Not rate limited** | `/` (the status page), `/status` and `/healthz`: public, one function invocation each, never a Clerk call. An open status page tab polls `/status` every 5 seconds while it is visible (about 17,000 invocations a day per tab left open) and stops while hidden. To cap them too, add a second rule of its own (Request Path **equals** `/status`, 60 requests per 60 seconds per IP); the page stays well under that. Do not add `/status` to the rule in step 3: it would share one per-address budget with `/me`, and an open status tab could then make the test script's Firewall check fail. |
+| **Not rate limited** | `/` (the status page), `/status` and `/healthz`: public, one function invocation each, never a Clerk call. An open status page tab polls `/status` every 5 seconds while it is visible (about 17,000 invocations a day per tab left open) and stops while hidden. To cap them too, add a second rule of its own (Request Path **starts with** `/status`, 60 requests per 60 seconds per IP, so `/status/` is capped too); the page stays well under that. Do not add `/status` to the rule in step 3: it would share one per-address budget with `/me`, and an open status tab could then make the test script's Firewall check fail. |
 
 ## Logs and audit lines
 
