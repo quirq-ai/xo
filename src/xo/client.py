@@ -414,6 +414,19 @@ class Client:
 
 # Never handed to the coder process: it needs none of these, and least privilege costs nothing.
 _NOT_FOR_CODER = re.compile(r"(XO_API_KEY|XO_CODER_URL|CODER_URL|CLERK_.*|ELEVENLABS_.*)\Z")
+# Coder's root options (they name the deployment, the token, the login store or what is sent with
+# each request), refused in pass-through arguments in both --x V and --x=V forms.
+CODER_ROOT_OPTIONS = frozenset({"--url", "--token", "--session-token", "--global-config", "--use-keyring",
+                                "--header", "--header-command"})
+CODER_ROOT_PREFIXES = ("--client-tls", "--tls-")
+
+
+class CoderUnsure(XoError):
+    """Coder could not say where it is logged in, for a reason other than having no login."""
+
+
+class CoderTimeout(XoError):
+    """A coder command ran out of time."""
 
 
 class CoderClient(Client):
@@ -432,12 +445,34 @@ class CoderClient(Client):
         self.hide([os.environ.get(KEY_ENV, ""), os.environ.get("CODER_SESSION_TOKEN", "")])
         self.checked = False
 
-    @staticmethod
-    def env() -> dict[str, str]:
-        return {k: v for k, v in os.environ.items() if not _NOT_FOR_CODER.match(k)}
+    def env(self) -> dict[str, str]:
+        """The environment for coder: without xo's secrets or deployment settings. A
+        CODER_SESSION_TOKEN goes to $CODER_URL when that is set and to Coder's saved deployment
+        otherwise, so with a token set this stops unless CODER_URL names this deployment, and keeps
+        CODER_URL so the token and the address stay together."""
+        env = {k: v for k, v in os.environ.items() if not _NOT_FOR_CODER.match(k)}
+        if os.environ.get("CODER_SESSION_TOKEN", "").strip():
+            given = os.environ.get("CODER_URL", "").strip()
+            try:
+                same = bool(given) and coder_url(given, source="CODER_URL") == self.base
+            except XoError:
+                same = False
+            if not same:
+                raise XoError(f"CODER_SESSION_TOKEN is set, so CODER_URL must name {self.base}: set "
+                              f"CODER_URL={self.base}, or unset CODER_SESSION_TOKEN to use Coder's own "
+                              "login; nothing was sent")
+            env["CODER_URL"] = given
+        return env
 
     def _command(self, args: list[str], *, timeout: float | None = None, print_url: bool = False,
                  hint: str = "check coder login for this deployment", url: bool = True) -> str:
+        proc = self._proc(args, timeout=timeout, print_url=print_url, url=url)
+        if proc.returncode:
+            raise XoError(f"coder {args[0]} failed (exit {proc.returncode}); {hint}")
+        return proc.stdout
+
+    def _proc(self, args: list[str], *, timeout: float | None = None, print_url: bool = False,
+              url: bool = True) -> subprocess.CompletedProcess:
         if url and not self.checked:
             raise XoError("internal error: Coder was not checked before a call with --url")
         env = self.env()
@@ -450,25 +485,30 @@ class CoderClient(Client):
                                   timeout=timeout if timeout is not None else self.timeout)
         except FileNotFoundError:
             raise XoError("Coder CLI not found: install coder (https://coder.com/docs/install/cli), "
-                          "then run xo login coder") from None
+                          "then run xo coder login") from None
         except subprocess.TimeoutExpired:
-            raise XoError(f"coder {args[0]} timed out"
-                          + (f"; {MAYBE_RECEIVED}" if self.in_flight else "")) from None
+            raise CoderTimeout(f"coder {args[0]} timed out"
+                               + (f"; {MAYBE_RECEIVED}" if self.in_flight else "")) from None
         except OSError:
             raise XoError("could not run the Coder CLI; check that coder is installed and executable") from None
-        if proc.returncode:
-            raise XoError(f"coder {args[0]} failed (exit {proc.returncode}); {hint}")
-        return proc.stdout
+        return proc
 
     def logged_in_to(self) -> tuple[str, str] | None:
         """(deployment, username) Coder is logged in to, asked without --url so its token goes only
-        where it was issued; None when it is not logged in."""
+        where it was issued; None only when Coder says it is not logged in. Any other failure (an
+        expired token, a deployment that does not answer, a timeout) raises CoderUnsure."""
+        unsure = ("could not tell where Coder is logged in (coder whoami {}); check `coder whoami`, "
+                  "or log in again with xo coder login")
         try:
-            out = self._command(["whoami", "--output", "json"], url=False, hint="")
-        except XoError as e:
-            if "not found" in str(e) or "could not run" in str(e):
-                raise
-            return None  # not logged in, or the saved deployment does not answer
+            proc = self._proc(["whoami", "--output", "json"], url=False)
+        except CoderTimeout:
+            raise CoderUnsure(unsure.format("timed out")) from None
+        if proc.returncode:
+            # Coder's own words for a missing login; its stderr is never printed.
+            if "you are not logged in" in (proc.stderr or "").lower():
+                return None
+            raise CoderUnsure(unsure.format(f"failed, exit {proc.returncode}"))
+        out = proc.stdout
         try:
             data = json.loads(out)[0]
             owner, where = data["username"], data["url"]
@@ -480,13 +520,16 @@ class CoderClient(Client):
 
     def check(self) -> str:
         """The username, once Coder is known to be logged in to this deployment; else stop."""
-        found = self.logged_in_to()
+        try:
+            found = self.logged_in_to()
+        except CoderUnsure as e:
+            raise XoError(f"{e}; nothing was sent") from None
         if found is None:
-            raise XoError(f"Coder is not logged in; run xo login coder (it logs in to {self.base})")
+            raise XoError(f"Coder is not logged in; run xo coder login (it logs in to {self.base})")
         where, owner = found
         if where != self.base:
             raise XoError(f"Coder is logged in to {where}, not {self.base}; nothing was sent. "
-                          "Run xo login coder to log in to this one")
+                          "Run xo coder login to log in to this one")
         self.checked = True
         return owner
 
@@ -494,12 +537,19 @@ class CoderClient(Client):
         return self.check()
 
     def run(self, args: list[str]) -> int:
-        """Run one coder command on this deployment in the terminal, after the check."""
+        """Run one coder command on this deployment in the terminal, after the check. Coder reads its
+        root options anywhere before `--` and the last --url wins, so ARGS may not carry them."""
+        for arg in args[:args.index("--") if "--" in args else len(args)]:
+            name = arg.partition("=")[0]
+            if name in CODER_ROOT_OPTIONS or name.startswith(CODER_ROOT_PREFIXES):
+                raise XoError(f"xo coder does not pass {name} to coder: it would change where Coder "
+                              "sends its token or which login it uses; nothing was sent. Use "
+                              "--coder-url before the command to pick the deployment")
         self.check()
         try:
             return subprocess.run(["coder", "--url", self.base, *args], env=self.env()).returncode
         except FileNotFoundError:
-            raise XoError("Coder CLI not found: install coder, then run xo login coder") from None
+            raise XoError("Coder CLI not found: install coder, then run xo coder login") from None
         except OSError:
             raise XoError("could not run the Coder CLI; check that coder is installed and executable") from None
 
@@ -508,20 +558,27 @@ class CoderClient(Client):
         another login. Returns a one-line result."""
         if os.environ.get("CODER_SESSION_TOKEN", "").strip():
             raise XoError("CODER_SESSION_TOKEN is set, and coder login refuses to run with it; unset it first")
-        found = self.logged_in_to()
+        try:
+            found = self.logged_in_to()
+            unsure = None
+        except CoderUnsure as e:
+            found, unsure = None, str(e)
         if found and found[0] == self.base:
             self.checked = True
             return f"already logged in to {self.base} as {found[1]}"
         if not (sys.stdin.isatty() and sys.stdout.isatty()):
-            raise XoError(f"coder login needs a terminal; run xo login coder in one (it logs in to {self.base})")
+            raise XoError(f"coder login needs a terminal; run xo coder login in one (it logs in to {self.base})")
         if found and not ask(f"Coder is logged in to {found[0]}; replace that login with {self.base}?"):
             raise XoError(f"kept the Coder login to {found[0]}; nothing changed")
+        if unsure and not ask(f"xo {unsure.split(' (')[0]}; log Coder in to {self.base}, "
+                              "replacing any login it has?"):
+            raise XoError(f"kept Coder's login as it is; nothing changed ({unsure})")
         # coder login itself sends no stored token: it asks the deployment with no session.
         try:
             code = subprocess.run(["coder", "login", self.base], env=self.env()).returncode
         except FileNotFoundError:
             raise XoError("Coder CLI not found: install coder (https://coder.com/docs/install/cli), "
-                          "then run xo login coder") from None
+                          "then run xo coder login") from None
         if code:
             raise XoError(f"coder login failed (exit {code})")
         return f"logged in to {self.base} as {self.check()}"

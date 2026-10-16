@@ -326,7 +326,7 @@ def test_not_logged_in_says_how(runner, capsys, monkeypatch):
         return subprocess.CompletedProcess(argv, 1, "", "You are not logged in")
     monkeypatch.setattr("xo.client.subprocess.run", run)
     code, _, err = invoke(capsys)
-    assert code == 1 and "Coder is not logged in; run xo login coder" in err and len(runner) == 1
+    assert code == 1 and "Coder is not logged in; run xo coder login" in err and len(runner) == 1
 
 
 @pytest.mark.parametrize("answer", ['[]', '{"username": "alice"}', '[{"username": "alice"}]',
@@ -443,3 +443,148 @@ def test_there_is_no_coder_delete(runner, capsys):
     with pytest.raises(SystemExit):
         cli.main(["coder", "delete", "my-preview"])
     assert runner == []
+
+
+ROOT_OPTIONS = [["--url", "https://evil.example"], ["--url=https://evil.example"], ["--url", "https://xo.quirq.dev"],
+                ["--token", "T"], ["--token=T"], ["--global-config", "/other"], ["--global-config=/other"],
+                ["--use-keyring"], ["--use-keyring=false"], ["--header", "X: y"], ["--header=X: y"],
+                ["--header-command", "cmd"], ["--header-command=cmd"], ["--client-tls-cert", "c"],
+                ["--client-tls-key=k"]]
+
+
+@pytest.mark.parametrize("verb", [["list"], ["ssh", "my-preview"]])
+@pytest.mark.parametrize("options", ROOT_OPTIONS)
+def test_pass_through_refuses_coders_root_options(runner, capsys, verb, options):
+    assert cli.main(["coder", *verb, *options]) == 1
+    err = capsys.readouterr()[1]
+    assert f"does not pass {options[0].partition('=')[0]}" in err and "nothing was sent" in err
+    assert runner == []  # refused before Coder is even asked where it is logged in
+
+
+def test_root_options_after_a_double_dash_belong_to_the_command(runner):
+    assert cli.main(["coder", "ssh", "my-preview", "--", "echo", "--url", "x"]) == 0
+    assert runner[1][0] == ["coder", "--url", runner.base, "ssh", "my-preview", "--", "echo", "--url", "x"]
+
+
+def test_pass_through_runs_with_the_scrubbed_environment(runner, monkeypatch):
+    seen = []
+
+    def run(argv, **kwargs):
+        seen.append((argv, kwargs["env"]))
+        return whoami(runner, argv) if cmd(argv) == "whoami" else subprocess.CompletedProcess(argv, 0, "", "")
+    monkeypatch.setattr("xo.client.subprocess.run", run)
+    monkeypatch.setenv("XO_API_KEY", "secret-value")
+    monkeypatch.setenv("CODER_URL", "https://elsewhere.example")
+    assert cli.main(["coder", "list"]) == 0
+    assert [a[1] for a, _ in seen] == ["whoami", "--url"]
+    for _, env in seen:
+        assert "XO_API_KEY" not in env and "CODER_URL" not in env
+
+
+@pytest.mark.parametrize("coder_env", [None, "https://elsewhere.example", "not a url"])
+@pytest.mark.parametrize("argv", [["coder", "list"], ["coder", "logout"], ["coder", "github", REPO]])
+def test_a_session_token_needs_coder_url_for_this_deployment(runner, capsys, monkeypatch, coder_env, argv):
+    monkeypatch.setenv("CODER_SESSION_TOKEN", TOKEN)
+    if coder_env:
+        monkeypatch.setenv("CODER_URL", coder_env)
+    assert cli.main(argv) == 1
+    out, err = capsys.readouterr()
+    assert TOKEN not in out + err
+    assert f"CODER_URL must name {DEFAULT_CODER_URL}" in err and "nothing was sent" in err
+    assert runner == []  # not even whoami: it would send the token to Coder's saved deployment
+
+
+def test_a_session_token_with_matching_coder_url_keeps_them_together(runner, monkeypatch):
+    seen = []
+
+    def run(argv, **kwargs):
+        seen.append(kwargs["env"])
+        return whoami(runner, argv) if cmd(argv) == "whoami" else subprocess.CompletedProcess(argv, 0, "", "")
+    monkeypatch.setattr("xo.client.subprocess.run", run)
+    monkeypatch.setenv("CODER_SESSION_TOKEN", TOKEN)
+    monkeypatch.setenv("CODER_URL", DEFAULT_CODER_URL + "/")
+    assert cli.main(["coder", "list"]) == 0
+    assert len(seen) == 2
+    for env in seen:
+        assert env["CODER_URL"] == DEFAULT_CODER_URL + "/" and env["CODER_SESSION_TOKEN"] == TOKEN
+
+
+def failing_whoami(runner, monkeypatch, *, stderr="error: unauthorized", timeout=False, then=None):
+    def run(argv, **kwargs):
+        record(runner, argv, kwargs)
+        if cmd(argv) == "whoami" and not runner.at:
+            if timeout:
+                raise subprocess.TimeoutExpired(argv, 1)
+            return subprocess.CompletedProcess(argv, 1, "", stderr)
+        if argv[1] == "login":
+            runner.at = DEFAULT_CODER_URL
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        return whoami(runner, argv)
+    monkeypatch.setattr("xo.client.subprocess.run", run)
+
+
+@pytest.mark.parametrize("timeout", [False, True])
+def test_an_unclear_whoami_failure_is_not_read_as_logged_out(runner, capsys, monkeypatch, timeout):
+    failing_whoami(runner, monkeypatch, stderr=f"error: {TOKEN} expired", timeout=timeout)
+    assert cli.main(["coder", "list"]) == 1
+    out, err = capsys.readouterr()
+    assert "could not tell where Coder is logged in" in err and "nothing was sent" in err
+    assert TOKEN not in out + err and len(runner) == 1
+
+
+@pytest.mark.parametrize("timeout", [False, True])
+def test_coder_login_asks_before_replacing_when_whoami_is_unclear(runner, capsys, monkeypatch, timeout):
+    failing_whoami(runner, monkeypatch, timeout=timeout)
+    monkeypatch.setattr("xo.client.sys.stdin.isatty", lambda: True, raising=False)
+    monkeypatch.setattr("xo.client.sys.stdout.isatty", lambda: True, raising=False)
+    questions = []
+    monkeypatch.setattr(cli, "_ask", lambda q: questions.append(q) or False)
+    assert cli.main(["coder", "login"]) == 1
+    assert "kept Coder's login as it is; nothing changed" in capsys.readouterr()[1]
+    assert len(runner) == 1 and "replacing any login it has" in questions[0]
+    runner.clear()
+    monkeypatch.setattr(cli, "_ask", lambda q: True)
+    assert cli.main(["coder", "login"]) == 0
+    assert [c[0][1] for c in runner] == ["whoami", "login", "whoami"]
+
+
+def test_coder_login_without_a_login_does_not_ask(runner, capsys, monkeypatch):
+    failing_whoami(runner, monkeypatch, stderr="error: You are not logged in. Try logging in using 'coder login <url>'.")
+    monkeypatch.setattr("xo.client.sys.stdin.isatty", lambda: True, raising=False)
+    monkeypatch.setattr("xo.client.sys.stdout.isatty", lambda: True, raising=False)
+    monkeypatch.setattr(cli, "_ask", lambda q: pytest.fail("asked: " + q))
+    assert cli.main(["coder", "login"]) == 0
+    assert [c[0][1] for c in runner] == ["whoami", "login", "whoami"]
+
+
+def test_coder_logout_asks_first(runner, capsys, monkeypatch):
+    monkeypatch.setattr(cli, "_ask", lambda q: False)
+    assert cli.main(["coder", "logout"]) == 0
+    assert "left logged in" in capsys.readouterr()[1] and len(runner) == 1
+
+
+def test_no_url_call_before_the_check():
+    with pytest.raises(Exception, match="not checked"):
+        CoderClient(DEFAULT_CODER_URL)._command(["list"])
+
+
+@pytest.mark.parametrize("argv", [["--url", "https://x.example", "coder", "list"], ["coder", "--url", "https://x.example", "list"],
+                                  ["--api-key", "ak_x", "coder", "list"], ["--spec=s.json", "coder", "--timeout", "5", "list"]])
+def test_xo_options_before_a_pass_through_verb(runner, argv):
+    assert cli.main(argv) == 0
+    assert [c[0] for c in runner][1] == ["coder", "--url", DEFAULT_CODER_URL, "list"]
+
+
+@pytest.mark.parametrize("value", ["nan", "inf", "0", "-1", "x"])
+def test_a_bad_timeout_before_a_pass_through_verb_is_a_usage_error(runner, capsys, value):
+    with pytest.raises(SystemExit) as e:
+        cli.main(["--timeout", value, "coder", "list"])
+    assert e.value.code == 2 and runner == []
+    assert "invalid number of seconds" in capsys.readouterr()[1]
+
+
+def test_a_pass_through_verb_reached_through_argparse_fails_cleanly(runner, capsys, monkeypatch):
+    monkeypatch.setattr(cli, "_coder_pass", lambda argv: None)
+    assert cli.main(["coder", "list"]) == 1
+    err = capsys.readouterr()[1]
+    assert "put coder's own arguments after it" in err and "unexpected" not in err and runner == []

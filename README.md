@@ -95,16 +95,20 @@ need it. See
 
 ## Deploy a GitHub repository with Coder
 
-Install the [Coder CLI](https://coder.com/docs/install/cli) separately, then run `xo login coder`
-(`xo coder login` is the same): it logs Coder in to the deployment that has the `xo-github`
-template, in your terminal. Coder keeps its own login (or `CODER_SESSION_TOKEN`); xo needs no
-`XO_API_KEY` for it and never hands that key to Coder. Tested with Coder 2.36.4.
-`xo login` and `--url`/`XO_URL` configure XO API calls; Coder uses `--coder-url`/`XO_CODER_URL`.
-Coder's own `CODER_URL` is not read.
+Install the [Coder CLI](https://coder.com/docs/install/cli) separately, then run `xo coder login`:
+it logs Coder in to the deployment that has the `xo-github` template, in your terminal. Coder keeps
+its own login; xo needs no `XO_API_KEY` for it and never hands that key to Coder. Tested with Coder
+2.36.4. `xo login` and `--url`/`XO_URL` configure XO API calls; Coder uses
+`--coder-url`/`XO_CODER_URL`. Coder's own `CODER_URL` does not pick the deployment. In CI, set
+`CODER_SESSION_TOKEN` together with `CODER_URL` naming the same deployment; with the token set and
+`CODER_URL` missing or naming another one, xo stops with nothing sent.
 
 On Linux, Coder keeps one login for whichever deployment you last logged in to, and sends it to any
 deployment it is told to use. So before every Coder command, xo asks Coder (without naming a
-deployment) where it is logged in, and stops with nothing sent unless it is xo's deployment.
+deployment) where it is logged in, and stops with nothing sent unless it is xo's deployment. Coder
+options that change the deployment, token or login store (`--url`, `--token`, `--global-config`,
+`--use-keyring`, `--header`, `--header-command`, `--client-tls-*`) are refused in the arguments
+after the command.
 
 ```sh
 xo coder login

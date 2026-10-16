@@ -59,6 +59,7 @@ import argparse
 import difflib
 import getpass
 import json
+import math
 import os
 import re
 import sys
@@ -577,25 +578,19 @@ def _coder_pass(argv: list[str]) -> int | None:
     seen_coder = False
     while i < len(argv):
         arg = argv[i]
-        if arg in ("--coder-url", "--timeout") and i + 1 < len(argv):
-            if arg == "--coder-url":
-                flag = argv[i + 1]
-            else:
-                try:
-                    timeout = float(argv[i + 1])
-                except ValueError:
-                    return None
-            i += 2
-        elif arg.startswith(("--coder-url=", "--timeout=")):
-            name, _, value = arg.partition("=")
+        name, eq, value = arg.partition("=")
+        if name in _VALUED and (eq or i + 1 < len(argv)):
+            # xo's own options; only --coder-url and --timeout matter to Coder commands.
+            if not eq:
+                value = argv[i + 1]
             if name == "--coder-url":
                 flag = value
-            else:
+            elif name == "--timeout":
                 try:
-                    timeout = float(value)
-                except ValueError:
+                    timeout = _seconds(value)
+                except argparse.ArgumentTypeError:
                     return None
-            i += 1
+            i += 1 if eq else 2
         elif not seen_coder and arg == "coder":
             seen_coder = True
             i += 1
@@ -605,6 +600,23 @@ def _coder_pass(argv: list[str]) -> int | None:
         else:
             return None
     return None
+
+
+def _coder_pass_misplaced(args: argparse.Namespace) -> int:
+    raise XoError(f"xo coder {args.action} takes only xo's --coder-url and --timeout before "
+                  f"{args.action} (with a valid number of seconds); put coder's own arguments after it. "
+                  "Nothing was sent")
+
+
+def _seconds(text: str) -> float:
+    """A --timeout value: a finite number of seconds above zero."""
+    try:
+        value = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid number of seconds: {text!r}") from None
+    if not (math.isfinite(value) and value > 0):
+        raise argparse.ArgumentTypeError(f"invalid number of seconds: {text!r}")
+    return value
 
 
 def _serve(args: argparse.Namespace) -> int:
@@ -639,7 +651,7 @@ def _common(key: bool = True) -> argparse.ArgumentParser:
                         "then https://dev-coder.xo.builders)")
     c.add_argument("--spec", default=argparse.SUPPRESS, metavar="FILE",
                    help="an OpenAPI JSON file (default $XO_SPEC, then the one bundled with xo)")
-    c.add_argument("--timeout", type=float, default=argparse.SUPPRESS, help="seconds per request (default 30)")
+    c.add_argument("--timeout", type=_seconds, default=argparse.SUPPRESS, help="seconds per request (default 30)")
     return c
 
 
@@ -769,7 +781,8 @@ def main(argv: list[str] | None = None) -> int:
                           help="log Coder out, only if it is logged in to the deployment")
     lo.set_defaults(run=_coder_logout)
     for verb in CODER_PASS:
-        crsub.add_parser(verb, help=f"coder {verb} ARGS..., on the deployment, after checking Coder's login")
+        crsub.add_parser(verb, help=f"coder {verb} ARGS..., on the deployment, after checking Coder's login"
+                         ).set_defaults(run=_coder_pass_misplaced)
 
     _endpoints(sub, common, argv)
 
