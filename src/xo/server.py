@@ -26,10 +26,11 @@ verifies it with Clerk and answers:
     POST  /me/share                 any user key: {"item": "space:S"|"project:OWNER/REPO", "to": USERNAME}:
                                     an invite in that user's `shared` (the only write to another
                                     user's metadata: their `shared` key, the caller's own invite)
-    GET   /me/shared                any user key: the invites in its own `shared`
-    POST  /me/shared/accept         any user key: {"item", "from", "as"?}: copy the invite into its
-                                    own projects and spaces, then take it off `shared`
-    POST  /me/shared/reject         any user key: {"item", "from"}: take it off `shared`
+    GET   /me/shared                any user key: the invites in its own `shared`, each with an id
+    POST  /me/shared/accept         any user key: {"id", "as"?}: in one write, the invite's projects
+                                    into its own projects, a space into its spaces, the invite off
+    POST  /me/shared/reject         any user key: {"id"}: the invite off, that sender and item
+                                    blocked for 7 days
     GET   /user-metadata/{userId}   admin keys only: public and private metadata
     PATCH /user-metadata/{userId}   admin keys only: deep-merge changes into allow-listed keys
     POST  /api/core/v1/{create}     passed on to XO's core API as sent, key included, and its
@@ -117,7 +118,7 @@ MAX_BODY = 32 * 1024  # two 8KB buckets with room for JSON overhead
 # Requests per minute per key: /me, then /user-metadata. Clerk allows 1000 Backend API calls per
 # 10 seconds for the whole instance and 10 metadata writes per 10 seconds per user.
 LIMITS = {"me": 60, "projects": 30, "spaces": 30, "share": 10, "shared": 30, "user-metadata": 20, "core": 30}
-# /me/projects: the one write a normal key can make. A name is letters, digits, spaces and _ . -,
+# /me/projects: a write a normal key can make to its own metadata. A name is letters, digits, spaces and _ . -,
 # starting with a letter or digit; the list stays well under Clerk's 8KB private metadata limit.
 MAX_PROJECTS = 30
 MAX_SPACES = 10
@@ -129,6 +130,16 @@ DEFAULT_REF = "main"
 # Invites in a user's `shared`: the most waiting at once, and the most from any one sender.
 MAX_INVITES = 20
 MAX_INVITES_FROM = 5
+# Invites have their own room, apart from what a user's own writes may use (PRIVATE_BUDGET): all of
+# `shared` at most SHARED_BUDGET bytes and each invite at most INVITE_BUDGET, so nobody else can
+# take more than that from anyone. A share also needs the whole of the recipient's private metadata
+# to stay within PRIVATE_BUDGET; their own writes do not count `shared`.
+SHARED_BUDGET = 1536
+INVITE_BUDGET = 1024
+INVITE_ID_LEN = 8
+RESHARE_WAIT = 60  # seconds before a sender may replace their invite with a changed one
+BLOCK_SECONDS = 7 * 24 * 3600  # after a reject, how long that sender cannot invite you to that item
+MAX_BLOCKS = 10
 # Seconds every POST /me/share takes at least, success or not, so its timing does not say whether
 # the username exists or what stopped it.
 SHARE_FLOOR = 1.5
@@ -288,7 +299,8 @@ class Clerk:
         except (ValueError, RecursionError):  # Clerk answered, but not with JSON: not "unreachable"
             raise ClerkError(502, "not JSON", seen="not JSON") from None
         if not isinstance(out, shape):
-            raise ClerkError(502, "not an object" if shape is dict else "not a list", seen="unexpected shape")
+            what = "not an object" if shape is dict else "not a list"
+            raise ClerkError(502, what, seen=what)
         return out
 
     def verify_key(self, secret: str) -> dict:
@@ -300,6 +312,11 @@ class Clerk:
     def users_named(self, username: str) -> list:
         """The users whose username is exactly this one (Clerk's list, filtered by username)."""
         return self._call("GET", "/users?" + urllib.parse.urlencode({"username": username, "limit": 2}), shape=list)
+
+    def users_by_id(self, user_ids: list[str]) -> list:
+        """The users with these ids, in one call (those deleted are missing)."""
+        query = urllib.parse.urlencode([("user_id", i) for i in user_ids] + [("limit", len(user_ids))])
+        return self._call("GET", "/users?" + query, shape=list)
 
     def update_metadata(self, user_id: str, changes: dict) -> dict:
         body = {BUCKETS[name]: value for name, value in changes.items()}
@@ -405,28 +422,54 @@ def _shown_spaces(spaces: Any) -> Any:
 
 
 def _invite_ok(entry: Any) -> bool:
-    """An invite as xo writes it: who sent it, what it is, and for a space its projects."""
+    """An invite as xo writes it: who sent it, what it is, and for a space its GitHub projects."""
     if not (isinstance(entry, dict) and isinstance(entry.get("from"), str) and isinstance(entry.get("fromName"), str)
-            and isinstance(entry.get("item"), str)):
+            and isinstance(entry.get("item"), str) and isinstance(entry.get("at"), str)):
         return False
     kind, _, name = entry["item"].partition(":")
     if kind == "project":
-        return names.project_ok(name) and names.is_github(name)
+        return names.project_ok(name) and names.is_github(name) and "projects" not in entry
     return kind == "space" and names.space_ok(name) and isinstance(entry.get("projects"), list)
 
 
+def _block_ok(entry: Any) -> bool:
+    """A rejected invite's mark in `shared`: a hash of its sender and item, and when it ends."""
+    return (isinstance(entry, dict) and set(entry) == {"block", "until"} and isinstance(entry["block"], str)
+            and isinstance(entry["until"], str))
+
+
+def _block_of(sender: str, item: str) -> str:
+    return hashlib.sha256(f"{sender}\n{item.casefold()}".encode()).hexdigest()[:16]
+
+
+def _handle(entry: dict) -> str:
+    """The id `xo list shared` shows for an invite: its sender's user id and exact content, `at`
+    included, so a re-share or another sender's look-alike is never taken for the one listed."""
+    return hashlib.sha256(json.dumps(entry, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:INVITE_ID_LEN]
+
+
+def _shown_invite(e: dict, current: str | None = None, gone: bool = False) -> dict:
+    """An invite as its user sees it: never the sender's user id. `from` is the sender's username
+    now, when it was looked up; `sharedAs` is the one they had when they shared, if different."""
+    name = current or e["fromName"]
+    return {"id": _handle(e), "from": name,
+            **({"sharedAs": e["fromName"]} if name != e["fromName"] else {}),
+            **({"senderGone": True} if gone else {}),
+            "item": e["item"], "at": e["at"],
+            **({"projects": _mask_values(e["projects"])} if "projects" in e else {})}
+
+
 def _shown_invites(invites: Any) -> Any:
-    """`shared` as its user sees it: each sender by username, never by Clerk user id."""
+    """`shared` as /me shows it: the invites by the usernames they were sent under."""
     if not isinstance(invites, list):
         return _mask_secrets(invites)
-    shown = []
-    for e in invites:
-        if not _invite_ok(e):
-            shown.append("(an entry xo cannot read)")
-            continue
-        shown.append({"from": e["fromName"], "item": e["item"], "at": e.get("at"),
-                      **({"projects": _mask_values(e["projects"])} if "projects" in e else {})})
-    return shown
+    return [_shown_invite(e) if _invite_ok(e) else "(an entry xo cannot read)" for e in invites if not _block_ok(e)]
+
+
+def _blocked(invites: list, now: float) -> list:
+    """The blocks still running, newest last, at most MAX_BLOCKS."""
+    live = [e for e in invites if _block_ok(e) and e["until"] > _iso(now)]
+    return live[-MAX_BLOCKS:]
 
 
 def _primary_email(u: dict) -> str | None:
@@ -556,6 +599,11 @@ def _project_failure(e: ClerkError, what: str = "projects") -> _Reply:
 
 def _size(private: dict) -> int:
     return len(json.dumps(private, separators=(",", ":"), ensure_ascii=False).encode())
+
+
+def _own_size(private: dict) -> int:
+    """A user's private metadata as their own writes count it: all of it but `shared`."""
+    return _size({k: v for k, v in private.items() if k != "shared"})
 
 
 def _rev(entry: dict) -> int:
@@ -836,10 +884,25 @@ class App:
 
         step(current list, private metadata, wrote) answers ("done", list) or ("write", list), or
         raises a refusal. The answer is the list, after the user's cached /me is dropped."""
+        def keyed(private: dict, wrote: bool) -> tuple[str, dict]:
+            current = private.get(field, [])
+            if not isinstance(current, list):
+                raise self._refuse(who, 409, f"Your private metadata `{field}` is not a list; nothing was changed")
+            outcome, value = step(current, private, wrote)
+            return outcome, {field: value}
+
+        return self._change_keys(subject, who, keyed, what, busy)[field]
+
+    def _change_keys(self, subject: str, who: dict, step, what: str, busy: str) -> dict:
+        """_change for one or more top-level keys at once: step(private metadata, wrote) answers
+        ("done" | "write", {key: value}), and the merge sent to Clerk names only those keys, in one
+        write. A user's own writes are held to PRIVATE_BUDGET without counting `shared`, the invites
+        others put there, which have their own budget (SHARED_BUDGET); so no invite can stop a
+        user changing their own metadata."""
         with self._lock:
             lock = self._project_locks.setdefault(subject, threading.Lock())
         with lock:
-            wrote, first, outcome, value = False, None, None, []
+            wrote, first, outcome, value = False, None, None, {}
             started = time.monotonic()
             for attempt in range(PROJECT_TRIES + 1):
                 if wrote:
@@ -854,23 +917,20 @@ class App:
                 private = {} if private is None else private
                 if not isinstance(private, dict):
                     raise self._refuse(who, 409, "Your private metadata is not an object; nothing was changed")
-                current = private.get(field, [])
-                if not isinstance(current, list):
-                    raise self._refuse(who, 409, f"Your private metadata `{field}` is not a list; nothing was changed")
                 first = private if first is None else first
-                outcome, value = step(current, private, wrote)
+                outcome, value = step(private, wrote)
                 if outcome == "done":
                     break
                 # No retry write once a slow Clerk has used CLERK_TIMEOUT: the request would outlive the
                 # client's and the platform's deadlines. The caller gets the 503 below, never a false 200.
                 if attempt == PROJECT_TRIES or (wrote and time.monotonic() - started > CLERK_TIMEOUT):
                     break
-                if _size({**private, field: value}) > PRIVATE_BUDGET:
+                if set(value) != {"shared"} and _own_size({**private, **value}) > PRIVATE_BUDGET:
                     raise self._refuse(who, 422, f"That would take your private metadata past {PRIVATE_BUDGET // 1024}KB "
                                                  "(Clerk keeps 8KB, and XO needs the rest); nothing was changed")
                 try:
-                    # A merge naming only `field`: Clerk leaves every other key as it is.
-                    self.clerk.update_metadata(subject, {"privateMetadata": {field: value}})
+                    # A merge naming only these keys: Clerk leaves every other key as it is.
+                    self.clerk.update_metadata(subject, {"privateMetadata": value})
                 except ClerkError as e:
                     reply = _project_failure(e, what) if e.status == 429 else self._clerk_reply(e)
                     self.audit(**who, outcome=reply.status, clerk=e.seen)
@@ -881,9 +941,11 @@ class App:
         with self._lock:
             self._me_cache.pop(subject, None)
         # Anything else that differs was changed by someone else meanwhile, not by this merge.
-        others = {k: v for k, v in first.items() if k != field} != {k: v for k, v in private.items() if k != field}
+        others = {k: v for k, v in first.items() if k not in value} != \
+            {k: v for k, v in private.items() if k not in value}
         extra = {"othersChanged": True} if others else {}
-        self.audit(**who, outcome=200, count=len(value), **extra)  # never the names or values
+        counts = [len(v) for v in value.values() if isinstance(v, list)]
+        self.audit(**who, outcome=200, count=counts[0] if len(counts) == 1 else counts, **extra)  # never names or values
         return value
 
     def _add_project(self, headers: dict[str, str], body: bytes | None) -> dict:
@@ -1013,7 +1075,7 @@ class App:
         if len(spaces) >= MAX_SPACES:
             raise self._refuse(who, 422, f"You have {MAX_SPACES} spaces, the most there can be; nothing was created")
         widest = {"name": name, "kind": kind, "id": "x" * names.SPACE_ID_MAX, "rev": 1, "projects": []}
-        if _size({**private, "spaces": [*spaces, widest]}) > PRIVATE_BUDGET:
+        if _own_size({**private, "spaces": [*spaces, widest]}) > PRIVATE_BUDGET:
             raise self._refuse(who, 422, f"Recording it would take your private metadata past "
                                          f"{PRIVATE_BUDGET // 1024}KB (Clerk keeps 8KB, and XO needs the rest); "
                                          "nothing was created")
@@ -1166,21 +1228,21 @@ class App:
 
     def _share(self, headers: dict[str, str], body: bytes | None) -> dict:
         """Put an invite in another user's `shared`: a copy of one of the caller's spaces (its name
-        and projects, nothing else) or one of the caller's GitHub projects. The server writes only
-        the recipient's `shared`, and only adds or replaces the caller's own invite there.
+        and GitHub projects, nothing else) or one of the caller's GitHub projects. The server writes
+        only the recipient's `shared`, and only adds or replaces the caller's own invite there.
 
-        What concerns the caller (a bad item, one they do not have) gets its own answer. Everything
-        about the recipient (no such username, too many invites, no room, a list xo cannot read)
-        gets the same 404, and every answer takes SHARE_FLOOR seconds at least, so neither says
-        more than whether the share was made."""
+        What concerns the caller (a bad item, one they do not have, one too big) gets its own answer.
+        Everything about the recipient (no such username, too many invites, no room, a block after a
+        reject, a list xo cannot read) gets the same 404, and once the key is verified every answer
+        takes SHARE_FLOOR seconds at least, so neither says more than whether the share was made."""
+        key, _, who = self._caller(headers, "share", "/me/share")
         started = time.monotonic()
         try:
-            return self._share_now(headers, body)
+            return self._share_now(key, who, body)
         finally:
             time.sleep(max(0.0, started + SHARE_FLOOR - time.monotonic()))
 
-    def _share_now(self, headers: dict[str, str], body: bytes | None) -> dict:
-        key, _, who = self._caller(headers, "share", "/me/share")
+    def _share_now(self, key: dict, who: dict, body: bytes | None) -> dict:
         sent = self._body(body, who, {"item": True, "to": True})
         item, to = sent["item"], sent["to"]
         kind, _, name = item.partition(":")
@@ -1200,24 +1262,34 @@ class App:
                                          "from; set one first")
         private = me.get("private_metadata") if isinstance(me.get("private_metadata"), dict) else {}
         invite: dict = {"from": key["subject"], "fromName": sender, "item": item}
+        left_out = 0
         if kind == "space":
             spaces = private.get("spaces", [])
             self._readable_spaces(spaces, who, "shared")
             found = next((e for e in spaces if e["name"].casefold() == name.casefold()), None)
             if found is None:
                 raise self._refuse(who, 404, f"You have no space named {name}")
-            projects = _space_projects(found)
-            for p in projects:
+            projects = []
+            for p in _space_projects(found):
                 (project, ref), = p.items() if isinstance(p, dict) and len(p) == 1 else ((None, None),)
-                if not (names.project_ok(project) and names.ref_ok(ref)) or _secret_ref(ref):
+                if not (names.project_ok(project) and names.ref_ok(ref)) or _secret_ref(ref) or \
+                        _SECRET_VALUE.search(project):
                     raise self._refuse(who, 409, f"Space {name} holds a project entry xo cannot share; nothing was "
                                                  "shared")
+                if names.is_github(project):
+                    projects.append({project: ref})
+                else:  # a local project: nobody else could install it, and its name stays yours
+                    left_out += 1
             invite.update(item=f"space:{found['name']}", projects=projects)
         else:
             projects = private.get("projects", [])
             if not isinstance(projects, list) or name not in projects:
                 raise self._refuse(who, 404, f"{name} is not in your projects")
-        invite["at"] = _iso(time.time())
+        now = time.time()
+        invite["at"] = _iso(now)
+        if _size(invite) > INVITE_BUDGET:
+            raise self._refuse(who, 422, f"{invite['item']} is too big to share (an invite is at most "
+                                         f"{INVITE_BUDGET} bytes); nothing was shared")
         nope = _Reply(404, f"Could not share {invite['item']} with {to}")
         if not USERNAME.fullmatch(to) or to.casefold() == sender.casefold():
             raise self._refuse(who, 404, nope.error)
@@ -1234,25 +1306,40 @@ class App:
         recipient = found_users[0]["id"]
         who = {**who, "target": hashlib.sha256(recipient.encode()).hexdigest()[:16]}
         mine = (key["subject"], invite["item"].casefold())
+        block = _block_of(key["subject"], invite["item"])
+        stands: list = []
 
         def ours(e: Any) -> bool:
             return isinstance(e, dict) and (e.get("from"), str(e.get("item", "")).casefold()) == mine
 
-        def step(invites: list, recipient_private: dict, wrote: bool) -> tuple[str, list]:
-            if wrote and any(e == invite for e in invites):
-                return "done", invites
-            if any(not _invite_ok(e) for e in invites):
+        def same(a: dict, b: dict) -> bool:
+            return {k: v for k, v in a.items() if k != "at"} == {k: v for k, v in b.items() if k != "at"}
+
+        def step(recipient_private: dict, wrote: bool) -> tuple[str, dict]:
+            current = recipient_private.get("shared", [])
+            if not isinstance(current, list) or any(not (_invite_ok(e) or _block_ok(e)) for e in current):
                 raise _Reply(404, nope.error)
-            others = [e for e in invites if not ours(e)]
+            if wrote and invite in current:
+                stands[:] = [invite]
+                return "done", {"shared": current}
+            before = next((e for e in current if ours(e)), None)
+            if not wrote and before is not None and same(before, invite):
+                stands[:] = [before]  # sent again unchanged: nothing to write
+                return "done", {"shared": current}
+            if any(e["block"] == block for e in _blocked(current, now)):
+                raise _Reply(404, nope.error)
+            if not wrote and before is not None and _iso(now - RESHARE_WAIT) < before["at"]:
+                raise _Reply(404, nope.error)
+            others = [e for e in current if _invite_ok(e) and not ours(e)]
             if len(others) >= MAX_INVITES or sum(e["from"] == key["subject"] for e in others) >= MAX_INVITES_FROM:
                 raise _Reply(404, nope.error)
-            out = [*others, invite]
-            if _size({**recipient_private, "shared": out}) > PRIVATE_BUDGET:
+            out = [*others, invite, *_blocked(current, now)]
+            if _size(out) > SHARED_BUDGET or _size({**recipient_private, "shared": out}) > PRIVATE_BUDGET:
                 raise _Reply(404, nope.error)
-            return "write", out
+            return "write", {"shared": out}
 
         try:
-            self._change(recipient, who, "shared", step, "invites", "busy")
+            self._change_keys(recipient, who, step, "invites", "busy")
         except _Reply as r:
             # Nothing about the recipient reaches the caller: their limits, their metadata, their
             # Clerk write limit. Only a server or Clerk failure says to try again.
@@ -1260,96 +1347,131 @@ class App:
                 if r.status >= 500 else (404, nope.error)
             self.audit(**who, outcome=status)
             raise _Reply(status, error) from None
-        return {"shared": {"to": to, "item": invite["item"], **({"projects": _mask_values(invite["projects"])}
-                                                                 if "projects" in invite else {})}}
+        stood = stands[0] if stands else invite
+        return {"shared": {"to": to, "item": stood["item"],
+                           **({"projects": _mask_values(stood["projects"])} if "projects" in stood else {}),
+                           **({"localProjectsLeftOut": left_out} if left_out else {})}}
+
+    def _invites_of(self, subject: str, who: dict | None = None) -> tuple[dict, list]:
+        """The user's private metadata and their invites (blocks left out); refused if `shared` is not
+        a list of entries xo wrote."""
+        private = self._user(subject).get("private_metadata")
+        private = private if isinstance(private, dict) else {}
+        invites = private.get("shared", [])
+        if not isinstance(invites, list) or any(not (_invite_ok(e) or _block_ok(e)) for e in invites):
+            error = "Your private metadata `shared` holds an entry xo cannot read"
+            raise self._refuse(who, 409, error) if who else _Reply(409, error)
+        return private, [e for e in invites if _invite_ok(e)]
 
     def _shared(self, key: dict) -> dict:
-        """The invites waiting on the key's own user, each sender by username."""
-        u = self._user(key["subject"])
-        private = u.get("private_metadata")
-        invites = private.get("shared") if isinstance(private, dict) else None
-        return {"shared": _shown_invites([] if invites is None else invites)}
+        """The invites waiting on the key's own user, each with its id and its sender's username now,
+        looked up in one Clerk call (a sender whose account is gone shows the name they shared as)."""
+        _, invites = self._invites_of(key["subject"])
+        ids = sorted({e["from"] for e in invites if USER_ID.fullmatch(e["from"])})
+        now: dict[str, str] = {}
+        if ids:
+            try:
+                for u in self.clerk.users_by_id(ids):
+                    if isinstance(u, dict) and u.get("id") in ids and isinstance(u.get("username"), str):
+                        now[u["id"]] = u["username"]
+            except ClerkError as e:
+                raise _clerk_failure(e) from None
+        return {"shared": [_shown_invite(e, now.get(e["from"]), gone=e["from"] not in now) for e in invites]}
 
     def _answer_invite(self, answer: str, headers: dict[str, str], body: bytes | None) -> dict:
-        """accept: copy an invite into the caller's own `projects` (each project of a space, too)
-        and, for a space, `spaces` as a new space at rev 1; then take the invite off `shared`.
-        reject: only take it off. Each is a write to the caller's own metadata only, one key at a
-        time, so a step that fails leaves the invite there and the same command can be run again."""
+        """accept: in one write to the caller's own metadata, add the invite's projects to
+        `projects`, for a space add it to `spaces` (rev 1), and take the invite off `shared`. Every
+        refusal is checked before that write, so a refused accept leaves nothing behind.
+        reject: take it off `shared`, and block that sender inviting the caller to that item for
+        BLOCK_SECONDS. Both pick the invite by the id `xo list shared` shows."""
         key, _, who = self._caller(headers, "spaces", f"/me/shared/{answer}")
-        fields = {"item": True, "from": True, **({"as": False} if answer == "accept" else {})}
+        fields = {"id": True, **({"as": False} if answer == "accept" else {})}
         sent = self._body(body, who, fields)
-        item, sender, rename = sent["item"], sent["from"], sent.get("as")
-        if not USERNAME.fullmatch(sender):
-            raise self._refuse(who, 422, "from is the username of whoever shared it")
-        if rename is not None:
-            self._space_name(rename, who)
-        subject = key["subject"]
-        private = self._user(subject).get("private_metadata")
-        invites = private.get("shared", []) if isinstance(private, dict) else []
-        if not isinstance(invites, list):
-            raise self._refuse(who, 409, "Your private metadata `shared` is not a list; nothing was changed")
-        match = [e for e in invites if _invite_ok(e) and e["item"].casefold() == item.casefold()
-                 and e["fromName"].casefold() == sender.casefold()]
-        if not match:
-            raise self._refuse(who, 404, f"You have no invite to {item} from {sender} (xo list shared shows them)")
+        handle, rename = sent["id"], sent.get("as")
+        if not re.fullmatch(r"[0-9a-f]{%d}" % INVITE_ID_LEN, handle):
+            raise self._refuse(who, 422, f"id is the {INVITE_ID_LEN}-character id xo list shared shows")
+        subject, now = key["subject"], time.time()
+        _, invites = self._invites_of(subject, who)
+        match = [e for e in invites if _handle(e) == handle]
+        if len(match) != 1:
+            raise self._refuse(who, 404 if not match else 409,
+                               f"You have no invite {handle} (xo list shared shows them; one sent again has a new id)"
+                               if not match else f"More than one invite has id {handle}; nothing was changed")
         invite = match[0]
-        if answer == "accept":
-            kind, _, name = invite["item"].partition(":")
-            if kind == "project":
-                wanted = [name]
-            else:
-                if rename is not None:
-                    name = rename
-                self._space_name(name, who)
-                entries = []
-                for p in invite["projects"]:
-                    (project, ref), = p.items() if isinstance(p, dict) and len(p) == 1 else ((None, None),)
-                    if not (names.project_ok(project) and names.ref_ok(ref)) or _secret_ref(ref) or \
-                            _SECRET_VALUE.search(project) or any(project in e for e in entries):
-                        raise self._refuse(who, 409, f"The invite to {invite['item']} holds a project entry xo cannot "
-                                                     "use; reject it instead")
-                    entries.append({project: ref})
-                if len(entries) > MAX_SPACE_PROJECTS:
-                    raise self._refuse(who, 409, f"The invite holds more than {MAX_SPACE_PROJECTS} projects; reject it "
+        kind, _, name = invite["item"].partition(":")
+        if rename is not None:
+            if kind != "space":
+                raise self._refuse(who, 422, "as names a space; a project keeps its name")
+            self._space_name(rename, who)
+            name = rename
+        entries: list[dict] = []
+        if kind == "space":
+            for p in invite["projects"]:
+                (project, ref), = p.items() if isinstance(p, dict) and len(p) == 1 else ((None, None),)
+                if not (names.project_ok(project) and names.is_github(project) and names.ref_ok(ref)) or \
+                        _secret_ref(ref) or _SECRET_VALUE.search(project) or any(project in e for e in entries):
+                    raise self._refuse(who, 409, f"Invite {handle} holds a project entry xo cannot use; reject it "
                                                  "instead")
-                wanted = [next(iter(e)) for e in entries]
-            self._add_projects(subject, who, wanted)
-            if kind == "space":
-                new = {"name": name, "rev": 1, "projects": entries}
+                entries.append({project: ref})
+            if len(entries) > MAX_SPACE_PROJECTS:
+                raise self._refuse(who, 409, f"Invite {handle} holds more than {MAX_SPACE_PROJECTS} projects; reject "
+                                             "it instead")
+            wanted = [next(iter(e)) for e in entries]
+        else:
+            if _SECRET_VALUE.search(name):
+                raise self._refuse(who, 409, f"Invite {handle} holds a project name xo cannot use; reject it instead")
+            wanted = [name]
+        new = {"name": name, "rev": 1, "projects": entries} if kind == "space" else None
+        block = {"block": _block_of(invite["from"], invite["item"]), "until": _iso(now + BLOCK_SECONDS)}
+        added: list = []
 
-                def make(current: dict | None, private: dict) -> dict:
-                    # Already there from an earlier accept whose last step failed: nothing to add.
-                    if current is not None and {k: v for k, v in current.items() if k != "rev"} == \
-                            {k: v for k, v in new.items() if k != "rev"}:
-                        return current
-                    if current is not None:
-                        raise self._refuse(who, 409, f"You already have a space named {name}; accept it with --as "
-                                                     "NEW_NAME")
-                    return new
-
-                self._change_space(subject, who, name, make)
-
-        def drop(current: list, private: dict, wrote: bool) -> tuple[str, list]:
-            left = [e for e in current if e != invite]
-            return ("done", current) if len(left) == len(current) else ("write", left)
-
-        left = self._change(subject, who, "shared", drop, "invites",
-                            "Your invites changed while this ran; run xo list shared and try again")
-        return {"shared": _shown_invites(left)}
-
-    def _add_projects(self, subject: str, who: dict, wanted: list[str]) -> None:
-        """Add each name to the caller's own `projects` that is not there yet."""
-        def step(projects: list, private: dict, wrote: bool) -> tuple[str, list]:
+        def step(private: dict, wrote: bool) -> tuple[str, dict]:
+            current = private.get("shared", [])
+            if not isinstance(current, list):
+                raise self._refuse(who, 409, "Your private metadata `shared` is not a list; nothing was changed")
+            left = [e for e in current if e != invite and not _block_ok(e)]
+            blocks = _blocked(current, now)
+            if answer == "reject":
+                done = invite not in current and block in blocks
+                if wrote and done:
+                    return "done", {"shared": current}
+                if invite not in current and not wrote:
+                    raise self._refuse(who, 404, f"You have no invite {handle}")
+                return "write", {"shared": [*left, *[b for b in blocks if b["block"] != block["block"]][-(MAX_BLOCKS - 1):],
+                                            block]}
+            projects = private.get("projects", [])
+            if not isinstance(projects, list):
+                raise self._refuse(who, 409, "Your private metadata `projects` is not a list; nothing was changed")
+            spaces = private.get("spaces", [])
+            self._readable_spaces(spaces, who)
+            there = next((e for e in spaces if e["name"].casefold() == name.casefold()), None) if new else None
+            if wrote and invite not in current and all(p in projects for p in wanted) and (new is None or there == new):
+                return "done", {"shared": current, "projects": projects, **({"spaces": spaces} if new else {})}
+            if invite not in current:
+                raise self._refuse(who, 409 if wrote else 404, f"Invite {handle} changed while this ran; run xo list "
+                                                               "shared" if wrote else f"You have no invite {handle}")
+            if new is not None and there is not None and there != new:
+                raise self._refuse(who, 409, f"You already have a space named {name}; accept it with --as NEW_NAME. "
+                                             "Nothing was changed")
             missing = [p for p in wanted if p not in projects]
-            if not missing:
-                return "done", projects
             if len(projects) + len(missing) > MAX_PROJECTS:
-                raise self._refuse(who, 422, f"Accepting it would take you past {MAX_PROJECTS} projects; nothing "
-                                             "was changed")
-            return "write", [*projects, *missing]
+                raise self._refuse(who, 422, f"Accepting it would take you past {MAX_PROJECTS} projects; nothing was "
+                                             "changed")
+            if new is not None and there is None and len(spaces) >= MAX_SPACES:
+                raise self._refuse(who, 422, f"You have {MAX_SPACES} spaces, the most there can be; nothing was "
+                                             "changed")
+            added[:] = missing if not wrote else added
+            out = {"shared": [*left, *blocks], "projects": [*projects, *missing]}
+            if new is not None and there is None:
+                out["spaces"] = [*spaces, new]
+            return "write", out
 
-        self._change(subject, who, "projects", step, "projects",
-                     "Your projects changed while this ran; try again")
+        self._change_keys(subject, who, step, "invites",
+                          "Your invites changed while this ran; run xo list shared to see whether it is still there")
+        if answer == "reject":
+            return {"rejected": {"id": handle, "item": invite["item"]}}
+        return {"accepted": {"id": handle, "item": invite["item"],
+                             **({"space": _shown_space(new)} if new else {}), "projectsAdded": added}}
 
     def _masked_private(self, private: Any) -> Any:
         shown = self._shown_private(private)

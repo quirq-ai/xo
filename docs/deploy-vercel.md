@@ -163,7 +163,8 @@ not part of this setup.
 
 ## Limits
 
-- Each request makes at most two Clerk calls, each with a 10-second timeout, or one call to XO
+- Each request makes at most two Clerk calls (a share makes up to ten: the key, the sharer, the
+  lookup, and up to four reads and three writes of the recipient), each with a 10-second timeout, or one call to XO
   that gets 25 seconds in all, however slowly XO sends (a create that takes longer answers 504 and
   may still have happened). Vercel's
   function time and request size limits are not checked here; 25 seconds and 32KB (the server's

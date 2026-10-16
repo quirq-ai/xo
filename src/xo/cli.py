@@ -44,9 +44,10 @@
                                             with you.
     xo share space:S|project:O/R USERNAME   invite that user to a copy of the space (its name and
                                             projects) or the project.
-    xo accept space:S|project:P --from U [--as NAME]
-                                            add U's invite to your own spaces or projects.
-    xo reject space:S|project:P --from U    take U's invite off your shared list.
+    xo accept ID [--as NAME] [--yes]        show invite ID (from xo list shared), ask, then add it to
+                                            your own spaces and projects.
+    xo reject ID                            take invite ID off your list; its sender cannot invite you
+                                            to it again for 7 days.
     xo install project:P | space:S          clone or fetch P here; for a space, each of its projects
                                             into ./S/ at its ref.
     xo update project:P | space:S           push P's branch (never forced); for a space, record the
@@ -765,15 +766,32 @@ def _share(args: argparse.Namespace) -> int:
 
 
 def _invite(args: argparse.Namespace) -> int:
-    """`xo accept | reject space:S|project:P --from USERNAME`: answer an invite in your `shared`."""
-    kind, name = workspace.target(args.target)
-    if getattr(args, "as_name", None) is not None and not (kind == "space" and names.space_ok(args.as_name)):
+    """`xo accept ID [--as NAME] [--yes]` or `xo reject ID`: answer an invite in your `shared`, by
+    the id `xo list shared` shows. accept first shows what it will add and asks."""
+    if not re.fullmatch(r"[0-9a-f]{8}", args.id):
+        raise XoError("an invite id is the 8 characters xo list shared shows")
+    if getattr(args, "as_name", None) is not None and not names.space_ok(args.as_name):
         raise XoError("--as names the space you accept it as: " + names.SPACE_RULE)
     client = _client(args, server=True)
-    body = {"item": f"{kind}:{name}", "from": args.sender,
-            **({"as": args.as_name} if getattr(args, "as_name", None) is not None else {})}
+    body = {"id": args.id, **({"as": args.as_name} if getattr(args, "as_name", None) is not None else {})}
+    if args.command == "accept":
+        invites = _answer(client.request("GET", "/me/shared").data, "shared", "your invites")
+        found = [e for e in invites if isinstance(e, dict) and e.get("id") == args.id]
+        if not found:
+            raise XoError(f"you have no invite {args.id} (xo list shared shows them)")
+        invite = found[0]
+        kind, _, name = str(invite.get("item", "")).partition(":")
+        refs = [f"{p}@{r}" for e in invite.get("projects") or [] if isinstance(e, dict) for p, r in e.items()]
+        what = (f"space {args.as_name or name} with " + (", ".join(refs) if refs else "no projects")
+                if kind == "space" else f"project {name}")
+        # Names and refs are checked by the server; drop anything unprintable all the same, since
+        # someone else wrote them and they go to a terminal.
+        line = "".join(c for c in client.scrub(f"accept {invite.get('from')}'s {what} into your metadata?")
+                       if c.isprintable())
+        if not args.yes and not _ask(line):
+            raise XoError("not accepted (answer y at a terminal, or pass --yes)")
     data = _post_server(client, f"/me/shared/{args.command}", body)
-    print(client.scrub(_json(_answer(data, "shared", "your invites"))))
+    print(client.scrub(_json(_answer(data, "accepted" if args.command == "accept" else "rejected", "an answer"))))
     return 0
 
 
@@ -1169,14 +1187,16 @@ def main(argv: list[str] | None = None) -> int:
     sh.add_argument("target", metavar="space:NAME|project:OWNER/REPO")
     sh.add_argument("username", metavar="USERNAME", help="their XO username")
     sh.set_defaults(run=_share)
-    for verb, about in (("accept", "add an invite from your shared list to your own spaces or projects"),
-                        ("reject", "take an invite off your shared list")):
+    for verb, about in (("accept", "add an invite from your shared list to your own spaces or projects (shows "
+                                   "what it adds and asks first)"),
+                        ("reject", "take an invite off your shared list; its sender cannot invite you to it again "
+                                   "for 7 days")):
         iv = sub.add_parser(verb, parents=[common], help=about)
-        iv.add_argument("target", metavar="space:NAME|project:OWNER/REPO")
-        iv.add_argument("--from", dest="sender", required=True, metavar="USERNAME", help="who shared it")
+        iv.add_argument("id", metavar="ID", help="the invite's id, as xo list shared shows it")
         if verb == "accept":
             iv.add_argument("--as", dest="as_name", metavar="NAME",
                             help="accept a space under another name (when you already have one called that)")
+            iv.add_argument("--yes", action="store_true", help="accept without asking")
         iv.set_defaults(run=_invite)
     ls = sub.add_parser("list", parents=[common], help="show your projects, your spaces or the invites shared with you")
     ls.add_argument("what", choices=("projects", "spaces", "shared"))

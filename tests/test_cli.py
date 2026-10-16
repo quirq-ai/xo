@@ -1791,29 +1791,42 @@ def test_git_refuses_a_file_remote_even_when_the_users_config_allows_it(monkeypa
     assert not (tmp_path / "dest").exists()
 
 
-def test_share_accept_and_reject_send_the_item_and_username(xs, capsys):
+def test_share_accept_and_reject(xs, capsys, monkeypatch):
+    invite = {"id": "0123abcd", "from": "alice", "item": "space:dev", "at": "t",
+              "projects": [{"quirq-ai/xo": "main"}, {"o/b": "v1\x1b[2J"}]}
     xs.route("POST", "/me/share", body={"success": True, "data": {"shared": {"to": "bob", "item": "space:dev"}}})
-    xs.route("POST", "/me/shared/accept", body={"success": True, "data": {"shared": []}})
-    xs.route("POST", "/me/shared/reject", body={"success": True, "data": {"shared": []}})
-    xs.route("GET", "/me/shared", body={"success": True, "data": {"shared": []}})
+    xs.route("GET", "/me/shared", body={"success": True, "data": {"shared": [invite]}})
+    xs.route("POST", "/me/shared/accept", body={"success": True, "data": {"accepted": {"id": "0123abcd"}}})
+    xs.route("POST", "/me/shared/reject", body={"success": True, "data": {"rejected": {"id": "0123abcd"}}})
+    asked = []
+    monkeypatch.setattr(cli, "_ask", lambda q: asked.append(q) or True)
     assert run(capsys, "share", "space:dev", "bob")[0] == 0
     assert run(capsys, "share", "project:quirq-ai/xo", "bob")[0] == 0
-    assert run(capsys, "accept", "space:dev", "--from", "alice", "--as", "dev2")[0] == 0
-    assert run(capsys, "accept", "project:quirq-ai/xo", "--from", "alice")[0] == 0
-    assert run(capsys, "reject", "space:dev", "--from", "alice")[0] == 0
+    assert run(capsys, "accept", "0123abcd", "--as", "dev2")[0] == 0
+    assert asked == ["accept alice's space dev2 with quirq-ai/xo@main, o/b@v1[2J into your metadata?"]
+    assert run(capsys, "accept", "0123abcd", "--yes")[0] == 0 and len(asked) == 1
+    assert run(capsys, "reject", "0123abcd")[0] == 0
     assert run(capsys, "list", "shared")[0] == 0
-    assert [(r["path"], r["body"]) for r in xs.requests] == [
-        ("/me/share", {"item": "space:dev", "to": "bob"}),
-        ("/me/share", {"item": "project:quirq-ai/xo", "to": "bob"}),
-        ("/me/shared/accept", {"item": "space:dev", "from": "alice", "as": "dev2"}),
-        ("/me/shared/accept", {"item": "project:quirq-ai/xo", "from": "alice"}),
-        ("/me/shared/reject", {"item": "space:dev", "from": "alice"}),
-        ("/me/shared", None)]
+    assert [(r["method"], r["path"], r["body"]) for r in xs.requests] == [
+        ("POST", "/me/share", {"item": "space:dev", "to": "bob"}),
+        ("POST", "/me/share", {"item": "project:quirq-ai/xo", "to": "bob"}),
+        ("GET", "/me/shared", None), ("POST", "/me/shared/accept", {"id": "0123abcd", "as": "dev2"}),
+        ("GET", "/me/shared", None), ("POST", "/me/shared/accept", {"id": "0123abcd"}),
+        ("POST", "/me/shared/reject", {"id": "0123abcd"}), ("GET", "/me/shared", None)]
+
+
+def test_accept_sends_nothing_unless_you_say_yes(xs, capsys, monkeypatch):
+    xs.route("GET", "/me/shared", body={"success": True, "data": {"shared": [
+        {"id": "0123abcd", "from": "alice", "item": "project:o/r", "at": "t"}]}})
+    monkeypatch.setattr(cli, "_ask", lambda q: False)
+    assert run(capsys, "accept", "0123abcd")[0] != 0
+    assert run(capsys, "accept", "99999999", "--yes")[0] != 0
+    assert [r["method"] for r in xs.requests] == ["GET", "GET"]
 
 
 @pytest.mark.parametrize("argv", [
     ["share", "project:notes", "bob"], ["share", "space:../x", "bob"], ["share", "dev", "bob"],
-    ["accept", "space:dev"], ["accept", "space:dev", "--from", "alice", "--as", "../x"],
-    ["accept", "project:o/r", "--from", "alice", "--as", "x"], ["reject", "space:dev", "--from", "alice", "--as", "x"]])
+    ["accept"], ["accept", "space:dev"], ["accept", "0123abcd", "--as", "../x"], ["reject", "0123ABCD"],
+    ["reject", "0123abcd", "--as", "x"], ["reject", "0123abcd", "--yes"]])
 def test_share_and_invites_refuse_bad_input_before_sending(xs, capsys, argv):
     assert _refused(capsys, *argv) and xs.requests == []

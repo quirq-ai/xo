@@ -125,6 +125,9 @@ and when each request (admin metadata reads and writes included) happened and ho
 - **Only allow-listed keys change.** `PATCH` may only touch the top-level keys named in
   `XO_EDITABLE_PUBLIC_KEYS` and `XO_EDITABLE_PRIVATE_KEYS`. Both start empty, so nothing is
   editable until you name keys. Reads return both whole buckets.
+- **One write reaches another user.** `POST /me/share` lets any user key add one invite to another
+  user's `shared` list, and nothing else of theirs is written or answered (see Sharing below).
+  Every other write a normal key makes is to its own user's metadata.
 - Auth runs first, so a caller without an admin key learns nothing about bodies or users.
 
 ## Configuration
@@ -192,12 +195,13 @@ process apply per function instance, so the per-address limit is a Vercel Firewa
 
 ## Projects
 
-`xo projects` and `xo projects add NAME` are the one write a normal key can make, and it is narrow:
+`xo projects` and `xo projects add NAME` write a normal key's own `projects`, and narrowly:
 
 - **The server builds the change.** The client sends only `{"name": "..."}`; any other field, or
   any other shape, is refused with 422 and nothing is written. There is no route through which a
   normal key sends metadata.
-- **Only `projects` is written, only on the key's own user.** The user is the one Clerk ties the
+- **Only `projects` is written, only on the key's own user** (sharing is the one write to another
+  user, and only to their `shared`). The user is the one Clerk ties the
   key to. The server reads the list, appends the name, and sends Clerk's metadata merge
   (`PATCH /v1/users/{id}/metadata`) with `{"private_metadata": {"projects": [...]}}` and nothing else.
   Clerk merges that into what is stored, so every other public and private key, and every other
@@ -296,28 +300,42 @@ spaces: [{"name": "dev", "kind": "claude-code", "id": "<XO space id>", "rev": 2,
   while a change runs can see it put back.
 - **Sharing** is the one write to another user's metadata. `POST /me/share` with `{"item":
   "space:S"|"project:OWNER/REPO", "to": USERNAME}` adds one invite to that user's `shared` list:
-  `{"from": <sharer's user id>, "fromName": <sharer's username>, "item", "projects" (a space's
-  {project: ref} list), "at"}`. Never the space's id, kind or rev. The merge sent to Clerk names
-  `shared` only, with the same lock, settle, re-read and 6KB check as every other write; the
-  sharer's own earlier invite of the same item is replaced, every other invite is kept.
-  - The caller is told plainly about what is theirs: no username on their account (409), an item
-    they do not have (404), a local project (422). Everything about the recipient (no such
-    username, the caller's own username, 20 invites waiting, 5 from this caller, no room in 6KB,
-    a `shared` xo cannot read, their Clerk write limit) is the same 404 "Could not share ITEM with
-    USERNAME", and a Clerk failure is a 503. Every answer takes at least 1.5 seconds, so its
-    timing says nothing more. A 200 does confirm the username exists. Share is limited to 10 a
-    minute per key; the audit line names the recipient only by a hash.
-  - `GET /me/shared` lists the caller's invites, each sender by username, never by user id; `/me`
-    shows `shared` the same way.
-  - `POST /me/shared/accept` with `{"item", "from": USERNAME, "as"?}` writes only the caller's own
-    metadata, one key at a time: each project into `projects` (refused past 30), a space into
-    `spaces` as `{"name", "rev": 1, "projects"}` (409 when the name is taken: send `as`), then the
-    invite off `shared`. A step that fails leaves the invite there, and the same accept can be sent
-    again. Names and refs in the invite are checked again first, and an invite xo cannot use is
-    refused (409: reject it). `POST /me/shared/reject` with `{"item", "from"}` only takes it off.
-  - A share racing the recipient's own write is written again if it was lost. Their accept or
-    reject racing a share can drop the new invite; that share's re-read writes it again, unless both
-    re-reads land first (the same narrowed race as `PUT /me/spaces/{name}`).
+  `{"from": <sharer's user id>, "fromName": <sharer's username then>, "item", "projects" (a space's
+  GitHub {project: ref} entries; local ones stay the sharer's), "at"}`. Never the space's id, kind
+  or rev. The merge sent to Clerk names `shared` only, with the same lock, settle and re-read as
+  every other write; each writer re-adds or re-removes only its own entry.
+  - **Room of their own.** All of `shared` is at most 1.5KB and one invite at most 1KB, and a share
+    also needs the recipient's whole private metadata to stay within 6KB. A user's own writes do
+    not count `shared` against their 6KB, so invites can never stop them changing their own
+    metadata; with a full `shared`, the whole can reach 7.5KB of Clerk's 8KB.
+  - **Limits.** 20 invites waiting, 5 from one sender, one per sender and item. Sending the same
+    invite again writes nothing; a changed one replaces it only a minute after the last. After a
+    reject, that sender cannot invite the user to that item for 7 days (a mark of a hash of sender
+    and item, kept in `shared`, at most 10).
+  - **The same answer.** The caller is told plainly about what is theirs: no username on their
+    account (409), an item they do not have (404), a local project or an invite over 1KB (422).
+    Everything about the recipient (no such username, the caller's own username, a full list, no
+    room, a block, a `shared` xo cannot read, their Clerk write limit) is the same 404 "Could not
+    share ITEM with USERNAME", and a Clerk failure is a 503. Once the key is verified, every answer
+    takes at least 1.5 seconds. A 200 does confirm the username exists, and a 503 only comes once
+    it was found. The audit line names the recipient only by a hash.
+  - `GET /me/shared` lists the caller's invites. Each has an `id`: 8 characters of a hash of its
+    sender's user id and its exact content, so an invite sent again, or one from another sender
+    under the same name, has a different id. `from` is the sender's username now, looked up with
+    one Clerk call; `sharedAs` is the name they shared under when it differs, and `senderGone`
+    marks an account that no longer exists. `/me` shows `shared` by the names shared under, never
+    by user id.
+  - `POST /me/shared/accept` with `{"id", "as"?}` checks every refusal first (an id that matches
+    one invite, a usable name, refs and GitHub projects, at most 10 spaces and 30 projects, 6KB),
+    then makes one write of the caller's own `projects` (the invite's projects added), `spaces`
+    (for a space, `{"name", "rev": 1, "projects"}`; `as` when the name is taken) and `shared` (the
+    invite taken off). A refused accept writes nothing. `xo accept` shows the name and every
+    `project@ref` and asks first (`--yes` skips that). `POST /me/shared/reject` with `{"id"}` takes
+    it off and sets the 7-day block. Neither looks anyone up.
+  - **Races.** A share racing the recipient's own write is written again if it was lost. A share
+    that read before a reject and writes after it can bring the invite back, once; the reject's
+    own re-read then takes it off again, unless both re-reads land first (the same narrowed race as
+    `PUT /me/spaces/{name}`).
 - **Masked as `/me` is**, by setting name and by value, except each space's `projects`: its keys
   are project names (a repository called `auth-service` is not a secret), so its refs are shown as
   stored. The `xo` part of a `POST /me/spaces` answer, XO's own answer, is masked too, where
@@ -341,8 +359,9 @@ spaces: [{"name": "dev", "kind": "claude-code", "id": "<XO space id>", "rev": 2,
   checks the key with its own Clerk. Made-up keys sent there spend that Clerk, from the day the forwarding is
   deployed. What bounds them is `XO_CORE_PER_SECOND` per instance and the Firewall rule per
   address.
-- **Rate limits.** Per key, 60 requests a minute on `/me`, 30 on `/me/projects`, 30 on `/me/spaces`
-  and its routes, and 20 on
+- **Rate limits.** Per key and per instance, 60 requests a minute on `/me`, 30 on `/me/projects`,
+  30 on `/me/spaces` and its routes (and `/me/shared/accept` and `reject`), 10 on `/me/share`, 30 on
+  `/me/shared`, and 20 on
   `/user-metadata`, counted before Clerk is asked; the table remembers the 10,000 most recent keys.
   Clerk also allows 10 metadata writes per 10 seconds per user.
 - **Cache.** `/me` answers are cached for 60 seconds per user. Key checks are never cached.
@@ -352,7 +371,7 @@ spaces: [{"name": "dev", "kind": "claude-code", "id": "<XO space id>", "rev": 2,
   and for a PATCH the bucket and key names changed. When Clerk is why a request failed, during the
   key check or after it, `outcome` is the status the caller got (502 or 503 during the key check;
   after it also 404 or 422 when Clerk refused the user or the change) and `clerk` is what Clerk
-  said: the status it answered, or `unreachable`, `redirect`, `not JSON`, `not an object` or
+  said: the status it answered, or `unreachable`, `redirect`, `not JSON`, `not an object`, `not a list` or
   `xo budget` (the server's own Clerk budget). Never values or keys, so a key removed with `null`
   cannot be restored from the log.
 - **No secrets in metadata.** Never store API keys, tokens or passwords in private metadata: an

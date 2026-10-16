@@ -55,7 +55,7 @@ xo spaces --space-id 6f1c2c1e-...   # connection URLs for a space you own
 | `xo connect project:P space:S` / `xo connect space:S` | `POST /me/spaces/S/projects` / `POST /me/spaces/connect`: a project's ref in a space, or a new space entry in your metadata | `--ref` (default main) / `--id` for an XO space you already have |
 | `xo list projects\|spaces\|shared` | `GET /me/projects` / `GET /me/spaces` / `GET /me/shared` | none |
 | `xo share space:S\|project:O/R USERNAME` | `POST /me/share`: an invite in that user's `shared` list, holding the space's name and projects (never its id) | none |
-| `xo accept` / `xo reject space:S\|project:P --from USERNAME` | `POST /me/shared/accept` / `reject`: the invite copied into your own spaces and projects, then taken off your `shared` / only taken off | `--as NAME` (accept a space under another name) |
+| `xo accept ID` / `xo reject ID` | `GET /me/shared` and a y/N, then `POST /me/shared/accept`: in one write, the invite's projects into your projects, a space into your spaces, the invite off / `POST /me/shared/reject`: the invite off, and that sender cannot invite you to it for 7 days | `--as NAME` (accept a space under another name), `--yes` |
 | `xo install space:S` / `project:P` | `GET /me/spaces`, then your own git: each project cloned or fetched into `./S/OWNER/REPO` at its ref / P cloned, or fetched and fast-forwarded | none |
 | `xo update space:S` / `project:P` | `git push` of each branch under `./S`, then `PUT /me/spaces/S` with the refs checked out (refused if the space changed) / `git push` of P's branch | none |
 | `xo sync space:S` / `project:P` | `git pull --rebase` and push of each branch, then merges the space's changes with yours and `PUT`s them / `git pull --rebase` and push | none |
