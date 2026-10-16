@@ -409,6 +409,12 @@ def test_the_audit_line_says_when_clerk_never_answered(xo_server, monkeypatch):
     assert (audits(xo_server)[-1]["outcome"], audits(xo_server)[-1]["clerk"]) == (502, "unreachable")
 
 
+def test_a_clerk_answer_that_is_not_json_is_not_called_unreachable(xo_server, clerk):
+    clerk.raw = b"<html>maintenance</html>"
+    assert call(xo_server, "GET", "/user-metadata/user_alice", ADMIN_KEY)[0] == 502
+    assert (audits(xo_server)[-1]["outcome"], audits(xo_server)[-1]["clerk"]) == (502, "not JSON")
+
+
 def test_a_refusal_before_clerk_has_no_clerk_field(xo_server):
     call(xo_server, "GET", "/user-metadata/user_alice", "ak_unknown_and_unlisted")
     assert "clerk" not in audits(xo_server)[-1]
@@ -988,6 +994,15 @@ def test_the_core_url_must_be_https(clerk, monkeypatch):
 def test_a_bad_core_url_stops_the_server_at_start(clerk, monkeypatch, url):
     monkeypatch.setenv("XO_CORE_API_URL", url)
     with pytest.raises(server.XoError, match="XO_CORE_API_URL (has a port|needs a host)"):
+        server.Config()
+
+
+@pytest.mark.parametrize("name", ["XO_CORE_API_URL", "CLERK_API_URL"])
+@pytest.mark.parametrize("url", ["https://[::1/api", "https://[::1]@evil.example/api", "https://app.xo.example/a\nb",
+                                 "https://app.xo.example/a b"])
+def test_a_malformed_upstream_address_stops_the_server_with_a_clear_message(clerk, monkeypatch, name, url):
+    monkeypatch.setenv(name, url)
+    with pytest.raises(server.XoError, match=f"{name} is not a valid address"):
         server.Config()
 
 

@@ -194,9 +194,10 @@ process apply per function instance, so the per-address limit is a Vercel Firewa
   missing key, a rate limit, a wrong method, a body too big), is one JSON line on stderr: time,
   method, outcome, the key's id and the caller (null before the key is verified), the target user,
   and for a PATCH the bucket and key names changed. When Clerk is why a request failed, during the
-  key check or after it, `outcome` is the status the caller got (502 or 503) and `clerk` is what
-  Clerk said: the status it answered, or `unreachable`, `redirect`, `not an object` or `xo budget`
-  (the server's own Clerk budget). Never values or keys, so a key removed with `null`
+  key check or after it, `outcome` is the status the caller got (502 or 503 during the key check;
+  after it also 404 or 422 when Clerk refused the user or the change) and `clerk` is what Clerk
+  said: the status it answered, or `unreachable`, `redirect`, `not JSON`, `not an object` or
+  `xo budget` (the server's own Clerk budget). Never values or keys, so a key removed with `null`
   cannot be restored from the log.
 - **No secrets in metadata.** Never store API keys, tokens or passwords in private metadata: an
   admin key reads every user's private metadata in full.

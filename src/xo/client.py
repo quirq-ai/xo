@@ -83,7 +83,12 @@ def xo_url(flag: str | None = None, saved: str | None = None) -> str:
     else:
         source, url = "the default URL", DEFAULT_URL
     url = url.rstrip("/")
-    parts = urllib.parse.urlsplit(url)
+    try:
+        parts = urllib.parse.urlsplit(url)
+        parts.hostname  # raises on a malformed bracketed host, such as https://[::1]@evil.example
+    except ValueError:
+        shown = "it is not shown" if "@" in url else f"not {url!r}"
+        raise XoError(f"{source} is not a valid address; {shown}") from None
     if "@" in parts.netloc:
         raise XoError(f"{source} must not hold a user or password; it is not shown")
     try:

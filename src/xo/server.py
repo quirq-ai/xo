@@ -127,28 +127,36 @@ def _int_env(name: str, default: int) -> int:
     return int(raw)
 
 
+def _upstream(name: str, url: str) -> str:
+    """An https:// address (or http:// to this machine) for a server setting, checked once at startup
+    so a malformed one stops the server with a clear message instead of failing on every request."""
+    url = url.rstrip("/")
+    try:
+        if any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in url):
+            raise ValueError
+        parts = urllib.parse.urlsplit(url)
+        host = parts.hostname  # raises on a malformed bracketed host
+    except ValueError:
+        raise XoError(f"{name} is not a valid address (check its host and characters)") from None
+    try:
+        port = parts.port
+    except ValueError:
+        raise XoError(f"{name} has a port that is not a number from 1 to 65535") from None
+    if not (parts.scheme == "https" or (parts.scheme == "http" and host in LOCAL_HOSTS)):
+        raise XoError(f"{name} must be https:// (or http:// to localhost)")
+    if not host or port == 0:
+        raise XoError(f"{name} needs a host name and, if it has a port, one from 1 to 65535")
+    return url
+
+
 class Config:
     def __init__(self) -> None:
         secret = os.environ.get(SECRET_ENV, "").strip()
         if not secret:
             raise XoError(f"xo serve needs {SECRET_ENV} in its environment")
         self.secret = secret
-        url = (os.environ.get(CLERK_URL_ENV) or DEFAULT_CLERK_URL).rstrip("/")
-        parts = urllib.parse.urlsplit(url)
-        if not (parts.scheme == "https" or (parts.scheme == "http" and parts.hostname in LOCAL_HOSTS)):
-            raise XoError(f"{CLERK_URL_ENV} must be https:// (or http:// to localhost)")
-        self.clerk_url = url
-        core = (os.environ.get(CORE_ENV) or DEFAULT_CORE_URL).rstrip("/")
-        parts = urllib.parse.urlsplit(core)
-        if not (parts.scheme == "https" or (parts.scheme == "http" and parts.hostname in LOCAL_HOSTS)):
-            raise XoError(f"{CORE_ENV} must be https:// (or http:// to localhost)")
-        try:
-            parts.port  # raises on a port that is not a number from 0 to 65535
-        except ValueError:
-            raise XoError(f"{CORE_ENV} has a port that is not a number from 1 to 65535") from None
-        if not parts.hostname or parts.port == 0:
-            raise XoError(f"{CORE_ENV} needs a host name and, if it has a port, one from 1 to 65535")
-        self.core_url = core
+        self.clerk_url = _upstream(CLERK_URL_ENV, os.environ.get(CLERK_URL_ENV) or DEFAULT_CLERK_URL)
+        self.core_url = _upstream(CORE_ENV, os.environ.get(CORE_ENV) or DEFAULT_CORE_URL)
         self.admin_ids = _list_env("XO_ADMIN_KEY_IDS")
         self.editable = {"publicMetadata": _list_env("XO_EDITABLE_PUBLIC_KEYS"),
                          "privateMetadata": _list_env("XO_EDITABLE_PRIVATE_KEYS")}
@@ -214,7 +222,7 @@ class Clerk:
         req.add_unredirected_header("Authorization", f"Bearer {self._cfg.secret}")
         try:
             with self._opener.open(req, timeout=CLERK_TIMEOUT) as resp:
-                out = json.loads(resp.read() or b"null")
+                raw = resp.read()
         except urllib.error.HTTPError as e:
             code = ""
             try:
@@ -228,6 +236,10 @@ class Clerk:
             raise ClerkError(e.code, code) from None
         except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException, ValueError):
             raise ClerkError(502, "unreachable", seen="unreachable") from None
+        try:
+            out = json.loads(raw or b"null")
+        except (ValueError, RecursionError):  # Clerk answered, but not with JSON: not "unreachable"
+            raise ClerkError(502, "not JSON", seen="not JSON") from None
         if not isinstance(out, dict):
             raise ClerkError(502, "not an object", seen="not an object")
         return out
@@ -265,7 +277,8 @@ class Core:
         parts = urllib.parse.urlsplit(self._cfg.core_url)
         xo = f"XO ({parts.hostname})"  # names the upstream, so a timeout says which one did not answer
         kind = http.client.HTTPSConnection if parts.scheme == "https" else http.client.HTTPConnection
-        conn = kind(parts.hostname, parts.port, timeout=CORE_TIMEOUT)
+        # One second past the timer, so a reply cut at the deadline is always the timer's 504, not a 502.
+        conn = kind(parts.hostname, parts.port, timeout=CORE_TIMEOUT + 1)
         late = threading.Event()
         opened: list[socket.socket] = []  # kept here: http.client drops conn.sock once it will close
 
