@@ -1349,22 +1349,23 @@ class _RacingClerk:
 
 
 class _OnWriteClerk(_RacingClerk):
-    """A Clerk where `race(private)` plays another writer once, right after this request's first write."""
+    """A Clerk where `race(private)` plays another writer once, right after this request's first write;
+    a list of races plays one after each write in turn (None for none)."""
 
     def __init__(self, stored: dict, race) -> None:
         super().__init__(stored, races=0)
-        self.race = race
+        self.queue = list(race) if isinstance(race, list) else [race]
 
     def update_metadata(self, user_id: str, changes: dict) -> dict:
         out = super().update_metadata(user_id, changes)
-        if self.race:
-            self.race(self.stored["private_metadata"])
-            self.race = None
+        race = self.queue.pop(0) if self.queue else None
+        if race:
+            race(self.stored["private_metadata"])
         return out
 
 
-def _connect_repo(fake, body=None):
-    app = server.App(server.Config(), clerk=fake, audit=lambda line: None)
+def _connect_repo(fake, body=None, lines=None):
+    app = server.App(server.Config(), clerk=fake, audit=(lambda line: None) if lines is None else lines.append)
     return app.handle("POST", "/me/projects/connect", {"authorization": f"Bearer {USER_KEY}"},
                       json.dumps(body or {"name": "foo", "repo": "o/r"}).encode())
 
@@ -1389,6 +1390,50 @@ def test_connect_repo_puts_the_name_back_when_a_space_takes_it_meanwhile(clerk):
     status, out = _connect_repo(fake)
     assert status == 409 and "dev" in out["error"]
     assert user["private_metadata"]["projects"] == ["foo", "x"] and len(fake.patches) == 2
+
+
+def _in_space(private, space, project):
+    private["spaces"] = [e for e in private.get("spaces", []) if e["name"] != space] + \
+        [_space(space, projects=[{project: "main"}])]
+
+
+def test_connect_repo_keeps_the_repo_when_another_space_names_it_too(clerk):
+    user = {"id": "user_alice", "private_metadata": {"projects": ["foo", "x"], "spaces": []}}
+
+    def race(private):  # two racing connects: foo into dev, the new o/r into dev2
+        _in_space(private, "dev", "foo")
+        _in_space(private, "dev2", "o/r")
+    lines: list = []
+    status, out = _connect_repo(_OnWriteClerk(user, race), lines=lines)
+    assert status == 409 and "dev" in out["error"] and "nothing was changed" not in out["error"]
+    assert user["private_metadata"]["projects"] == ["o/r", "x", "foo"]
+    assert [json.loads(line)["outcome"] for line in lines] == [409]  # one audit line, no 200 before it
+
+
+def test_connect_repo_writes_the_name_back_again_when_that_write_is_lost(clerk):
+    user = {"id": "user_alice", "private_metadata": {"projects": ["foo", "x"], "spaces": []}}
+
+    def lose(private):  # a stale write from before the put-back lands over it
+        private["projects"] = ["o/r", "x"]
+    fake = _OnWriteClerk(user, [lambda private: _in_space(private, "dev", "foo"), lose])
+    status, out = _connect_repo(fake)
+    assert status == 409 and user["private_metadata"]["projects"] == ["foo", "x"] and len(fake.patches) == 3
+
+
+def test_connect_repo_names_the_space_when_the_put_back_never_settles(clerk):
+    user = {"id": "user_alice", "private_metadata": {"projects": ["foo", "x"], "spaces": []}}
+
+    def lose(private):
+        private["projects"] = ["o/r", "x"]
+    fake = _OnWriteClerk(user, [lambda private: _in_space(private, "dev", "foo")] + [lose] * 10)
+    status, out = _connect_repo(fake)
+    assert status == 503 and "space dev" in out["error"]
+
+
+def test_connect_repo_does_not_say_nothing_changed_after_the_rename(clerk):
+    user = {"id": "user_alice", "private_metadata": {"projects": ["foo", "x"], "spaces": []}}
+    status, out = _connect_repo(_OnWriteClerk(user, lambda private: private.update(spaces=5)))
+    assert status == 409 and "nothing was changed" not in out["error"] and "xo projects" in out["error"]
 
 
 @pytest.mark.parametrize("spaces", [5, None, [{"no": "name"}]])

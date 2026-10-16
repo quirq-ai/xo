@@ -74,19 +74,22 @@ def _is_repo(url: str, name: str) -> bool:
 
 def set_origin(dest: Path, name: str) -> str:
     """Point a checkout with no origin at GitHub's owner/repo, and say what happened. One whose
-    origin is already that repo is left as it is; one whose origin is another repository is
+    origin, fetch and push URLs alike, is already that repo is left as it is; any other origin is
     refused, so nothing later pushes the project to the wrong place."""
     if not (names.project_ok(name) and names.is_github(name)):
         raise XoError(f"{name} is not a GitHub owner/repo")
     own_checkout(dest)
     url = f"{GITHUB}/{name}"
-    have = run("remote", "get-url", "origin", cwd=dest, check=False)
-    if have is None:
+    if run("remote", "get-url", "origin", cwd=dest, check=False) is None:
         run("remote", "add", "origin", url, cwd=dest)
         return f"its origin is now {url}"
-    if not _is_repo(have, name):
-        # Never echo the URL: it can carry a token.
-        raise XoError(f"its origin is another repository, not {name}; point it at {url} yourself")
+    urls = [line for kind in (["--all"], ["--push", "--all"])
+            for line in (run("remote", "get-url", *kind, "origin", cwd=dest, check=False) or "").splitlines()
+            if line.strip()]
+    if not urls or not all(_is_repo(u, name) for u in urls):
+        # Never echo a URL: it can carry a token. One with a login in it is refused too, since xo
+        # cannot tell where it points.
+        raise XoError(f"its origin is not one xo can confirm is {name}; point it at {url} yourself")
     return f"its origin is already {name}"
 
 
