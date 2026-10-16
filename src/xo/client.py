@@ -9,6 +9,7 @@ Coder uses its installed CLI through CoderClient, preserving its native login an
 from __future__ import annotations
 
 import dataclasses
+import errno
 import functools
 import getpass
 import http.client
@@ -231,9 +232,15 @@ def forget_login() -> Path | None:
         path.unlink()
     except FileNotFoundError:
         return None
-    except IsADirectoryError:
-        raise XoError(f"{path} is a folder, not a file xo login wrote; remove it yourself") from None
     except OSError as e:
+        # Linux reports EISDIR for unlink(directory); macOS reports EPERM. Only classify an
+        # actual directory this way: a regular file or symlink with EPERM is a permission error.
+        try:
+            folder = e.errno in (errno.EISDIR, errno.EPERM) and stat.S_ISDIR(path.lstat().st_mode)
+        except OSError:
+            folder = False
+        if folder:
+            raise XoError(f"{path} is a folder, not a file xo login wrote; remove it yourself") from None
         raise XoError(f"cannot delete {path} ({e.strerror})") from None
     return path
 

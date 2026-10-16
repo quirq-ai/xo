@@ -1219,6 +1219,29 @@ def test_logout_says_the_variable_is_still_set(login, capsys, monkeypatch):
     assert "XO_API_KEY is still set in this terminal" in run(capsys, "logout")[2]
 
 
+@pytest.mark.parametrize("directory", [False, True])
+def test_logout_handles_macos_directory_error_without_misclassifying_files(config_home, capsys, monkeypatch, directory):
+    import errno
+    from pathlib import Path
+
+    path = config_home / "xo" / "credentials"
+    path.parent.mkdir(parents=True)
+    if directory:
+        path.mkdir()
+    else:
+        path.write_text("SYNTHETIC unreadable login file")
+
+    def refuse(self):
+        raise PermissionError(errno.EPERM, "Operation not permitted")
+    monkeypatch.setattr(Path, "unlink", refuse)
+    code, _, err = run(capsys, "logout")
+    assert code == 1 and path.exists()
+    if directory:
+        assert err == f"xo: {path} is a folder, not a file xo login wrote; remove it yourself\n"
+    else:
+        assert err == f"xo: cannot delete {path} (Operation not permitted)\n"
+
+
 def test_the_config_folder_defaults_to_home(monkeypatch, tmp_path):
     from xo import client
     monkeypatch.delenv("XDG_CONFIG_HOME")
