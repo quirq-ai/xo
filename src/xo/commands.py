@@ -19,7 +19,8 @@ from xo.spec import Operation, clean, known_params
 
 # Built-in command names, and names argparse or a reader would take for something else.
 RESERVED = {"ops", "call", "api", "serve", "login", "logout", "status", "coder", "projects", "help",
-            "version", "create", "connect", "share", "install", "update", "sync", "list"}
+            "version", "create", "connect", "share", "accept", "reject", "install", "update", "sync",
+            "list"}
 
 
 class Flag(NamedTuple):

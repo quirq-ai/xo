@@ -11,6 +11,7 @@ import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -118,6 +119,12 @@ def clerk(monkeypatch):
             if self.command == "POST" and self.path == "/v1/api_keys/verify":
                 key = KEYS.get(body.get("secret"))
                 return (200, key) if key else (404, {"errors": [{"code": "resource_not_found"}]})
+            if self.command == "GET" and self.path.startswith("/v1/users?"):
+                query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+                if "user_id" in query:
+                    return 200, [u for u in USERS.values() if u["id"] in query["user_id"]]
+                wanted = query.get("username", [None])[0]
+                return 200, [u for u in USERS.values() if u.get("username") == wanted]
             parts = self.path.split("/")  # "", v1, users, id[, metadata]
             user = USERS.get(parts[3]) if len(parts) > 3 and parts[2] == "users" else None
             if user is None:
@@ -1872,3 +1879,435 @@ def test_update_space_route_shows_on_the_status_page(xo_server, alice):
     assert call(xo_server, "POST", "/me/spaces/dev", USER_KEY, {})[0] == 405
     call(xo_server, "PUT", "/me/spaces/dev", USER_KEY, {"rev": 1, "projects": []})
     assert call(xo_server, "GET", "/status")[1]["data"]["activity"][0]["route"] == "/me/spaces/{name}"
+
+
+# --- sharing: invites in another user's `shared` -------------------------------------------------
+
+BOB_KEY = "ak_bob_secret_never_printed"
+MALLORY_KEY = "ak_mallory_secret_never_printed"
+_MORE_KEYS = {BOB_KEY: {"id": "ak_bob", "subject": "user_bob", "claims": None, "revoked": False, "expired": False},
+              MALLORY_KEY: {"id": "ak_mal", "subject": "user_mallory", "claims": None, "revoked": False,
+                            "expired": False}}
+
+
+class _Users:
+    """A Clerk with several users, merging writes the way Clerk does. `after_write(user_id, private)`
+    runs after each write, to play another writer."""
+
+    def __init__(self, users: dict, after_write=None) -> None:
+        self.users = {uid: {"id": uid, "username": name, "private_metadata": private}
+                      for uid, (name, private) in users.items()}
+        self.after_write, self.patches, self.lookups = after_write, [], []
+
+    def verify_key(self, secret: str) -> dict:
+        return {**KEYS, **_MORE_KEYS}[secret]
+
+    def user(self, user_id: str) -> dict:
+        if user_id not in self.users:
+            raise server.ClerkError(404)
+        return json.loads(json.dumps(self.users[user_id]))
+
+    def users_named(self, username: str) -> list:
+        return [json.loads(json.dumps(u)) for u in self.users.values() if u["username"] == username]
+
+    def users_by_id(self, ids: list) -> list:
+        self.lookups.append(list(ids))
+        return [json.loads(json.dumps(u)) for uid, u in self.users.items() if uid in ids]
+
+    def update_metadata(self, user_id: str, changes: dict) -> dict:
+        self.patches.append((user_id, json.loads(json.dumps(changes))))
+        self.users[user_id]["private_metadata"].update(json.loads(json.dumps(changes["privateMetadata"])))
+        if self.after_write:
+            self.after_write(user_id, self.users[user_id]["private_metadata"])
+        return self.user(user_id)
+
+
+@pytest.fixture
+def no_floor(clerk, monkeypatch):
+    monkeypatch.setattr(server, "SHARE_FLOOR", 0)
+
+
+def _as(app, key, path, body=None, method="POST"):
+    return app.handle(method, path, {"authorization": f"Bearer {key}"},
+                      None if body is None else json.dumps(body).encode())
+
+
+def _two(alice=None, bob=None, after_write=None):
+    return _Users({"user_alice": ("alice", {"projects": ["o/a", "notes"],
+                                            "spaces": [_space("dev", rev=3, projects=[{"o/a": "main"}, {"notes": "v1"}])],
+                                            **(alice or {})}),
+                   "user_bob": ("bob", {"stripeId": "cus_9", **(bob or {})}),
+                   "user_mallory": ("mallory", {"projects": ["evil/repo"],
+                                                "spaces": [_space("dev", projects=[{"evil/repo": "main"}])]})},
+                  after_write)
+
+
+def _ids(app, key=BOB_KEY):
+    return {e["item"] + "/" + e["from"]: e["id"] for e in _as(app, key, "/me/shared", method="GET")[1]["data"]["shared"]}
+
+
+def _invites(users, uid="user_bob"):
+    return users.users[uid]["private_metadata"].get("shared", [])
+
+
+def test_share_puts_one_invite_in_the_recipients_shared_and_nothing_else(no_floor):
+    users, lines = _two(), []
+    status, out = _as(_app(users, lines=lines), USER_KEY, "/me/share", {"item": "space:DEV", "to": "bob"})
+    # The local project stays the sharer's: nobody else could install it.
+    assert status == 200 and out["data"]["shared"] == {"to": "bob", "item": "space:dev", "projects": [{"o/a": "main"}],
+                                                        "localProjectsLeftOut": 1}
+    assert [uid for uid, _ in users.patches] == ["user_bob"]
+    assert list(users.patches[0][1]["privateMetadata"]) == ["shared"]
+    bob = users.users["user_bob"]["private_metadata"]
+    assert bob["stripeId"] == "cus_9"
+    (invite,) = bob["shared"]
+    assert {k: v for k, v in invite.items() if k != "at"} == \
+        {"from": "user_alice", "fromName": "alice", "item": "space:dev", "projects": [{"o/a": "main"}]}
+    assert "id-dev" not in json.dumps(bob) and "notes" not in json.dumps(bob)
+    assert not any("user_bob" in line or "dev" in line for line in lines)
+
+
+def test_sharing_again_unchanged_writes_nothing_and_a_change_waits_a_minute(no_floor, monkeypatch):
+    other = {"from": "user_carol", "fromName": "carol", "item": "project:c/x", "at": "2026-01-01T00:00:00Z"}
+    users = _two(bob={"shared": [other]})
+    app = _app(users)
+    assert _as(app, USER_KEY, "/me/share", {"item": "space:dev", "to": "bob"})[0] == 200
+    assert _as(app, USER_KEY, "/me/share", {"item": "space:dev", "to": "bob"})[0] == 200
+    assert len(users.patches) == 1
+    users.users["user_alice"]["private_metadata"]["spaces"][0]["projects"] = [{"o/a": "v2"}]
+    assert _as(app, USER_KEY, "/me/share", {"item": "space:dev", "to": "bob"})[0] == 404
+    clock = time.time() + server.RESHARE_WAIT + 1
+    monkeypatch.setattr(server.time, "time", lambda: clock)
+    assert _as(app, USER_KEY, "/me/share", {"item": "space:dev", "to": "bob"})[0] == 200
+    assert _as(app, USER_KEY, "/me/share", {"item": "project:o/a", "to": "bob"})[0] == 200
+    assert [(e["item"], e.get("projects")) for e in _invites(users)] == \
+        [("project:c/x", None), ("space:dev", [{"o/a": "v2"}]), ("project:o/a", None)]
+
+
+def _invite(i, sender="user_x", size=0):
+    return {"from": f"{sender}{i}", "fromName": f"u{i}", "item": f"project:o/x{i}", "at": "2026-01-01T00:00:00Z",
+            **({"pad": "p" * size} if size else {})}
+
+
+@pytest.mark.parametrize("to, bob", [
+    ("nobody", None), ("bo b", None), ("alice", None),
+    ("bob", {"shared": [_invite(i) for i in range(server.MAX_INVITES)]}),
+    ("bob", {"shared": [{**_invite(i), "from": "user_alice"} for i in range(server.MAX_INVITES_FROM)]}),
+    ("bob", {"shared": "not a list"}), ("bob", {"shared": [{"odd": 1}]}),
+    ("bob", {"shared": [{**_invite(0), "item": "project:o/" + "y" * 99, "fromName": "f" * 60} for _ in range(1)]
+             + [{**_invite(i), "item": "project:o/" + "z" * 99 + str(i)[:0]} for i in range(1, 9)]}),
+    ("bob", {"filler": "x" * server.PRIVATE_BUDGET})])
+def test_every_refusal_about_the_recipient_is_the_same_answer_and_writes_nothing(no_floor, to, bob):
+    users = _two(bob=bob)
+    status, out = _as(_app(users), USER_KEY, "/me/share", {"item": "space:dev", "to": to})
+    assert (status, out["error"]) == (404, f"Could not share space:dev with {to}")
+    assert users.patches == []
+
+
+def test_invites_count_toward_the_recipients_6kb_and_answering_gives_it_back(no_floor):
+    # bob is near his 6KB, so an invite cannot come in; with room for it, it fills his budget,
+    # and his own writes are refused until he answers it.
+    users = _two(bob={"filler": "x" * (server.PRIVATE_BUDGET - 60), "projects": []})
+    app = _app(users)
+    assert _as(app, USER_KEY, "/me/share", {"item": "space:dev", "to": "bob"})[0] == 404
+    bob = users.users["user_bob"]["private_metadata"]
+    bob["filler"] = "x" * (server.PRIVATE_BUDGET - 400)
+    assert _as(app, USER_KEY, "/me/share", {"item": "space:dev", "to": "bob"})[0] == 200
+    bob = users.users["user_bob"]["private_metadata"]
+    bob["filler"] += "x" * (server.PRIVATE_BUDGET - 2 - server._size(bob))  # 2 bytes of room left
+    assert _as(app, BOB_KEY, "/me/projects", {"name": "mine"})[0] == 422
+    (handle,) = _ids(app).values()
+    assert _as(app, BOB_KEY, "/me/shared/reject", {"id": handle})[0] == 200
+    assert _as(app, BOB_KEY, "/me/projects", {"name": "mine"})[0] == 200
+
+
+def test_an_old_reject_mark_is_passed_over_and_dropped_on_the_next_write(no_floor):
+    mark = {"block": "0123456789abcdef", "until": "2026-01-01T00:00:00Z"}
+    users = _two(bob={"shared": [mark]})
+    app = _app(users)
+    assert _as(app, BOB_KEY, "/me/shared", method="GET")[1]["data"]["shared"] == []
+    status, me = _as(app, BOB_KEY, "/me", method="GET")
+    assert status == 200 and "0123456789abcdef" not in json.dumps(me)
+    assert _as(app, USER_KEY, "/me/share", {"item": "space:dev", "to": "bob"})[0] == 200
+    assert [e["from"] for e in _invites(users)] == ["user_alice"]
+
+
+def test_reject_takes_off_every_invite_with_that_id(no_floor, monkeypatch):
+    users = _two()
+    app = _app(users)
+    monkeypatch.setattr(server, "_handle", lambda e: "f" * server.INVITE_ID_LEN)
+    assert _as(app, USER_KEY, "/me/share", {"item": "space:dev", "to": "bob"})[0] == 200
+    assert _as(app, MALLORY_KEY, "/me/share", {"item": "space:dev", "to": "bob"})[0] == 200
+    handle = "f" * server.INVITE_ID_LEN
+    status, out = _as(app, BOB_KEY, "/me/shared/accept", {"id": handle})
+    assert status == 409 and "xo reject" in out["error"] and len(_invites(users)) == 2
+    assert _as(app, BOB_KEY, "/me/shared/reject", {"id": handle})[0] == 200
+    assert _invites(users) == []
+
+
+def test_shared_falls_back_to_the_names_shared_as_when_the_lookup_fails(no_floor, monkeypatch):
+    users = _two()
+    app = _app(users)
+    _as(app, USER_KEY, "/me/share", {"item": "space:dev", "to": "bob"})
+
+    def down(ids):
+        raise server.ClerkError(503)
+    monkeypatch.setattr(users, "users_by_id", down)
+    status, out = _as(app, BOB_KEY, "/me/shared", method="GET")
+    (e,) = out["data"]["shared"]
+    assert status == 200 and e["from"] == "alice" and e["senderUnchecked"] is True and "senderGone" not in e
+
+
+def test_an_invite_too_big_is_refused_before_looking_anyone_up(no_floor):
+    users = _two(alice={"projects": [f"o/{'r' * 90}{i}" for i in range(10)],
+                        "spaces": [_space("dev", projects=[{f"o/{'r' * 90}{i}": "b" * 60} for i in range(10)])]})
+    users.users_named = lambda name: pytest.fail("looked up a user")
+    status, out = _as(_app(users), USER_KEY, "/me/share", {"item": "space:dev", "to": "bob"})
+    assert status == 422 and "too big" in out["error"]
+
+
+def test_a_recipient_whose_clerk_write_limit_is_spent_gets_the_same_answer(no_floor):
+    users = _two()
+
+    def busy(user_id, changes):
+        raise server.ClerkError(429)
+
+    users.update_metadata = busy
+    status, out = _as(_app(users), USER_KEY, "/me/share", {"item": "space:dev", "to": "bob"})
+    assert (status, out["error"]) == (404, "Could not share space:dev with bob")
+
+
+@pytest.mark.parametrize("body, status", [
+    ({"item": "space:nope", "to": "bob"}, 404), ({"item": "project:zz/q", "to": "bob"}, 404),
+    ({"item": "project:notes", "to": "bob"}, 422), ({"item": "dev", "to": "bob"}, 422),
+    ({"item": "space:../x", "to": "bob"}, 422), ({"item": "space:dev"}, 422),
+    ({"item": "space:dev", "to": "bob", "projects": []}, 422)])
+def test_share_refuses_what_the_caller_does_not_have_before_looking_anyone_up(no_floor, body, status):
+    users = _two()
+    users.users_named = lambda name: pytest.fail("looked up a user")
+    assert _as(_app(users), USER_KEY, "/me/share", body)[0] == status
+    assert users.patches == []
+
+
+def test_share_needs_a_username_to_say_who_it_is_from(no_floor):
+    users = _two()
+    users.users["user_alice"]["username"] = None
+    status, out = _as(_app(users), USER_KEY, "/me/share", {"item": "space:dev", "to": "bob"})
+    assert status == 409 and "no username" in out["error"]
+
+
+def test_share_takes_the_same_time_whatever_the_answer_once_the_key_is_known(clerk, monkeypatch):
+    monkeypatch.setattr(server, "SHARE_FLOOR", 0.2)
+    app = _app(_two())
+    for to in ("nobody", "bob"):
+        started = time.monotonic()
+        _as(app, USER_KEY, "/me/share", {"item": "space:dev", "to": to})
+        assert time.monotonic() - started >= 0.2
+    started = time.monotonic()
+    assert app.handle("POST", "/me/share", {}, b"{}")[0] == 401
+    assert time.monotonic() - started < 0.2
+
+
+def test_a_share_racing_the_recipients_own_write_is_written_again(no_floor):
+    def racer(user_id, private):
+        if user_id == "user_bob" and racer.once:
+            racer.once = False
+            private["shared"] = []  # the recipient's own write, from an older read
+
+    racer.once = True
+    users = _two(after_write=racer)
+    assert _as(_app(users), USER_KEY, "/me/share", {"item": "space:dev", "to": "bob"})[0] == 200
+    assert [e["item"] for e in _invites(users)] == ["space:dev"]
+    assert len(users.patches) == 2
+
+
+def test_shared_lists_each_invite_with_an_id_and_the_senders_username_now(no_floor):
+    users = _two()
+    app = _app(users)
+    _as(app, USER_KEY, "/me/share", {"item": "space:dev", "to": "bob"})
+    users.users["user_alice"]["username"] = "alice2"
+    status, out = _as(app, BOB_KEY, "/me/shared", method="GET")
+    assert status == 200 and users.lookups == [["user_alice"]]
+    (e,) = out["data"]["shared"]
+    assert (e["from"], e["sharedAs"], e["item"], e["projects"]) == ("alice2", "alice", "space:dev", [{"o/a": "main"}])
+    assert re.fullmatch(r"[0-9a-f]{16}", e["id"])
+    _, me = _as(app, BOB_KEY, "/me", method="GET")
+    assert "user_alice" not in json.dumps(out) and "user_alice" not in json.dumps(me)
+
+
+def test_a_look_alike_sender_is_told_apart_by_id_and_current_name(no_floor, monkeypatch):
+    """mallory shares while named alice, renames away, and the real alice shares: bob sees two
+    invites with different ids, and mallory's under her name now."""
+    users = _two()
+    app = _app(users)
+    users.users["user_mallory"]["username"] = "alice"
+    users.users["user_alice"]["username"] = "alice-old"
+    assert _as(app, MALLORY_KEY, "/me/share", {"item": "space:dev", "to": "bob"})[0] == 200
+    users.users["user_mallory"]["username"] = "mallory"
+    users.users["user_alice"]["username"] = "alice"
+    assert _as(app, USER_KEY, "/me/share", {"item": "space:dev", "to": "bob"})[0] == 200
+    ids = _ids(app)
+    assert set(ids) == {"space:dev/mallory", "space:dev/alice"} and len(set(ids.values())) == 2
+    assert _as(app, BOB_KEY, "/me/shared/accept", {"id": ids["space:dev/alice"], "as": "dev"})[0] == 200
+    bob = users.users["user_bob"]["private_metadata"]
+    assert bob["spaces"] == [{"name": "dev", "rev": 1, "projects": [{"o/a": "main"}]}]
+    assert [e["from"] for e in _invites(users)] == ["user_mallory"]
+
+
+def test_accept_is_one_write_of_spaces_projects_and_shared(no_floor):
+    users = _two()
+    app = _app(users)
+    _as(app, USER_KEY, "/me/share", {"item": "space:dev", "to": "bob"})
+    (handle,) = _ids(app).values()
+    status, out = _as(app, BOB_KEY, "/me/shared/accept", {"id": handle})
+    assert status == 200 and out["data"]["accepted"] == {
+        "id": handle, "item": "space:dev", "space": {"name": "dev", "rev": 1, "projects": [{"o/a": "main"}]},
+        "projectsAdded": ["o/a"]}
+    assert len(users.patches) == 2
+    uid, patch = users.patches[1]
+    assert uid == "user_bob" and set(patch["privateMetadata"]) == {"spaces", "projects", "shared"}
+    bob = users.users["user_bob"]["private_metadata"]
+    assert bob["projects"] == ["o/a"] and bob["shared"] == [] and bob["stripeId"] == "cus_9"
+    assert users.users["user_alice"]["private_metadata"]["spaces"][0]["rev"] == 3
+
+
+@pytest.mark.parametrize("bob, body, status", [
+    ({"spaces": [_space("dev")]}, {}, 409),
+    ({"spaces": [_space(f"s{i}") for i in range(server.MAX_SPACES)]}, {}, 422),
+    ({"projects": [f"p{i}" for i in range(server.MAX_PROJECTS)]}, {}, 422),
+    ({"later": "x" * (server.PRIVATE_BUDGET - 60)}, {}, 422),
+    ({}, {"as": "../x"}, 422)])
+def test_a_refused_accept_leaves_nothing_behind(no_floor, bob, body, status):
+    later = bob.pop("later", None)
+    users = _two(bob=bob)
+    app = _app(users)
+    _as(app, USER_KEY, "/me/share", {"item": "space:dev", "to": "bob"})
+    (handle,) = _ids(app).values()
+    if later:  # bob's own metadata grew after the invite came
+        users.users["user_bob"]["private_metadata"]["filler"] = later
+    before = json.loads(json.dumps(users.users["user_bob"]["private_metadata"]))
+    assert _as(app, BOB_KEY, "/me/shared/accept", {"id": handle, **body})[0] == status
+    assert users.users["user_bob"]["private_metadata"] == before
+
+
+def test_accept_with_a_name_you_already_use_takes_as(no_floor):
+    users = _two(bob={"spaces": [_space("dev")]})
+    app = _app(users)
+    _as(app, USER_KEY, "/me/share", {"item": "space:dev", "to": "bob"})
+    (handle,) = _ids(app).values()
+    assert _as(app, BOB_KEY, "/me/shared/accept", {"id": handle, "as": "dev2"})[0] == 200
+    assert [s["name"] for s in users.users["user_bob"]["private_metadata"]["spaces"]] == ["dev", "dev2"]
+
+
+def test_accept_puts_a_project_in_the_space_you_name_and_in_your_projects(no_floor):
+    users = _two(bob={"projects": ["b/x"], "spaces": [_space("work", rev=4, projects=[{"b/x": "main"}])]})
+    app = _app(users)
+    _as(app, USER_KEY, "/me/share", {"item": "project:o/a", "to": "bob"})
+    (handle,) = _ids(app).values()
+    status, out = _as(app, BOB_KEY, "/me/shared/accept", {"id": handle, "space": "work", "ref": "v2"})
+    assert status == 200 and out["data"]["accepted"] == {
+        "id": handle, "item": "project:o/a",
+        "space": {"name": "work", "id": "id-work", "rev": 5, "projects": [{"b/x": "main"}, {"o/a": "v2"}]}, "projectsAdded": ["o/a"]}
+    uid, patch = users.patches[-1]
+    assert uid == "user_bob" and set(patch["privateMetadata"]) == {"spaces", "projects", "shared"}
+    bob = users.users["user_bob"]["private_metadata"]
+    assert bob["projects"] == ["b/x", "o/a"] and bob["shared"] == []
+    assert bob["spaces"] == [{"name": "work", "id": "id-work", "rev": 5, "projects": [{"b/x": "main"}, {"o/a": "v2"}]}]
+
+
+def test_accept_a_project_already_in_that_space_replaces_its_ref_in_place(no_floor):
+    users = _two(bob={"projects": ["o/a", "b/x"],
+                      "spaces": [_space("work", rev=2, projects=[{"o/a": "old"}, {"b/x": "main"}])]})
+    app = _app(users)
+    _as(app, USER_KEY, "/me/share", {"item": "project:o/a", "to": "bob"})
+    (handle,) = _ids(app).values()
+    status, out = _as(app, BOB_KEY, "/me/shared/accept", {"id": handle, "space": "WORK"})
+    assert status == 200 and out["data"]["accepted"]["projectsAdded"] == []
+    bob = users.users["user_bob"]["private_metadata"]
+    assert bob["projects"] == ["o/a", "b/x"]
+    assert bob["spaces"] == [{"name": "work", "id": "id-work", "rev": 3, "projects": [{"o/a": "main"}, {"b/x": "main"}]}]
+
+
+@pytest.mark.parametrize("bob, body, status", [
+    ({}, {}, 422),
+    ({}, {"as": "x", "space": "work"}, 422),
+    ({}, {"space": "nope"}, 404),
+    ({}, {"space": "../x"}, 422),
+    ({}, {"space": "work", "ref": "a..b"}, 422),
+    ({"spaces": [_space("work", projects=[{f"o/p{i}": "main"} for i in range(server.MAX_SPACE_PROJECTS)])]},
+     {"space": "work"}, 422),
+    ({"projects": [f"p{i}" for i in range(server.MAX_PROJECTS)]}, {"space": "work"}, 422)])
+def test_a_refused_project_accept_leaves_nothing_behind(no_floor, bob, body, status):
+    users = _two(bob={"spaces": [_space("work")], **bob})
+    app = _app(users)
+    _as(app, USER_KEY, "/me/share", {"item": "project:o/a", "to": "bob"})
+    (handle,) = _ids(app).values()
+    before = json.loads(json.dumps(users.users["user_bob"]["private_metadata"]))
+    assert _as(app, BOB_KEY, "/me/shared/accept", {"id": handle, **body})[0] == status
+    assert users.users["user_bob"]["private_metadata"] == before
+
+
+def test_accept_of_a_space_takes_no_space_or_ref(no_floor):
+    users = _two(bob={"spaces": [_space("work")]})
+    app = _app(users)
+    _as(app, USER_KEY, "/me/share", {"item": "space:dev", "to": "bob"})
+    (handle,) = _ids(app).values()
+    for body in ({"space": "work"}, {"ref": "main"}):
+        assert _as(app, BOB_KEY, "/me/shared/accept", {"id": handle, **body})[0] == 422
+    assert len(_invites(users)) == 1
+
+
+@pytest.mark.parametrize("projects", [[{"o/a": "--upload-pack=x"}], [{"notes": "main"}], [{"o/a": "main"}, {"o/a": "v1"}]])
+def test_accept_refuses_an_invite_xo_cannot_use(no_floor, projects):
+    bad = {"from": "user_alice", "fromName": "alice", "item": "space:dev", "at": "2026-01-01T00:00:00Z",
+           "projects": projects}
+    users = _two(bob={"shared": [bad]})
+    status, out = _as(_app(users), BOB_KEY, "/me/shared/accept", {"id": server._handle(bad)})
+    assert status == 409 and "reject it" in out["error"] and users.patches == []
+
+
+def test_an_invite_changed_after_listing_is_not_accepted(no_floor, monkeypatch):
+    users = _two()
+    app = _app(users)
+    _as(app, USER_KEY, "/me/share", {"item": "space:dev", "to": "bob"})
+    (handle,) = _ids(app).values()
+    users.users["user_alice"]["private_metadata"]["spaces"][0]["projects"] = [{"o/a": "evil"}]
+    clock = time.time() + server.RESHARE_WAIT + 1
+    monkeypatch.setattr(server.time, "time", lambda: clock)
+    assert _as(app, USER_KEY, "/me/share", {"item": "space:dev", "to": "bob"})[0] == 200
+    assert _as(app, BOB_KEY, "/me/shared/accept", {"id": handle})[0] == 404
+
+
+def test_reject_takes_only_that_invite_off_and_the_sender_can_share_again(no_floor):
+    keep = {"from": "user_carol", "fromName": "carol", "item": "project:c/x", "at": "2026-01-01T00:00:00Z"}
+    users = _two(bob={"shared": [keep]})
+    app = _app(users)
+    _as(app, USER_KEY, "/me/share", {"item": "space:dev", "to": "bob"})
+    handle = _ids(app)["space:dev/alice"]
+    assert _as(app, BOB_KEY, "/me/shared/reject", {"id": handle}) == \
+        (200, {"success": True, "data": {"rejected": {"id": handle, "item": "space:dev"}}})
+    assert _invites(users) == [keep] and "spaces" not in users.users["user_bob"]["private_metadata"]
+    assert _as(app, BOB_KEY, "/me/shared/reject", {"id": handle})[0] == 404
+    # Nothing is kept of the reject: the same share goes straight back on bob's list.
+    assert _as(app, USER_KEY, "/me/share", {"item": "space:dev", "to": "bob"})[0] == 200
+    assert [e["item"] for e in _invites(users)] == ["project:c/x", "space:dev"]
+
+
+def test_reject_takes_off_an_invite_xo_could_not_accept(no_floor):
+    bad = {"from": "user_alice", "fromName": "alice", "item": "space:dev", "at": "2026-01-01T00:00:00Z",
+           "projects": [{"o/a": "--upload-pack=x"}]}
+    users = _two(bob={"shared": [bad]})
+    assert _as(_app(users), BOB_KEY, "/me/shared/reject", {"id": server._handle(bad)})[0] == 200
+    assert _invites(users) == []
+
+
+def test_answers_take_an_id(no_floor):
+    app = _app(_two())
+    for body in ({"id": "nothex!!"}, {"item": "space:dev", "from": "alice"}, {"id": "abc"}):
+        assert _as(app, BOB_KEY, "/me/shared/reject", body)[0] == 422
+
+
+def test_share_is_limited_to_ten_a_minute_per_key(no_floor):
+    app = _app(_two())
+    answers = [_as(app, USER_KEY, "/me/share", {"item": "space:dev", "to": "nobody"})[0] for _ in range(11)]
+    assert answers[:10] == [404] * 10 and answers[10] == 429
