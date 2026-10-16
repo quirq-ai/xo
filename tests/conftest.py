@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -168,3 +169,67 @@ def no_real_github():
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(gitops, "GITHUB", "https://127.0.0.1:9/no-github-in-tests")
         yield
+
+
+def git(*args, cwd=None) -> str:
+    """The test's own git, for setting up repositories (never xo's)."""
+    import subprocess
+    # The user's own git config stays out (a contributor who signs commits must still pass).
+    env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+    return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false",
+                           *args], cwd=cwd, check=True, capture_output=True, text=True, env=env).stdout.strip()
+
+
+class Hub:
+    """A local stand-in for github.com: bare OWNER/REPO repositories under one folder, each with a
+    seed checkout to make commits, branches and tags from."""
+
+    def __init__(self, root: Path, seeds: Path) -> None:
+        self.root, self.seeds = root, seeds
+
+    def repo(self, name: str) -> Path:
+        seed = self.seeds / name
+        seed.mkdir(parents=True)
+        git("init", "-q", "-b", "main", cwd=seed)
+        (seed / "README").write_text("hi\n")
+        git("add", "README", cwd=seed)
+        git("commit", "-q", "-m", "first", cwd=seed)
+        git("tag", "v1", cwd=seed)
+        (self.root / name).parent.mkdir(parents=True, exist_ok=True)
+        git("clone", "-q", "--bare", str(seed), str(self.root / name))
+        git("remote", "add", "origin", str(self.root / name), cwd=seed)
+        return seed
+
+    def commit(self, name: str, branch: str, text: str, tag: str | None = None) -> str:
+        """A commit on branch (made if new), pushed, with an optional tag; its sha."""
+        seed = self.seeds / name
+        git("switch", "-q", "-C", branch, cwd=seed) if branch != git("branch", "--show-current", cwd=seed) else None
+        (seed / "README").write_text(text)
+        git("commit", "-q", "-am", text, cwd=seed)
+        git("push", "-q", "origin", branch, cwd=seed)
+        if tag:
+            git("tag", tag, cwd=seed)
+            git("push", "-q", "origin", tag, cwd=seed)
+        return git("rev-parse", "HEAD", cwd=seed)
+
+
+@pytest.fixture
+def github(tmp_path, monkeypatch):
+    """xo's git pointed at a Hub over file://, working in an empty folder."""
+    from xo import gitops
+    hub = Hub(tmp_path / "github", tmp_path / "seeds")
+    monkeypatch.setattr(gitops, "GITHUB", f"file://{hub.root}")
+    monkeypatch.setattr(gitops, "SAFE", [a.replace("protocol.allow=never", "protocol.file.allow=always")
+                                          for a in gitops.SAFE])
+    monkeypatch.setattr(gitops, "ALLOWED_PROTOCOLS", "https:file")
+    work = tmp_path / "here"
+    work.mkdir()
+    monkeypatch.chdir(work)
+    # xo's own git runs with no user or system config either, so signing or hooks there change nothing.
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    monkeypatch.setenv("GIT_AUTHOR_NAME", "t")
+    monkeypatch.setenv("GIT_AUTHOR_EMAIL", "t@example.com")
+    monkeypatch.setenv("GIT_COMMITTER_NAME", "t")
+    monkeypatch.setenv("GIT_COMMITTER_EMAIL", "t@example.com")
+    return hub

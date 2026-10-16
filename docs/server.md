@@ -32,6 +32,7 @@ xo codex, ... ──────┘                      └── /api/core/v1/
 | POST | `/me/spaces` | any user key | `{"kind", "name", "body"}`: creates the space through XO with the caller's key, then records it; see "Spaces" below |
 | POST | `/me/spaces/connect` | any user key | `{"name", "id"?}`: a new space entry with no projects; with an id, only for an XO space the caller's key can read |
 | POST | `/me/spaces/{name}/projects` | any user key | `{"project", "ref"}`: sets one project's ref in that space |
+| PUT | `/me/spaces/{name}` | any user key | `{"rev", "projects", "base"}`: replaces the space's projects and refs if it is still at `rev` holding `base`, else 409 |
 | GET | `/user-metadata/{userId}` | admin keys | `publicMetadata`, `privateMetadata` |
 | PATCH | `/user-metadata/{userId}` | admin keys | both buckets after a deep merge; `null` removes a key |
 | POST | `/api/core/v1/{create}` | an `ak_` key | XO's answer: `claude-code`, `codex`, `antigravity`, `hermes`, `openclaw`, `xo-cowork`, `nebius-openclaw` |
@@ -264,6 +265,18 @@ spaces: [{"name": "dev", "kind": "claude-code", "id": "<XO space id>", "rev": 2,
   the user's `projects`. One entry per project: connecting it again replaces its ref in place. A
   missing ref is `main`. A space holds at most 10 projects. Each change adds 1 to the space's
   `rev`, the counter `xo update` will use to tell when the remote is ahead.
+- **`PUT /me/spaces/{name}`** is what `xo update` and `xo sync` send: `{"rev": N, "projects":
+  [{"PROJECT": "REF"}, ...], "base": [...]}`, where `base` is the projects the change starts from.
+  It is refused (409, "run xo sync") unless the space is still at `rev` N and still holds `base`.
+  Every project must be in the caller's `projects`, each listed once, at most 10, each ref valid;
+  the space's other fields stay. The answer is the space at rev N + 1, or unchanged at N when the
+  projects equal `base`. Clerk has no compare-and-swap, so this narrows a race without closing it:
+  two updates on different instances that both read N within the 0.3-second settle can both write.
+  The re-read gives 409 to one whose write did not stick, but if both re-reads land before the
+  second write, both get 200 and the later write stands. The other client's next update is then
+  refused, since the space no longer holds the `base` it sends. A space's `rev` can also go back
+  when a stale write lands outside the settle; `xo sync` then stops, names the projects whose refs
+  differ, records nothing and leaves the choice to the caller (`xo install` takes the space's).
 - **Names and refs.** A space name is 1 to 64 letters, digits, `_ . -`, starting with a letter or
   digit (it becomes a folder). A ref is a branch, tag or commit sha: letters, digits and `. _ / -`,
   starting with a letter or digit, never holding `..`, `//`, `/.` or `@{`, never ending in `/`, `.`

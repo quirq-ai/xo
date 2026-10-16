@@ -1803,3 +1803,72 @@ def test_xo_create_connect_and_list_spaces_end_to_end(xo_server, clerk, alice, m
                                 "projects": [{"notes": "v1"}]}]
     assert {k: v for k, v in alice["private_metadata"].items() if k != "spaces"} == \
         {"stripeId": "cus_1", "notes": {"a": [1, 2]}, "flag": True, "projects": ["notes"]}
+
+
+def _put(app, path, body):
+    return app.handle("PUT", path, {"authorization": f"Bearer {USER_KEY}"}, json.dumps(body).encode())
+
+
+def test_update_space_replaces_its_projects_only_at_the_rev_sent(clerk):
+    store = _Store({"projects": ["a", "b"], "spaces": [_space("dev", rev=3, projects=[{"a": "main"}]),
+                                                       _space("ops")]})
+    app = _app(store)
+    status, out = _put(app, "/me/spaces/dev", {"rev": 3, "projects": [{"b": "v2"}, {"a": "feature"}],
+                                               "base": [{"a": "main"}]})
+    assert status == 200 and out["data"]["space"] == _space("dev", rev=4, projects=[{"b": "v2"}, {"a": "feature"}])
+    assert store.stored["private_metadata"]["spaces"][1] == _space("ops")
+    status, out = _put(app, "/me/spaces/dev", {"rev": 3, "projects": [], "base": [{"a": "main"}]})
+    assert status == 409 and "run xo sync space:dev" in out["error"] and len(store.patches) == 1
+
+
+def test_update_space_is_refused_when_the_space_holds_other_projects_at_the_same_rev(clerk):
+    # Two writes can both get 200 at one rev; the loser's next update must not overwrite the winner.
+    store = _Store({"projects": ["a", "b"], "spaces": [_space("dev", rev=4, projects=[{"b": "v2"}])]})
+    status, out = _put(_app(store), "/me/spaces/dev", {"rev": 4, "projects": [{"b": "v3"}], "base": [{"b": "v1"}]})
+    assert status == 409 and "changed since you read it" in out["error"] and store.patches == []
+
+
+def test_update_space_with_nothing_changed_keeps_the_rev(clerk):
+    store = _Store({"projects": ["a"], "spaces": [_space("dev", rev=4, projects=[{"a": "main"}])]})
+    status, out = _put(_app(store), "/me/spaces/dev", {"rev": 4, "projects": [{"a": "main"}],
+                                                        "base": [{"a": "main"}]})
+    assert status == 200 and out["data"]["space"]["rev"] == 4
+
+
+def test_a_space_named_connect_can_be_updated(clerk):
+    store = _Store({"projects": ["a"], "spaces": [_space("connect")]})
+    status, out = _put(_app(store), "/me/spaces/connect", {"rev": 1, "projects": [{"a": "main"}], "base": []})
+    assert status == 200 and out["data"]["space"]["rev"] == 2
+
+
+def test_a_json_number_too_long_to_read_is_refused_not_a_500(clerk):
+    store = _Store({"spaces": [_space("dev")]})
+    body = b'{"rev": ' + b"9" * 5000 + b', "projects": [], "base": []}'
+    status, _ = _app(store).handle("PUT", "/me/spaces/dev", {"authorization": f"Bearer {USER_KEY}"}, body)
+    assert status == 422
+    status, _ = _app(store).handle("POST", "/me/projects", {"authorization": f"Bearer {USER_KEY}"},
+                                   b'{"name": ' + b"9" * 5000 + b"}")
+    assert status == 422
+
+
+@pytest.mark.parametrize("path, body, status", [
+    ("/me/spaces/dev", {"rev": 1, "projects": [{"c": "main"}]}, 404),
+    ("/me/spaces/nope", {"rev": 1, "projects": []}, 404),
+    ("/me/spaces/dev", {"rev": 1, "projects": [{"a": "main"}, {"a": "v2"}]}, 422),
+    ("/me/spaces/dev", {"rev": 1, "projects": [{"a": "--x"}]}, 422),
+    ("/me/spaces/dev", {"rev": 1, "projects": [{"a": "ghp_" + "a" * 36}]}, 422),
+    ("/me/spaces/dev", {"rev": 1, "projects": [{"a": "main", "b": "main"}]}, 422),
+    ("/me/spaces/dev", {"rev": "1", "projects": []}, 422),
+    ("/me/spaces/dev", {"rev": True, "projects": []}, 422),
+    ("/me/spaces/dev", {"rev": 1, "projects": [], "name": "x"}, 422),
+    ("/me/spaces/dev", {"rev": 1, "projects": [{f"p{i}": "main"} for i in range(11)]}, 422)])
+def test_update_space_refuses_and_writes_nothing(clerk, path, body, status):
+    store = _Store({"projects": ["a", "b"], "spaces": [_space("dev")]})
+    assert _put(_app(store), path, {**body, "base": []})[0] == status
+    assert store.patches == []
+
+
+def test_update_space_route_shows_on_the_status_page(xo_server, alice):
+    assert call(xo_server, "POST", "/me/spaces/dev", USER_KEY, {})[0] == 405
+    call(xo_server, "PUT", "/me/spaces/dev", USER_KEY, {"rev": 1, "projects": []})
+    assert call(xo_server, "GET", "/status")[1]["data"]["activity"][0]["route"] == "/me/spaces/{name}"

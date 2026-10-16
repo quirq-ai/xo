@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import KEY
+from conftest import KEY, git
 from xo import cli
 from xo.client import XoError, coder_url, xo_url
 
@@ -1727,39 +1727,8 @@ def test_list_spaces_and_projects(xs, capsys):
     assert json.loads(run(capsys, "list", "projects")[1]) == ["a"]
 
 
-def _git(*args, cwd=None):
-    import subprocess
-    # The user's own git config stays out (a contributor who signs commits must still pass).
-    env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
-    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false",
-                    *args], cwd=cwd, check=True, capture_output=True, env=env)
-
-
-@pytest.fixture
-def github(tmp_path, monkeypatch):
-    """A local stand-in for github.com: OWNER/REPO repositories under one folder, served over file://."""
-    from xo import gitops
-    root = tmp_path / "github"
-    monkeypatch.setattr(gitops, "GITHUB", f"file://{root}")
-    monkeypatch.setattr(gitops, "SAFE", [a.replace("protocol.allow=never", "protocol.file.allow=always")
-                                          for a in gitops.SAFE])
-    monkeypatch.setattr(gitops, "ALLOWED_PROTOCOLS", "https:file")
-    work = tmp_path / "here"
-    work.mkdir()
-    monkeypatch.chdir(work)
-
-    def repo(name: str) -> None:
-        path = root / name
-        path.mkdir(parents=True)
-        _git("init", "-q", "-b", "main", cwd=path)
-        (path / "README").write_text("hi\n")
-        _git("add", "README", cwd=path)
-        _git("commit", "-q", "-m", "first", cwd=path)
-    return repo
-
-
 def test_create_project_from_a_github_url_records_it_and_clones_it(xs, capsys, github):
-    github("quirq-ai/xo")
+    github.repo("quirq-ai/xo")
     xs.route("POST", "/me/projects", body={"success": True, "data": {"projects": ["quirq-ai/xo"]}})
     code, out, err = run(capsys, "create", "project", "https://github.com/quirq-ai/xo.git")
     assert code == 0 and json.loads(out) == ["quirq-ai/xo"]
@@ -1813,7 +1782,7 @@ def test_git_is_kept_to_https_and_to_the_repository_xo_names(monkeypatch, tmp_pa
 def test_git_refuses_a_file_remote_even_when_the_users_config_allows_it(monkeypatch, tmp_path):
     from xo import gitops
     src = tmp_path / "src"
-    _git("init", "-q", "-b", "main", str(src))
+    git("init", "-q", "-b", "main", str(src))
     monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
     monkeypatch.setenv("GIT_CONFIG_KEY_0", "protocol.file.allow")
     monkeypatch.setenv("GIT_CONFIG_VALUE_0", "always")
