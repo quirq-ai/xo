@@ -26,6 +26,8 @@ xo codex, ... ──────┘                      └── /api/core/v1/
 | GET | `/status` | anyone | what the page shows, as JSON; no Clerk call |
 | GET | `/config` | anyone | the services list `xo login` reads (`src/xo/services.json`), with `xo.url` set to where this server passes `/api/core/v1` on to (null when that is not a plain https address); addresses only (`me.url` is xo's shipped address, not necessarily this server), no Clerk call; answers even when the server is missing its settings |
 | GET | `/me` | any user key | `id`, `username`, `firstName`, `lastName`, `imageUrl`, `createdAt`, `email` (primary), `publicMetadata`, `privateMetadata`: the key's own user only, with secret-looking values masked |
+| GET | `/me/projects` | any user key | `projects`: the list in the key's own private metadata (`[]` when there is none) |
+| POST | `/me/projects` | any user key | adds `{"name": "..."}` to that list and answers the new list; see "Projects" below |
 | GET | `/user-metadata/{userId}` | admin keys | `publicMetadata`, `privateMetadata` |
 | PATCH | `/user-metadata/{userId}` | admin keys | both buckets after a deep merge; `null` removes a key |
 | POST | `/api/core/v1/{create}` | an `ak_` key | XO's answer: `claude-code`, `codex`, `antigravity`, `hermes`, `openclaw`, `xo-cowork`, `nebius-openclaw` |
@@ -183,6 +185,40 @@ The production server runs on Vercel at `https://xo.quirq.dev`: see
 [deploy-vercel.md](deploy-vercel.md). There, Vercel is the HTTPS proxy, and the limits in this
 process apply per function instance, so the per-address limit is a Vercel Firewall rule.
 
+## Projects
+
+`xo projects` and `xo projects add NAME` are the one write a normal key can make, and it is narrow:
+
+- **The server builds the change.** The client sends only `{"name": "..."}`; any other field, or
+  any other shape, is refused with 422 and nothing is written. There is no route through which a
+  normal key sends metadata.
+- **Only `projects` is written, only on the key's own user.** The user is the one Clerk ties the
+  key to. The server reads the list, appends the name, and sends Clerk's metadata merge
+  (`PATCH /v1/users/{id}/metadata`) with `{"private_metadata": {"projects": [...]}}` and nothing else.
+  Clerk merges that into what is stored, so every other public and private key, and every other
+  field of the user, stays exactly as it was.
+- **Refused without a write:** a name that is not 1 to 64 letters, digits, spaces, `_ . -` (starting
+  with a letter or digit), a name that looks like a credential (`sk-`, `ghp_`, `ak_`, `AKIA` and
+  the like, which `/me` would show masked), a name already in the list (ignoring case), a list
+  already holding 50, and a `projects` that exists but is not a list (409: it is never overwritten).
+- **As atomic as Clerk allows.** Clerk has no transactions or compare-and-swap, and replaces a list
+  whole, so an add is read, append, write. On one server instance adds for a user run one at a
+  time. Adds on different instances can still race, so after each write the server waits 0.3
+  seconds and reads the list again. It answers 200 only when that read holds the new name and every
+  name it had read before; anything gone was dropped by a racing write (no route removes a
+  project), so it writes the list again with those names put back, up to 3 writes, then answers
+  503 asking you to check with `xo projects`. This relies on Clerk's read returning what was last
+  written: if Clerk ever served a stale read, a name added elsewhere in that moment could still be
+  dropped. An admin removing a project through `/user-metadata` while an add runs can see it put
+  back.
+- **Audited** like `/user-metadata`: one JSON line per add with the key id, the caller, the outcome
+  and the list's length; never a name or any other value.
+- **Limited** to 30 requests a minute per key, and covered by the Firewall rule, since the path
+  starts with `/me`. Past Clerk's own limit of 10 metadata writes per 10 seconds per user the
+  answer is 429. It clears that user's 60-second `/me` cache.
+- **Not narrowed by `XO_ME_PRIVATE_KEYS`.** `/me/projects` always shows the `projects` list, even
+  when that variable leaves `projects` out of what `/me` shows.
+
 ## Guards
 
 - **Only Clerk-shaped keys reach Clerk.** A bearer token that is not `ak_` followed by up to 200
@@ -198,9 +234,9 @@ process apply per function instance, so the per-address limit is a Vercel Firewa
   checks the key with its own Clerk. Made-up keys sent there spend that Clerk, from the day the forwarding is
   deployed. What bounds them is `XO_CORE_PER_SECOND` per instance and the Firewall rule per
   address.
-- **Rate limits.** Per key, 60 requests a minute on `/me` and 20 on `/user-metadata`, counted
-  before Clerk is asked; the table remembers the 10,000 most recent keys. Clerk also allows 10
-  metadata writes per 10 seconds per user.
+- **Rate limits.** Per key, 60 requests a minute on `/me`, 30 on `/me/projects` and 20 on
+  `/user-metadata`, counted before Clerk is asked; the table remembers the 10,000 most recent keys.
+  Clerk also allows 10 metadata writes per 10 seconds per user.
 - **Cache.** `/me` answers are cached for 60 seconds per user. Key checks are never cached.
 - **Audit log.** Every request to `/user-metadata`, refused and failed ones included (a bad or
   missing key, a rate limit, a wrong method, a body too big), is one JSON line on stderr: time,

@@ -30,6 +30,9 @@
                                             github runs gh auth login for github.com, unless gh is
                                             already connected.
     xo status                               each service, its address, and whether you are logged in.
+    xo projects [add NAME]                  show the projects list in your private metadata, or add
+                                            NAME to it. The xo server makes the change and writes only
+                                            that list; xo sends just the name.
     (the xo key step:)                      ask for your API key without showing it, check it with
                                             XO through the xo server, and save it with the URL.
     xo logout                               delete the saved key, URL and addresses, and log Coder
@@ -235,7 +238,8 @@ def _body(args: argparse.Namespace) -> Any:
     return body
 
 
-def _client(args: argparse.Namespace, *, need_key: bool = True, op: spec.Operation | None = None) -> Client:
+def _client(args: argparse.Namespace, *, need_key: bool = True, op: spec.Operation | None = None,
+            server: bool = False) -> Client:
     """A client for the API, or for an xo server when the operation is one of its routes; a dry run
     needs no key."""
     readers = [*(["--api-key -"] if args.api_key == "-" else []),
@@ -246,7 +250,7 @@ def _client(args: argparse.Namespace, *, need_key: bool = True, op: spec.Operati
                       "and the body with --data @FILE")
     url, key = _target(args, need_key=need_key)
     args.resolved_key = key
-    base = url if op is not None and op.server else url + CORE_PATH
+    base = url if server or (op is not None and op.server) else url + CORE_PATH
     args.client = Client(base, key, timeout=args.timeout)
     return args.client
 
@@ -616,6 +620,23 @@ def _login_coder(args: argparse.Namespace, listed: str, last: dict[str, str]) ->
     return CoderClient(where, timeout=args.timeout).login(_ask), where
 
 
+def _projects(args: argparse.Namespace) -> int:
+    """`xo projects`: the list in your private metadata. `xo projects add NAME`: the server adds
+    NAME to it; xo sends only the name, never metadata, and the server changes nothing else."""
+    client = _client(args, server=True)
+    if args.action == "add":
+        print(f"xo: POST {spec.clean(client.scrub(client.url('/me/projects')))}", file=sys.stderr)
+        data = client.request("POST", "/me/projects", body={"name": args.name}).data
+    else:
+        data = client.request("GET", "/me/projects").data
+    projects = data.get("data", {}).get("projects") if isinstance(data, dict) and isinstance(data.get("data"), dict) \
+        else None
+    if projects is None:
+        raise XoError("the xo server did not answer with a projects list (is it older than xo projects?)")
+    print(client.scrub(_json(projects)))
+    return 0
+
+
 def _account(client: Client) -> str | None:
     """Whose key it is, from the xo server's /me, or None when the server cannot say."""
     try:
@@ -950,6 +971,14 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--host", default="127.0.0.1", help="address to listen on (default 127.0.0.1)")
     s.add_argument("--port", type=int, default=8787, help="port to listen on (default 8787)")
     s.set_defaults(run=_serve)
+
+    pj = sub.add_parser("projects", parents=[common],
+                        help="show the projects list in your private metadata, or add one (the xo server makes "
+                             "the change and touches nothing else)")
+    pjsub = pj.add_subparsers(dest="action", metavar="ACTION")
+    pa = pjsub.add_parser("add", parents=[common], help="add NAME to your projects")
+    pa.add_argument("name", metavar="NAME", help="1 to 64 letters, digits, spaces, _ . or -")
+    pj.set_defaults(run=_projects, action=None)
 
     cr = sub.add_parser("coder", parents=[common], help="launch workspaces using your Coder login")
     crsub = cr.add_subparsers(dest="action", required=True, metavar="ACTION")

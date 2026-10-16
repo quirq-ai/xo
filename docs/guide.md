@@ -65,6 +65,8 @@ xo hermes --help
 xo xo-cowork --help
 xo spaces --space-id THE_ID                      # a space you created, with its URLs
 xo me                                            # your profile: name, image, email, public and private metadata
+xo projects                                      # the projects list in your private metadata
+xo projects add my-app                           # add one; the server writes only that list
 ```
 
 - Add `--dry-run` to any create to see the request without sending it.

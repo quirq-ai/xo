@@ -1176,3 +1176,262 @@ def test_config_answers_even_without_the_clerk_secret(monkeypatch):
 def test_the_platform_default_is_the_listed_one():
     assert server.DEFAULT_CORE_URL == "https://dev.xo.builders/api/core/v1"
     assert services.SHIPPED["xo"]["url"] == "https://dev.xo.builders"
+
+
+# --- /me/projects: the one write a normal key can make ------------------------------------------
+
+@pytest.fixture(autouse=True)
+def _no_settle(monkeypatch):
+    monkeypatch.setattr(server, "PROJECT_SETTLE", 0)
+
+
+@pytest.fixture
+def alice(monkeypatch):
+    """A copy of alice the fake Clerk may change, so no test leaks into another."""
+    user = json.loads(json.dumps(USERS["user_alice"]))
+    user["private_metadata"] = {"stripeId": "cus_1", "notes": {"a": [1, 2]}, "flag": True}
+    monkeypatch.setitem(USERS, "user_alice", user)
+    return user
+
+
+def test_projects_starts_empty_and_reads_only_the_callers_user(xo_server, clerk, alice):
+    assert call(xo_server, "GET", "/me/projects", USER_KEY) == (200, {"success": True, "data": {"projects": []}})
+    assert [c["path"] for c in clerk.calls[1:]] == ["/v1/users/user_alice"]
+
+
+def test_add_project_writes_only_projects_and_keeps_every_other_key(xo_server, clerk, alice):
+    before = json.dumps({k: v for k, v in alice.items() if k != "private_metadata"}, sort_keys=True)
+    others = json.loads(json.dumps(alice["private_metadata"]))
+    assert call(xo_server, "POST", "/me/projects", USER_KEY, {"name": "alpha"}) == \
+        (200, {"success": True, "data": {"projects": ["alpha"]}})
+    assert call(xo_server, "POST", "/me/projects", USER_KEY, {"name": " beta 2 "})[1]["data"] == \
+        {"projects": ["alpha", "beta 2"]}
+    patches = [c for c in clerk.calls if c["method"] == "PATCH"]
+    assert [p["body"] for p in patches] == [{"private_metadata": {"projects": ["alpha"]}},
+                                            {"private_metadata": {"projects": ["alpha", "beta 2"]}}]
+    assert all(p["path"] == "/v1/users/user_alice/metadata" for p in patches)
+    assert {k: v for k, v in alice["private_metadata"].items() if k != "projects"} == others
+    assert json.dumps({k: v for k, v in alice.items() if k != "private_metadata"}, sort_keys=True) == before
+    assert call(xo_server, "GET", "/me/projects", USER_KEY)[1]["data"] == {"projects": ["alpha", "beta 2"]}
+    adds = [json.loads(line) for line in xo_server.audit if '"/me/projects"' in line]
+    assert [(a["outcome"], a["count"], a["keyId"], a["caller"]) for a in adds] == \
+        [(200, 1, "ak_user", "user_alice"), (200, 2, "ak_user", "user_alice")]
+    assert not any("alpha" in line or "cus_1" in line for line in xo_server.audit)
+
+
+@pytest.mark.parametrize("body, error", [
+    ({"name": "alpha", "privateMetadata": {"x": 1}}, 'Body must be {"name": "..."} and nothing else'),
+    ({"projects": ["a"]}, 'Body must be {"name": "..."} and nothing else'),
+    ({"name": ["a"]}, 'Body must be {"name": "..."} and nothing else'),
+    (["alpha"], 'Body must be {"name": "..."} and nothing else'),
+    ({"name": ""}, None), ({"name": "-lead"}, None), ({"name": "a/b"}, None), ({"name": "x" * 65}, None),
+    ({"name": "café"}, None), ({"name": "a\nb"}, None),
+    ({"name": "sk-learn-demo"}, "That name looks like a credential (sk-, ghp_, ak_ and the like); choose another"),
+    ({"name": "ghp_tools"}, None), ({"name": "ak_app"}, None), ({"name": "AKIA tools"}, None),
+    ({"name": "Bearer app"}, None)])
+def test_add_project_refuses_anything_but_one_plain_name_and_writes_nothing(xo_server, clerk, alice, body, error):
+    status, out = call(xo_server, "POST", "/me/projects", USER_KEY, body)
+    assert status == 422 and (error is None or out["error"] == error)
+    assert not [c for c in clerk.calls if c["method"] == "PATCH"]
+
+
+def test_add_project_refuses_a_duplicate_ignoring_case(xo_server, clerk, alice):
+    alice["private_metadata"]["projects"] = ["Alpha"]
+    status, out = call(xo_server, "POST", "/me/projects", USER_KEY, {"name": "alpha"})
+    assert (status, out["error"]) == (409, "alpha is already in your projects; nothing was changed")
+    assert not [c for c in clerk.calls if c["method"] == "PATCH"]
+
+
+@pytest.mark.parametrize("value", [{"a": 1}, "alpha", 3, True])
+def test_add_project_never_overwrites_projects_that_is_not_a_list(xo_server, clerk, alice, value):
+    alice["private_metadata"]["projects"] = value
+    status, _ = call(xo_server, "POST", "/me/projects", USER_KEY, {"name": "alpha"})
+    assert status == 409 and alice["private_metadata"]["projects"] == value
+    assert not [c for c in clerk.calls if c["method"] == "PATCH"]
+
+
+def test_add_project_stops_at_the_cap(xo_server, clerk, alice):
+    alice["private_metadata"]["projects"] = [f"p{i}" for i in range(server.MAX_PROJECTS)]
+    assert call(xo_server, "POST", "/me/projects", USER_KEY, {"name": "one more"})[0] == 422
+    assert not [c for c in clerk.calls if c["method"] == "PATCH"]
+
+
+def test_a_normal_key_still_cannot_write_other_metadata(xo_server, clerk, alice):
+    assert call(xo_server, "PATCH", "/user-metadata/user_alice", USER_KEY, {"privateMetadata": {"x": 1}})[0] == 403
+    assert call(xo_server, "PATCH", "/me/projects", USER_KEY, {"name": "a"})[0] == 405
+    assert call(xo_server, "PUT", "/me/projects", USER_KEY, {"name": "a"})[0] == 405
+    assert call(xo_server, "POST", "/me", USER_KEY, {"name": "a"})[0] == 405
+    assert not [c for c in clerk.calls if c["method"] == "PATCH"]
+
+
+def test_add_project_needs_a_good_key_and_audits_the_refusal(xo_server, clerk, alice):
+    assert call(xo_server, "POST", "/me/projects", "ak_unknown", {"name": "a"})[0] == 401
+    assert call(xo_server, "POST", "/me/projects", None, {"name": "a"})[0] == 401
+    assert [json.loads(line)["outcome"] for line in xo_server.audit] == [401, 401]
+    assert not [c for c in clerk.calls if c["method"] == "PATCH"]
+
+
+def test_add_project_clears_the_me_cache(xo_server, alice):
+    assert call(xo_server, "GET", "/me", USER_KEY)[1]["data"]["privateMetadata"].get("projects") is None
+    call(xo_server, "POST", "/me/projects", USER_KEY, {"name": "alpha"})
+    assert call(xo_server, "GET", "/me", USER_KEY)[1]["data"]["privateMetadata"]["projects"] == ["alpha"]
+
+
+class _RacingClerk:
+    """Stands in for Clerk where another writer replaces `projects` right after this add's write."""
+
+    def __init__(self, stored: dict, races: int) -> None:
+        self.stored, self.races, self.patches = stored, races, []
+
+    def verify_key(self, secret: str) -> dict:
+        return KEYS[secret]
+
+    def user(self, user_id: str) -> dict:
+        return json.loads(json.dumps(self.stored))
+
+    def update_metadata(self, user_id: str, changes: dict) -> dict:
+        self.patches.append(changes)
+        self.stored["private_metadata"].update(changes["privateMetadata"])
+        if self.races:
+            self.races -= 1
+            self.stored["private_metadata"]["projects"] = ["theirs"]  # the other writer wins
+        return json.loads(json.dumps(self.stored))
+
+
+def test_add_project_tries_again_when_another_write_replaced_the_list(clerk):
+    user = {"id": "user_alice", "private_metadata": {"stripeId": "cus_1", "projects": []}}
+    fake = _RacingClerk(user, races=1)
+    lines: list[str] = []
+    app = server.App(server.Config(), clerk=fake, audit=lines.append)
+    status, out = app.handle("POST", "/me/projects", {"authorization": f"Bearer {USER_KEY}"}, b'{"name": "mine"}')
+    assert (status, out["data"]["projects"]) == (200, ["theirs", "mine"])
+    assert user["private_metadata"] == {"stripeId": "cus_1", "projects": ["theirs", "mine"]}
+    assert len(fake.patches) == 2
+
+
+class _DroppingClerk(_RacingClerk):
+    """Another instance's add, started from an older list, lands just after this one and drops it."""
+
+    def update_metadata(self, user_id: str, changes: dict) -> dict:
+        self.patches.append(changes)
+        reply = json.loads(json.dumps({**self.stored, "private_metadata": {
+            **self.stored["private_metadata"], **changes["privateMetadata"]}}))
+        if self.races:
+            self.races -= 1
+            self.stored["private_metadata"]["projects"] = ["old", "theirs"]  # their list, without ours
+        else:
+            self.stored["private_metadata"].update(changes["privateMetadata"])
+        return reply  # Clerk's reply to our write looks fine
+
+
+def test_add_project_puts_back_names_a_racing_write_dropped(clerk):
+    user = {"id": "user_alice", "private_metadata": {"stripeId": "cus_1", "projects": ["old"]}}
+    fake = _DroppingClerk(user, races=1)
+    app = server.App(server.Config(), clerk=fake, audit=lambda line: None)
+    status, out = app.handle("POST", "/me/projects", {"authorization": f"Bearer {USER_KEY}"}, b'{"name": "mine"}')
+    assert (status, out["data"]["projects"]) == (200, ["old", "theirs", "mine"])
+    assert user["private_metadata"] == {"stripeId": "cus_1", "projects": ["old", "theirs", "mine"]}
+
+
+def test_add_project_never_trusts_a_reply_clerk_did_not_store(clerk):
+    user = {"id": "user_alice", "private_metadata": {"projects": []}}
+    fake = _DroppingClerk(user, races=server.PROJECT_TRIES)
+    app = server.App(server.Config(), clerk=fake, audit=lambda line: None)
+    status, out = app.handle("POST", "/me/projects", {"authorization": f"Bearer {USER_KEY}"}, b'{"name": "mine"}')
+    assert status == 503 and len(fake.patches) == server.PROJECT_TRIES
+
+
+def test_parallel_adds_on_two_instances_never_report_a_lost_name(clerk, monkeypatch):
+    """Two servers (separate locks) adding at once for one user, against one Clerk that replaces lists."""
+    monkeypatch.setattr(server, "PROJECT_SETTLE", 0.05)
+    stored = {"id": "user_alice", "private_metadata": {"keep": {"a": 1}, "projects": []}}
+    guard = threading.Lock()
+
+    class SharedClerk:
+        def verify_key(self, secret):
+            return KEYS[secret]
+
+        def user(self, user_id):
+            with guard:
+                snapshot = json.loads(json.dumps(stored))
+            time.sleep(0.01)
+            return snapshot
+
+        def update_metadata(self, user_id, changes):
+            time.sleep(0.01)
+            with guard:
+                stored["private_metadata"].update(changes["privateMetadata"])
+                return json.loads(json.dumps(stored))
+
+    apps = [server.App(server.Config(), clerk=SharedClerk(), audit=lambda line: None) for _ in range(2)]
+    results: dict[str, int] = {}
+
+    def add(i: int) -> None:
+        body = json.dumps({"name": f"p{i}"}).encode()
+        results[f"p{i}"] = apps[i % 2].handle("POST", "/me/projects", {"authorization": f"Bearer {USER_KEY}"},
+                                              body)[0]
+
+    threads = [threading.Thread(target=add, args=(i,)) for i in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    names = stored["private_metadata"]["projects"]
+    assert stored["private_metadata"]["keep"] == {"a": 1}
+    assert len(names) == len(set(names))  # no duplicates
+    assert set(results.values()) <= {200, 503}
+    assert {n for n, status in results.items() if status == 200} <= set(names)  # a 200 is never lost
+
+
+@pytest.mark.parametrize("where", ["user", "update_metadata"])
+def test_clerks_own_limit_is_a_429_not_a_degraded_server(clerk, where):
+    class Limited(_RacingClerk):
+        pass
+
+    def over(*args):
+        raise server.ClerkError(429, "too_many_requests")
+
+    fake = Limited({"id": "user_alice", "private_metadata": {}}, races=0)
+    setattr(fake, where, over)
+    app = server.App(server.Config(), clerk=fake, audit=lambda line: None)
+    status, _ = app.handle("POST", "/me/projects", {"authorization": f"Bearer {USER_KEY}"}, b'{"name": "a"}')
+    assert status == 429 and app.status()["status"] == "ok"
+
+
+def test_the_servers_own_clerk_budget_is_still_a_503(clerk):
+    fake = _RacingClerk({"id": "user_alice", "private_metadata": {}}, races=0)
+    fake.update_metadata = lambda *args: (_ for _ in ()).throw(server.BUSY)
+    app = server.App(server.Config(), clerk=fake, audit=lambda line: None)
+    status, _ = app.handle("POST", "/me/projects", {"authorization": f"Bearer {USER_KEY}"}, b'{"name": "a"}')
+    assert status == 503
+
+
+def test_add_project_gives_up_and_says_so_when_the_list_keeps_changing(clerk):
+    user = {"id": "user_alice", "private_metadata": {"projects": []}}
+    fake = _RacingClerk(user, races=server.PROJECT_TRIES)
+    app = server.App(server.Config(), clerk=fake, audit=lambda line: None)
+    status, out = app.handle("POST", "/me/projects", {"authorization": f"Bearer {USER_KEY}"}, b'{"name": "mine"}')
+    assert status == 503 and "run xo projects" in out["error"] and len(fake.patches) == server.PROJECT_TRIES
+
+
+def test_projects_shows_up_on_the_status_page_as_its_route(xo_server, alice):
+    call(xo_server, "GET", "/me/projects", USER_KEY)
+    activity = call(xo_server, "GET", "/status")[1]["data"]["activity"]
+    assert activity[0]["route"] == "/me/projects"
+
+
+def test_xo_projects_end_to_end(xo_server, clerk, alice, monkeypatch, capfd):
+    monkeypatch.setenv("XO_URL", xo_server.url)
+    monkeypatch.setenv("XO_API_KEY", USER_KEY)
+    assert cli.main(["projects"]) == 0
+    assert json.loads(capfd.readouterr().out) == []
+    assert cli.main(["projects", "add", "my app"]) == 0
+    out, err = capfd.readouterr()
+    _no_secret(out, err)
+    assert json.loads(out) == ["my app"] and "POST" in err
+    assert cli.main(["projects", "add", "My App"]) == 1
+    assert "already in your projects" in capfd.readouterr().err
+    assert alice["private_metadata"] == {"stripeId": "cus_1", "notes": {"a": [1, 2]}, "flag": True,
+                                         "projects": ["my app"]}
+    assert [c["body"] for c in clerk.calls if c["method"] == "PATCH"] == \
+        [{"private_metadata": {"projects": ["my app"]}}]
