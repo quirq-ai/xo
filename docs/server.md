@@ -304,34 +304,40 @@ spaces: [{"name": "dev", "kind": "claude-code", "id": "<XO space id>", "rev": 2,
   GitHub {project: ref} entries; local ones stay the sharer's), "at"}`. Never the space's id, kind
   or rev. The merge sent to Clerk names `shared` only, with the same lock, settle and re-read as
   every other write; each writer re-adds or re-removes only its own entry.
-  - **Room of their own.** All of `shared` is at most 1.5KB and one invite at most 1KB, and a share
-    also needs the recipient's whole private metadata to stay within 6KB. A user's own writes do
-    not count `shared` against their 6KB, so invites can never stop them changing their own
-    metadata; with a full `shared`, the whole can reach 7.5KB of Clerk's 8KB.
+  - **Room.** All of `shared` is at most 1.5KB and one invite at most 1KB, and a share also needs
+    the recipient's whole private metadata to stay within 6KB. Invites count toward that 6KB like
+    everything else, so the whole never passes it; others can take at most 1.5KB of anyone's
+    room, and accepting or rejecting gives it back.
   - **Limits.** 20 invites waiting, 5 from one sender, one per sender and item. Sending the same
-    invite again writes nothing; a changed one replaces it only a minute after the last. After a
-    reject, that sender cannot invite the user to that item for 7 days (a mark of a hash of sender
-    and item, kept in `shared`, at most 10).
+    invite again writes nothing; a changed one replaces it only a minute after the last. A reject
+    keeps nothing, so the sender can share the same item again straight away.
   - **The same answer.** The caller is told plainly about what is theirs: no username on their
     account (409), an item they do not have (404), a local project or an invite over 1KB (422).
     Everything about the recipient (no such username, the caller's own username, a full list, no
-    room, a block, a `shared` xo cannot read, their Clerk write limit) is the same 404 "Could not
+    room, a `shared` xo cannot read, their Clerk write limit) is the same 404 "Could not
     share ITEM with USERNAME", and a Clerk failure is a 503. Once the key is verified, every answer
     takes at least 1.5 seconds. A 200 does confirm the username exists, and a 503 only comes once
     it was found. The audit line names the recipient only by a hash.
-  - `GET /me/shared` lists the caller's invites. Each has an `id`: 8 characters of a hash of its
+  - `GET /me/shared` lists the caller's invites. Each has an `id`: 16 characters of a hash of its
     sender's user id and its exact content, so an invite sent again, or one from another sender
     under the same name, has a different id. `from` is the sender's username now, looked up with
     one Clerk call; `sharedAs` is the name they shared under when it differs, and `senderGone`
-    marks an account that no longer exists. `/me` shows `shared` by the names shared under, never
-    by user id.
-  - `POST /me/shared/accept` with `{"id", "as"?}` checks every refusal first (an id that matches
-    one invite, a usable name, refs and GitHub projects, at most 10 spaces and 30 projects, 6KB),
-    then makes one write of the caller's own `projects` (the invite's projects added), `spaces`
-    (for a space, `{"name", "rev": 1, "projects"}`; `as` when the name is taken) and `shared` (the
-    invite taken off). A refused accept writes nothing. `xo accept` shows the name and every
-    `project@ref` and asks first (`--yes` skips that). `POST /me/shared/reject` with `{"id"}` takes
-    it off and sets the 7-day block. Neither looks anyone up.
+    marks an account that no longer exists. If that lookup fails, each shows the name it was
+    shared under, marked `senderUnchecked`. `/me` shows `shared` by the names shared under, never
+    by user id. Should two invites ever share an id, accept refuses both (409) and reject takes
+    both off.
+  - `POST /me/shared/accept` takes `{"id", "as"?}` for a shared space and `{"id", "space",
+    "ref"?}` for a shared project. It checks every refusal first (an id that matches one invite, a
+    usable name, refs and GitHub projects, for a project a space of the caller's with room, at most
+    10 spaces, 10 projects a space and 30 projects, 6KB), then makes one write of the caller's own
+    `spaces`, `projects` and `shared` (the invite taken off). A shared space becomes a new space
+    `{"name", "rev": 1, "projects"}` (`as` when the name is taken). A shared project goes into the
+    space named `space` at `ref` (default `main`), added or its ref replaced in place, and that
+    space's rev goes up by one. Either way the projects are added to `projects` too, since
+    `xo update` and `sync` need every project of a space there. A refused accept writes nothing.
+    `xo accept` shows the name and every `project@ref` (for a project, the space it goes in) and
+    asks first (`--yes` skips that). `POST /me/shared/reject` with `{"id"}` takes it off and keeps
+    nothing else. Neither looks anyone up.
   - **Races.** A share racing the recipient's own write is written again if it was lost. A share
     that read before a reject and writes after it can bring the invite back, once; the reject's
     own re-read then takes it off again, unless both re-reads land first (the same narrowed race as

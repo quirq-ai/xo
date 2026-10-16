@@ -81,9 +81,10 @@ xo update space:dev                              # push each branch under ./dev,
 xo sync space:dev                                # rebase and push each branch, merge the refs, record
 xo share space:dev bob                           # invite bob to a copy of dev (its name and projects)
 xo list shared                                   # the invites waiting on you, each with an id
-xo accept 0123abcd                               # show what it adds, ask, then add it to your metadata
-xo accept 0123abcd --as dev2                     # the same, when you already have a space called dev
-xo reject 0123abcd                               # take it off; its sender cannot re-invite you for 7 days
+xo accept 0123abcd0123abcd                       # a shared space: show it, ask, then add it as your own
+xo accept 0123abcd0123abcd --as dev2             # the same, when you already have a space called dev
+xo accept 4567cdef4567cdef --space dev           # a shared project: into your space dev, at main
+xo reject 0123abcd0123abcd                       # take it off (its sender can share it again)
 xo install project:OWNER/REPO                    # clone it here, or fetch and fast-forward it
 xo update project:OWNER/REPO                     # git push its branch (never forced)
 xo sync project:OWNER/REPO                       # git pull --rebase, then push
@@ -106,12 +107,15 @@ xo sync project:OWNER/REPO                       # git pull --rebase, then push
     are.
 - `xo share` puts an invite in the other user's `shared` list; nothing else of theirs is changed
   or shown to you. A space's local projects are left out of it.
-  - Accepting copies the space's name and projects into your own metadata as a new space at rev 1,
-    and adds its projects to your projects. Later changes on either side do not reach the other.
-  - Invites have their own small room in your metadata, so they never stop your own changes.
-  - A share to a username that does not exist, or to someone whose list is full or who rejected it
-    this week, gets the same "could not share" answer. A share that works does tell you the
-    username exists.
+  - Accepting a space copies its name and projects into your own metadata as a new space at rev 1.
+    Accepting a project puts it in the space of yours you name with `--space`, at `--ref` (default
+    `main`). Either way the projects are added to your projects too, which xo needs to install and
+    update them. Later changes on either side do not reach the other.
+  - Invites count toward your 6KB, but all of them together take at most 1.5KB; accepting or
+    rejecting one gives its room back.
+  - A share to a username that does not exist, or to someone whose list is full, gets the same
+    "could not share" answer. After a reject the sender can share again. A share that works
+    does tell you the username exists.
   - Only GitHub (OWNER/REPO) projects can be shared, since nobody else could install a local one.
   - `xo list shared` shows each sender's username now. An invite sent again gets a new id, so
     `xo accept` never takes something other than what you saw.
