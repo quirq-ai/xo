@@ -1341,6 +1341,15 @@ def test_add_project_never_trusts_a_reply_clerk_did_not_store(clerk):
     assert status == 503 and len(fake.patches) == server.PROJECT_TRIES
 
 
+def test_add_project_stops_retrying_once_clerk_has_been_slow(clerk, monkeypatch):
+    monkeypatch.setattr(server, "CLERK_TIMEOUT", -1.0)  # as if the first write had used it all
+    user = {"id": "user_alice", "private_metadata": {"projects": []}}
+    fake = _DroppingClerk(user, races=1)
+    app = server.App(server.Config(), clerk=fake, audit=lambda line: None)
+    status, out = app.handle("POST", "/me/projects", {"authorization": f"Bearer {USER_KEY}"}, b'{"name": "mine"}')
+    assert status == 503 and "run xo projects" in out["error"] and len(fake.patches) == 1
+
+
 def test_parallel_adds_on_two_instances_never_report_a_lost_name(clerk, monkeypatch):
     """Two servers (separate locks) adding at once for one user, against one Clerk that replaces lists."""
     monkeypatch.setattr(server, "PROJECT_SETTLE", 0.05)

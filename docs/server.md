@@ -207,7 +207,10 @@ process apply per function instance, so the per-address limit is a Vercel Firewa
   seconds and reads the list again. It answers 200 only when that read holds the new name and every
   name it had read before; anything gone was dropped by a racing write (no route removes a
   project), so it writes the list again with those names put back, up to 3 writes, then answers
-  503 asking you to check with `xo projects`. This relies on Clerk's read returning what was last
+  503 asking you to check with `xo projects`. It also stops writing again, with that 503, once a slow
+  Clerk has used 10 seconds, so a slow Clerk costs at most one more write and read; at Clerk's
+  10-second timeout an add can still take about 40 seconds, and if your client gives up first,
+  `xo projects` shows whether the name is there. This relies on Clerk's read returning what was last
   written: if Clerk ever served a stale read, a name added elsewhere in that moment could still be
   dropped. An admin removing a project through `/user-metadata` while an add runs can see it put
   back.
