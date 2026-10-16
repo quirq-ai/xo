@@ -15,7 +15,7 @@ Using bash? Before you paste, change `~/.zshrc` (twice) in the block to `~/.bash
 
 ```sh
 python3 -m venv ~/.xo \
-  && ~/.xo/bin/pip install "quirq-xo @ git+https://github.com/quirq-ai/xo@d121180cbb39f625207dd6f0894a29e9b38fa78d" \
+  && ~/.xo/bin/pip install "quirq-xo @ git+https://github.com/quirq-ai/xo@bdceb6d5c522f870c1439699cb8e54c6e4bc313f" \
   && { grep -qxF 'export PATH="$HOME/.xo/bin:$PATH"' ~/.zshrc 2>/dev/null || echo 'export PATH="$HOME/.xo/bin:$PATH"' >> ~/.zshrc; } \
   && export PATH="$HOME/.xo/bin:$PATH" \
   && xo --version
@@ -60,7 +60,7 @@ This prints the request xo would send, a notice that a real create copies your k
 ## 5. Create a space for real
 
 Before you create anything, know these three things:
-- The API can't delete, list, start or stop spaces, and xo has no command for it. A space you create stays, so create only one you mean to keep.
+- The API can't delete, list, start or stop spaces, and xo has no command for it (`xo list spaces` lists only the spaces xo recorded). A space you create stays, so create only one you mean to keep.
 - Every create except `nebius-openclaw` stores your XO API key inside the new space. xo prints a notice saying so as the request goes out; it does not pause or ask first. If the XO team can give you a second key, use that one for creates.
 - `xo spaces` prints URLs that carry a session token. Don't share them.
 

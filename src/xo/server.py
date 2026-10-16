@@ -338,15 +338,35 @@ def _mask_secrets(value: Any, depth: int = 0) -> Any:
     return value
 
 
+# Token prefixes a branch can also start with (npm_bump, sk-rewrite, hf_integration). Behind one
+# of these a ref is a credential only with a token's body: a long run of letters and digits, or,
+# separators removed, 20 or more that mix upper case, lower case and digits (a token split by / or
+# -). Every other credential prefix (glpat-, AIza, ya29., eyJ, Bearer) is refused on its own.
+_BRANCH_PREFIX = re.compile(r"\A\s*(?:(?:sk|rk|pk)[-_]|ak_|gh[pousr]_|github_pat_|hf_|npm_|pypi-|xox[abprs]-|AKIA|ASIA)")
+_TOKEN_BODY = re.compile(r"[A-Za-z0-9]{16,}")
+
+
+def _secret_ref(ref: str) -> bool:
+    """A ref that looks like a credential. A commit sha has a token's body but never a prefix."""
+    if not _SECRET_VALUE.search(ref):
+        return False
+    if not _BRANCH_PREFIX.match(ref) or _TOKEN_BODY.search(ref):
+        return True
+    body = re.sub(r"[^A-Za-z0-9]", "", ref)
+    return len(body) >= 20 and all(re.search(p, body) for p in ("[0-9]", "[a-z]", "[A-Z]"))
+
+
 def _mask_values(value: Any, depth: int = 0) -> Any:
-    """Like _mask_secrets, but by value only: for maps whose keys are project names, not settings."""
+    """Like _mask_secrets, but by value only, for a space's {project: ref} list: its keys are
+    project names, not settings, and its values are refs."""
     if depth > 32:
         return "(hidden)"
     if isinstance(value, dict):
         return {k: _mask_values(v, depth + 1) for k, v in value.items()}
     if isinstance(value, list):
         return [_mask_values(v, depth + 1) for v in value]
-    if isinstance(value, str) and _SECRET_VALUE.search(value):
+    # Only a valid ref gets the ref rule; anything else someone stored is masked as /me masks it.
+    if isinstance(value, str) and (_secret_ref(value) if names.ref_ok(value) else _SECRET_VALUE.search(value)):
         return _mask(value)
     return value
 
@@ -951,8 +971,10 @@ class App:
         try:
             entry = self._change_space(key["subject"], who, name, make)
         except _Reply as r:
-            # A race or a busy Clerk can pass; the refusals checked above cannot, so no hint for them.
-            hint = f". Run xo connect space:{name} --id {space_id} to record it" if r.status in (409, 429, 503) else ""
+            # A race, or a Clerk that is busy, failing or unreachable, can pass; the refusals checked
+            # above cannot, so no hint for them.
+            hint = (f". If xo list spaces does not show it, run xo connect space:{name} --id {space_id} to record it"
+                    if r.status in (409, 429, 502, 503) else "")
             raise _Reply(r.status, f"XO created the space (id {space_id}) but xo could not record it: {r.error}{hint}",
                          r.clerk) from None
         return {"space": _shown_space(entry), "xo": _mask_secrets(made)}
@@ -998,7 +1020,7 @@ class App:
         self._project_name(project, who)
         if not names.ref_ok(ref):
             raise self._refuse(who, 422, names.REF_RULE[0].upper() + names.REF_RULE[1:])
-        if _SECRET_VALUE.search(ref):
+        if _secret_ref(ref):
             raise self._refuse(who, 422, "That ref looks like a credential (sk-, ghp_, ak_ and the like); "
                                          "nothing was changed")
 
