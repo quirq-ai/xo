@@ -673,8 +673,7 @@ def _coder_github(args: argparse.Namespace) -> int:
 
 # Coder commands passed straight to the coder CLI, on the deployment xo checked Coder is logged in to.
 # No delete: xo has no delete command; delete workspaces in the Coder dashboard.
-CODER_PASS = ("list", "show", "start", "stop", "restart", "ssh", "open", "ping", "port-forward",
-              "update", "logs")
+CODER_PASS = ("list", "show", "start", "stop", "restart", "ssh", "open", "ping", "port-forward", "update")
 
 
 def _ask(question: str) -> bool:
