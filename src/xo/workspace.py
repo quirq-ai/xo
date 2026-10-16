@@ -204,14 +204,18 @@ def _checkouts(root: Path, pairs: list[tuple[str, str]]) -> list[Path]:
     return found
 
 
-def _git_step(dests: list[Path], rebase: bool) -> None:
+def _git_step(dests: list[Path], rebase: bool) -> list[Path]:
     """Each checkout on a branch with an upstream: rebased on it first when rebase, then pushed
-    (never forced, so git refuses when the remote is ahead). Tags and commits are left as they are."""
+    (never forced, so git refuses when the remote is ahead). Tags and commits are left as they are.
+    The checkouts pushed."""
+    pushed = []
     for dest in dests:
         if gitops.tracking(dest):
             if rebase:
                 gitops.pull_rebase(dest)
             gitops.push(dest)
+            pushed.append(dest)
+    return pushed
 
 
 def update(client: Client, kind: str, name: str) -> Any:
@@ -243,14 +247,14 @@ def sync(client: Client, kind: str, name: str) -> Any:
     root = Path(name)
     state = _state(root)
     installed = _pairs(state.get("projects"), str(root / STATE))
-    _git_step(_checkouts(root, installed), rebase=True)
+    pushed = _git_step(_checkouts(root, installed), rebase=True)
     base = dict(installed)
     local = dict(_local(root, installed))
     space = _space(client, name)
     remote = _pairs(space.get("projects"), f"space {name}")
-    left = (f" Your branches were rebased and pushed; no checkout was moved and nothing was recorded. To take the "
-            f"space's refs, run xo install space:{name}; to keep yours, run that, check yours out again and run "
-            f"xo update space:{name}")
+    done = (" The branches in " + ", ".join(f"./{d}" for d in pushed) + " were rebased and pushed;") if pushed else ""
+    left = (f"{done} No checkout was moved and nothing was recorded. To take the space's refs, run xo install "
+            f"space:{name}; to keep yours, run that, check yours out again and run xo update space:{name}")
     if _rev(space) < state["rev"]:
         # An older copy of the space was put back (a write racing on another server instance), and
         # someone may have recorded a change on top of it since: xo cannot tell whose refs are newer.
