@@ -24,6 +24,15 @@ class FakeXo:
         self.routes[(method, path)] = (status, body, headers or {})
 
 
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_call(item):
+    """Every test body runs with the loopback guard on, whatever its module overrides."""
+    import socket
+    import urllib.request
+    assert getattr(socket.getaddrinfo, "__name__", "") == "guard" and urllib.request.getproxies() == {}, (
+        f"{item.nodeid}: the loopback guard is not active (is loopback_only overridden?)")
+
+
 @pytest.fixture(autouse=True)
 def loopback_only():
     """No test may reach a real host: anything but loopback fails to resolve, and no proxy is used

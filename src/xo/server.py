@@ -263,6 +263,7 @@ class Core:
         if body is not None:
             headers["Content-Type"] = "application/json"
         parts = urllib.parse.urlsplit(self._cfg.core_url)
+        xo = f"XO ({parts.hostname})"  # names the upstream, so a timeout says which one did not answer
         kind = http.client.HTTPSConnection if parts.scheme == "https" else http.client.HTTPConnection
         conn = kind(parts.hostname, parts.port, timeout=CORE_TIMEOUT)
         late = threading.Event()
@@ -290,15 +291,15 @@ class Core:
             status, raw = resp.status, resp.read(MAX_CORE_ANSWER + 1)
         except (TimeoutError, OSError, http.client.HTTPException, ValueError):
             if late.is_set():
-                return 504, {"success": False, "error": "XO did not answer in time" + maybe}
-            return 502, {"success": False, "error": "XO did not answer" + maybe}
+                return 504, {"success": False, "error": f"{xo} did not answer in time" + maybe}
+            return 502, {"success": False, "error": f"{xo} did not answer" + maybe}
         finally:
             timer.cancel()
             if resp is not None:
                 resp.close()
             conn.close()
         if late.is_set():  # cut mid-answer: what was read is not the whole answer
-            return 504, {"success": False, "error": "XO did not answer in time" + maybe}
+            return 504, {"success": False, "error": f"{xo} did not answer in time" + maybe}
         if 300 <= status < 400:
             return 502, {"success": False, "error": f"XO redirected the request ({status}); not followed"}
         if status not in _KNOWN_STATUSES:

@@ -487,30 +487,33 @@ def _login(args: argparse.Namespace) -> int:
     last = services.saved_addresses()
     before = dict(last)
     results: list[tuple[str, str | None, str]] = []  # (service, error or None, line)
+
+    def report(name: str, error: str | None, line: str) -> None:
+        # Printed as each step ends, so the key's result shows before Coder's sign-in starts.
+        results.append((name, error, line))
+        text = f"failed: {error}" if error else line
+        print(f"xo: {name}: {spec.clean(_redacted(text, _Parser.argv, getattr(args, 'resolved_key', None)))}",
+              file=sys.stderr, flush=True)
     if args.service in (None, *KEY_SERVICES):
         try:
-            results.append(("me", None, _login_xo(args, url, saved)))
+            report("me", None, _login_xo(args, url, saved))
             last["me"], last["xo"] = url, platform
         except XoError as e:
-            results.append(("me", str(e), ""))
+            report("me", str(e), "")
     if args.service in (None, "coder"):
         try:
             line, where = _login_coder(args, coder_at, last)
-            results.append(("coder", None, line))
+            report("coder", None, line)
             if where:
                 last["coder"] = where
         except XoError as e:
-            results.append(("coder", str(e), ""))
+            report("coder", str(e), "")
     if last != before:
         try:
             services.save_addresses(last)
         except XoError as e:
             print(f"xo: {spec.clean(str(e))}; the next xo login asks again about any changed address",
                   file=sys.stderr)
-    for name, error, line in results:
-        text = f"failed: {error}" if error else line
-        print(f"xo: {name}: {spec.clean(_redacted(text, _Parser.argv, getattr(args, 'resolved_key', None)))}",
-              file=sys.stderr)
     if os.environ.get(KEY_ENV, "").strip() and args.service in (None, *KEY_SERVICES):
         print(f"xo: {KEY_ENV} is set in this terminal and is used instead; run unset {KEY_ENV} to use the saved key",
               file=sys.stderr)
@@ -551,6 +554,8 @@ def _key_works(client: Client) -> bool:
 
 
 def _check_with_xo(client: Client, url: str) -> None:
+    # The check goes through the server to XO and can take a while; say so, so the wait never looks stuck.
+    print(f"xo: checking the key with XO through {url} ...", file=sys.stderr, flush=True)
     try:
         client.request("GET", f"{CORE_PATH}/spaces/{PROBE_SPACE}")
     except XoError as e:

@@ -920,19 +920,19 @@ def test_xo_unreachable_or_slow(xo_server, clerk, monkeypatch):
     core = xo_server.app.cfg.core_url
     monkeypatch.setattr(xo_server.app.cfg, "core_url", "http://127.0.0.1:9")
     assert call(xo_server, "POST", "/api/core/v1/codex", USER_KEY, {}) == (502, {
-        "success": False, "error": "XO did not answer; it may have been received, so check before you retry"})
+        "success": False, "error": "XO (127.0.0.1) did not answer; it may have been received, so check before you retry"})
     assert call(xo_server, "GET", "/api/core/v1/spaces/s1", USER_KEY) == (502, {
-        "success": False, "error": "XO did not answer"})
+        "success": False, "error": "XO (127.0.0.1) did not answer"})
     monkeypatch.setattr(xo_server.app.cfg, "core_url", core)
     monkeypatch.setattr(server, "CORE_TIMEOUT", 0.2)
     clerk.core_stall = 0.5
     assert call(xo_server, "POST", "/api/core/v1/codex", USER_KEY, {}) == (504, {
-        "success": False, "error": "XO did not answer in time; it may have been received, so check before you retry"})
+        "success": False, "error": "XO (127.0.0.1) did not answer in time; it may have been received, so check before you retry"})
     clerk.core_stall = 0.0
     clerk.core_trickle = 0.15  # each wait is short, but the whole answer takes about 7 seconds
     started = time.monotonic()
     assert call(xo_server, "GET", "/api/core/v1/spaces/s1", USER_KEY) == (504, {
-        "success": False, "error": "XO did not answer in time"})
+        "success": False, "error": "XO (127.0.0.1) did not answer in time"})
     assert time.monotonic() - started < 2
 
 
@@ -948,7 +948,7 @@ def test_a_slow_connect_still_ends_at_the_deadline(xo_server, clerk, monkeypatch
 
     monkeypatch.setattr(http.client.HTTPConnection, "connect", slow_connect)
     assert call(xo_server, "GET", "/api/core/v1/spaces/s1", USER_KEY) == (504, {
-        "success": False, "error": "XO did not answer in time"})
+        "success": False, "error": "XO (127.0.0.1) did not answer in time"})
     assert clerk.core == []
 
 
