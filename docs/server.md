@@ -198,18 +198,26 @@ process apply per function instance, so the per-address limit is a Vercel Firewa
   Clerk merges that into what is stored, so every other public and private key, and every other
   field of the user, stays exactly as it was.
 - **Refused without a write:** a name that is not 1 to 64 letters, digits, spaces, `_ . -` (starting
-  with a letter or digit), a name already in the list (ignoring case), a list already holding 50,
-  and a `projects` that exists but is not a list (409: it is never overwritten).
+  with a letter or digit), a name that looks like a credential (`sk-`, `ghp_`, `ak_`, `AKIA` and
+  the like, which `/me` would show masked), a name already in the list (ignoring case), a list
+  already holding 50, and a `projects` that exists but is not a list (409: it is never overwritten).
 - **As atomic as Clerk allows.** Clerk has no transactions or compare-and-swap, and replaces a list
   whole, so an add is read, append, write. On one server instance adds for a user run one at a
-  time. After the write the server checks the list Clerk returns is the one it wrote; if another
-  write replaced it in between, it reads again and adds once more (3 tries, then 503 asking you to
-  check with `xo projects`). What it cannot rule out: two adds on different instances at the same
-  moment, where the later one's list can drop the earlier name.
+  time. Adds on different instances can still race, so after each write the server waits 0.3
+  seconds and reads the list again. It answers 200 only when that read holds the new name and every
+  name it had read before; anything gone was dropped by a racing write (no route removes a
+  project), so it writes the list again with those names put back, up to 3 writes, then answers
+  503 asking you to check with `xo projects`. This relies on Clerk's read returning what was last
+  written: if Clerk ever served a stale read, a name added elsewhere in that moment could still be
+  dropped. An admin removing a project through `/user-metadata` while an add runs can see it put
+  back.
 - **Audited** like `/user-metadata`: one JSON line per add with the key id, the caller, the outcome
   and the list's length; never a name or any other value.
 - **Limited** to 30 requests a minute per key, and covered by the Firewall rule, since the path
-  starts with `/me`. It clears that user's 60-second `/me` cache.
+  starts with `/me`. Past Clerk's own limit of 10 metadata writes per 10 seconds per user the
+  answer is 429. It clears that user's 60-second `/me` cache.
+- **Not narrowed by `XO_ME_PRIVATE_KEYS`.** `/me/projects` always shows the `projects` list, even
+  when that variable leaves `projects` out of what `/me` shows.
 
 ## Guards
 
@@ -226,9 +234,9 @@ process apply per function instance, so the per-address limit is a Vercel Firewa
   checks the key with its own Clerk. Made-up keys sent there spend that Clerk, from the day the forwarding is
   deployed. What bounds them is `XO_CORE_PER_SECOND` per instance and the Firewall rule per
   address.
-- **Rate limits.** Per key, 60 requests a minute on `/me` and 20 on `/user-metadata`, counted
-  before Clerk is asked; the table remembers the 10,000 most recent keys. Clerk also allows 10
-  metadata writes per 10 seconds per user.
+- **Rate limits.** Per key, 60 requests a minute on `/me`, 30 on `/me/projects` and 20 on
+  `/user-metadata`, counted before Clerk is asked; the table remembers the 10,000 most recent keys.
+  Clerk also allows 10 metadata writes per 10 seconds per user.
 - **Cache.** `/me` answers are cached for 60 seconds per user. Key checks are never cached.
 - **Audit log.** Every request to `/user-metadata`, refused and failed ones included (a bad or
   missing key, a rate limit, a wrong method, a body too big), is one JSON line on stderr: time,

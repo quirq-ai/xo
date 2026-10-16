@@ -1180,6 +1180,11 @@ def test_the_platform_default_is_the_listed_one():
 
 # --- /me/projects: the one write a normal key can make ------------------------------------------
 
+@pytest.fixture(autouse=True)
+def _no_settle(monkeypatch):
+    monkeypatch.setattr(server, "PROJECT_SETTLE", 0)
+
+
 @pytest.fixture
 def alice(monkeypatch):
     """A copy of alice the fake Clerk may change, so no test leaks into another."""
@@ -1220,7 +1225,10 @@ def test_add_project_writes_only_projects_and_keeps_every_other_key(xo_server, c
     ({"name": ["a"]}, 'Body must be {"name": "..."} and nothing else'),
     (["alpha"], 'Body must be {"name": "..."} and nothing else'),
     ({"name": ""}, None), ({"name": "-lead"}, None), ({"name": "a/b"}, None), ({"name": "x" * 65}, None),
-    ({"name": "café"}, None), ({"name": "a\nb"}, None)])
+    ({"name": "café"}, None), ({"name": "a\nb"}, None),
+    ({"name": "sk-learn-demo"}, "That name looks like a credential (sk-, ghp_, ak_ and the like); choose another"),
+    ({"name": "ghp_tools"}, None), ({"name": "ak_app"}, None), ({"name": "AKIA tools"}, None),
+    ({"name": "Bearer app"}, None)])
 def test_add_project_refuses_anything_but_one_plain_name_and_writes_nothing(xo_server, clerk, alice, body, error):
     status, out = call(xo_server, "POST", "/me/projects", USER_KEY, body)
     assert status == 422 and (error is None or out["error"] == error)
@@ -1299,6 +1307,103 @@ def test_add_project_tries_again_when_another_write_replaced_the_list(clerk):
     assert (status, out["data"]["projects"]) == (200, ["theirs", "mine"])
     assert user["private_metadata"] == {"stripeId": "cus_1", "projects": ["theirs", "mine"]}
     assert len(fake.patches) == 2
+
+
+class _DroppingClerk(_RacingClerk):
+    """Another instance's add, started from an older list, lands just after this one and drops it."""
+
+    def update_metadata(self, user_id: str, changes: dict) -> dict:
+        self.patches.append(changes)
+        reply = json.loads(json.dumps({**self.stored, "private_metadata": {
+            **self.stored["private_metadata"], **changes["privateMetadata"]}}))
+        if self.races:
+            self.races -= 1
+            self.stored["private_metadata"]["projects"] = ["old", "theirs"]  # their list, without ours
+        else:
+            self.stored["private_metadata"].update(changes["privateMetadata"])
+        return reply  # Clerk's reply to our write looks fine
+
+
+def test_add_project_puts_back_names_a_racing_write_dropped(clerk):
+    user = {"id": "user_alice", "private_metadata": {"stripeId": "cus_1", "projects": ["old"]}}
+    fake = _DroppingClerk(user, races=1)
+    app = server.App(server.Config(), clerk=fake, audit=lambda line: None)
+    status, out = app.handle("POST", "/me/projects", {"authorization": f"Bearer {USER_KEY}"}, b'{"name": "mine"}')
+    assert (status, out["data"]["projects"]) == (200, ["old", "theirs", "mine"])
+    assert user["private_metadata"] == {"stripeId": "cus_1", "projects": ["old", "theirs", "mine"]}
+
+
+def test_add_project_never_trusts_a_reply_clerk_did_not_store(clerk):
+    user = {"id": "user_alice", "private_metadata": {"projects": []}}
+    fake = _DroppingClerk(user, races=server.PROJECT_TRIES)
+    app = server.App(server.Config(), clerk=fake, audit=lambda line: None)
+    status, out = app.handle("POST", "/me/projects", {"authorization": f"Bearer {USER_KEY}"}, b'{"name": "mine"}')
+    assert status == 503 and len(fake.patches) == server.PROJECT_TRIES
+
+
+def test_parallel_adds_on_two_instances_never_report_a_lost_name(clerk, monkeypatch):
+    """Two servers (separate locks) adding at once for one user, against one Clerk that replaces lists."""
+    monkeypatch.setattr(server, "PROJECT_SETTLE", 0.05)
+    stored = {"id": "user_alice", "private_metadata": {"keep": {"a": 1}, "projects": []}}
+    guard = threading.Lock()
+
+    class SharedClerk:
+        def verify_key(self, secret):
+            return KEYS[secret]
+
+        def user(self, user_id):
+            with guard:
+                snapshot = json.loads(json.dumps(stored))
+            time.sleep(0.01)
+            return snapshot
+
+        def update_metadata(self, user_id, changes):
+            time.sleep(0.01)
+            with guard:
+                stored["private_metadata"].update(changes["privateMetadata"])
+                return json.loads(json.dumps(stored))
+
+    apps = [server.App(server.Config(), clerk=SharedClerk(), audit=lambda line: None) for _ in range(2)]
+    results: dict[str, int] = {}
+
+    def add(i: int) -> None:
+        body = json.dumps({"name": f"p{i}"}).encode()
+        results[f"p{i}"] = apps[i % 2].handle("POST", "/me/projects", {"authorization": f"Bearer {USER_KEY}"},
+                                              body)[0]
+
+    threads = [threading.Thread(target=add, args=(i,)) for i in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    names = stored["private_metadata"]["projects"]
+    assert stored["private_metadata"]["keep"] == {"a": 1}
+    assert len(names) == len(set(names))  # no duplicates
+    assert set(results.values()) <= {200, 503}
+    assert {n for n, status in results.items() if status == 200} <= set(names)  # a 200 is never lost
+
+
+@pytest.mark.parametrize("where", ["user", "update_metadata"])
+def test_clerks_own_limit_is_a_429_not_a_degraded_server(clerk, where):
+    class Limited(_RacingClerk):
+        pass
+
+    def over(*args):
+        raise server.ClerkError(429, "too_many_requests")
+
+    fake = Limited({"id": "user_alice", "private_metadata": {}}, races=0)
+    setattr(fake, where, over)
+    app = server.App(server.Config(), clerk=fake, audit=lambda line: None)
+    status, _ = app.handle("POST", "/me/projects", {"authorization": f"Bearer {USER_KEY}"}, b'{"name": "a"}')
+    assert status == 429 and app.status()["status"] == "ok"
+
+
+def test_the_servers_own_clerk_budget_is_still_a_503(clerk):
+    fake = _RacingClerk({"id": "user_alice", "private_metadata": {}}, races=0)
+    fake.update_metadata = lambda *args: (_ for _ in ()).throw(server.BUSY)
+    app = server.App(server.Config(), clerk=fake, audit=lambda line: None)
+    status, _ = app.handle("POST", "/me/projects", {"authorization": f"Bearer {USER_KEY}"}, b'{"name": "a"}')
+    assert status == 503
 
 
 def test_add_project_gives_up_and_says_so_when_the_list_keeps_changing(clerk):

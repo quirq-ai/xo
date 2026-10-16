@@ -106,6 +106,7 @@ LIMITS = {"me": 60, "projects": 30, "user-metadata": 20, "core": 30}
 PROJECT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9 _.-]{0,63}")
 MAX_PROJECTS = 50
 PROJECT_TRIES = 3  # writes tried when the list read back is not the one written
+PROJECT_SETTLE = 0.3  # seconds before the read that confirms a write
 MAX_TRACKED = 10_000  # tokens remembered for rate limiting; the least recently seen go first
 ME_CACHE_SECONDS = 60
 ME_CACHE_PRUNE_AT = 1000  # cached /me answers kept before the expired ones are dropped
@@ -438,6 +439,14 @@ def _clerk_failure(e: ClerkError) -> _Reply:
     return _Reply(502, "Clerk did not answer", e.seen)
 
 
+def _project_failure(e: ClerkError) -> _Reply:
+    """/me/projects: Clerk allows a user 10 metadata writes per 10 seconds. Past that the caller is
+    told to slow down (429), which is about them, not a 503 that marks the whole server degraded."""
+    if e.status == 429 and e.seen == 429:  # Clerk's own limit, not this server's budget
+        return _Reply(429, "Too many changes to your projects; try again in a few seconds", e.seen)
+    return _clerk_failure(e)
+
+
 class App:
     """Routing, auth, limits and audit, apart from the HTTP plumbing so tests can drive it."""
 
@@ -661,15 +670,19 @@ class App:
         if not PROJECT_NAME.fullmatch(name):
             raise refuse(422, "A project name is 1 to 64 letters, digits, spaces, _ . or -, "
                               "starting with a letter or digit")
+        if _SECRET_VALUE.search(name):  # it would show masked in xo projects and xo me
+            raise refuse(422, "That name looks like a credential (sk-, ghp_, ak_ and the like); choose another")
         with self._lock:
             lock = self._project_locks.setdefault(subject, threading.Lock())
         with lock:
-            wrote = False
-            for _ in range(PROJECT_TRIES):
+            wrote, seen, first = False, [], None
+            for attempt in range(PROJECT_TRIES + 1):
+                if wrote:
+                    time.sleep(PROJECT_SETTLE)  # let a write racing this one land before reading again
                 try:
                     u = self.clerk.user(subject)
                 except ClerkError as e:
-                    reply = _Reply(404, "Account not found") if e.status == 404 else _clerk_failure(e)
+                    reply = _Reply(404, "Account not found") if e.status == 404 else _project_failure(e)
                     self.audit(**who, outcome=reply.status, clerk=e.seen)
                     raise reply from None
                 private = u.get("private_metadata")
@@ -679,35 +692,38 @@ class App:
                 projects = private.get("projects", [])
                 if not isinstance(projects, list):
                     raise refuse(409, "Your private metadata `projects` is not a list; nothing was changed")
+                first = private if first is None else first
                 present = any(isinstance(p, str) and p.casefold() == name.casefold() for p in projects)
-                if present and wrote:  # our earlier write raced another one and is there after all
-                    wanted, others = projects, None
+                # No user route removes a project, so anything read earlier and gone now was dropped
+                # by a racing write that started from an older list: put it back.
+                missing = [p for p in seen if p not in projects and p != name]
+                if wrote and present and not missing:
+                    wanted = projects
                     break
-                if present:
+                if present and not wrote:
                     raise refuse(409, f"{name} is already in your projects; nothing was changed")
-                if len(projects) >= MAX_PROJECTS:
+                wanted = [*projects, *missing, *([] if present else [name])]
+                if len(wanted) > MAX_PROJECTS:
                     raise refuse(422, f"You have {MAX_PROJECTS} projects, the most there can be; nothing was changed")
-                wanted = [*projects, name]
+                if attempt == PROJECT_TRIES:
+                    break
+                seen += [p for p in [*projects, name] if p not in seen]
                 try:
                     # A merge naming only `projects`: Clerk leaves every other key as it is.
-                    after = self.clerk.update_metadata(subject, {"privateMetadata": {"projects": wanted}})
+                    self.clerk.update_metadata(subject, {"privateMetadata": {"projects": wanted}})
                 except ClerkError as e:
-                    reply = self._clerk_reply(e)
+                    reply = _project_failure(e) if e.status == 429 else self._clerk_reply(e)
                     self.audit(**who, outcome=reply.status, clerk=e.seen)
                     raise reply from None
                 wrote = True
-                stored = after.get("private_metadata")
-                stored = stored if isinstance(stored, dict) else {}
-                if stored.get("projects") == wanted:
-                    # Anything else that differs was changed by someone else meanwhile, not by this merge.
-                    others = {k: v for k, v in stored.items() if k != "projects"} != \
-                        {k: v for k, v in private.items() if k != "projects"}
-                    break
-            else:
+            if not (wrote and present and not missing):
                 raise refuse(503, "Your projects changed while this add ran; run xo projects to see "
                                   "whether it is there before trying again")
         with self._lock:
             self._me_cache.pop(subject, None)
+        # Anything else that differs was changed by someone else meanwhile, not by this merge.
+        others = {k: v for k, v in first.items() if k != "projects"} != \
+            {k: v for k, v in private.items() if k != "projects"}
         extra = {"othersChanged": True} if others else {}
         self.audit(**who, outcome=200, count=len(wanted), **extra)  # never the names or values
         return {"projects": _mask_secrets(wanted)}
