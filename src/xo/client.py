@@ -7,27 +7,34 @@ refuses plain http except to this machine.
 """
 from __future__ import annotations
 
+import dataclasses
 import functools
 import getpass
 import http.client
 import json
 import os
 import re
+import secrets
+import stat
 import sys
 import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from xo import __version__
 
-DEFAULT_BASE_URL = "https://app.xo.builders/api/core/v1"
-DEFAULT_SERVER_URL = "https://xo.quirq.dev"
+# One address for everything: the xo server, which answers `xo me` and `xo user-metadata` itself and
+# passes the core API on to XO (app.xo.builders/api/core/v1) under CORE_PATH.
+DEFAULT_URL = "https://xo.quirq.dev"
+CORE_PATH = "/api/core/v1"
 DEFAULT_TIMEOUT = 30.0
 KEY_ENV = "XO_API_KEY"
-BASE_URL_ENV = "XO_BASE_URL"
-SERVER_URL_ENV = "XO_SERVER_URL"
+URL_ENV = "XO_URL"
+CONFIG_ENV = "XDG_CONFIG_HOME"
+SAVED = "the key saved by xo login"
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 REDACTED = "<redacted>"
 # A secret shorter than this is not looked for in text: replacing it would garble the message.
@@ -54,45 +61,154 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         raise urllib.error.HTTPError(req.full_url, code, msg, headers, fp)
 
 
-def server_url(flag: str | None = None) -> str:
-    """The base of an xo server (`xo serve`), for the routes that need Clerk."""
-    url = (flag or os.environ.get(SERVER_URL_ENV) or DEFAULT_SERVER_URL).rstrip("/")
-    try:
-        return base_url(url)
-    except XoError:
-        source = "--server-url" if flag else SERVER_URL_ENV
-        raise XoError(f"{source} must be https:// (or http:// to localhost)") from None
-
-
-def base_url(flag: str | None = None) -> str:
-    url = (flag or os.environ.get(BASE_URL_ENV) or DEFAULT_BASE_URL).rstrip("/")
+def xo_url(flag: str | None = None, saved: str | None = None) -> str:
+    """The one address every command uses: --url, else $XO_URL, else the one xo login saved, else
+    https://xo.quirq.dev. Only https://, or http:// to this machine."""
+    if flag:
+        source, url = "--url", flag
+    elif os.environ.get(URL_ENV, "").strip():
+        source, url = URL_ENV, os.environ[URL_ENV].strip()
+    elif saved:
+        source, url = "the URL saved by xo login", saved
+    else:
+        source, url = "the default URL", DEFAULT_URL
+    url = url.rstrip("/")
     parts = urllib.parse.urlsplit(url)
-    if parts.scheme == "https" and parts.hostname:
-        return url
-    if parts.scheme == "http" and parts.hostname in LOCAL_HOSTS:
-        return url
-    raise XoError(f"base URL must be https:// (or http:// to localhost), not {url!r}")
+    ok = parts.scheme == "https" or (parts.scheme == "http" and parts.hostname in LOCAL_HOSTS)
+    if not ok or not parts.hostname or parts.query or parts.fragment or parts.username or parts.password:
+        raise XoError(f"{source} must be an https:// address (or http:// to localhost) with no query, "
+                      f"not {url!r}")
+    return url
 
 
-def api_key(flag: str | None = None) -> str:
-    """The key from --api-key (`-` reads one line from stdin) or $XO_API_KEY. Never echoed."""
+def api_key(flag: str | None = None, url: str | None = None, saved: "Login | None" = None) -> str:
+    """The key from --api-key (`-` reads one line from stdin), $XO_API_KEY, or the one `xo login`
+    saved, in that order. Never echoed. The saved key goes only to the URL it was saved with: a
+    different `url` (from --url or $XO_URL) is refused rather than sent the key."""
     if flag == "-":
-        # On a terminal, read without echo so the key never lands in the scrollback.
-        typed = getpass.getpass("XO API key: ") if sys.stdin.isatty() else sys.stdin.readline()
-        source, key = "the key read from stdin", typed.strip()
+        source, key = "the key read from stdin", read_key()
     elif flag:
         source, key = "--api-key", flag.strip()
+    elif (os.environ.get(KEY_ENV) or "").strip():
+        source, key = KEY_ENV, os.environ[KEY_ENV].strip()
+    elif saved is not None:
+        if url is not None and url != saved.url:
+            raise XoError(f"the key xo login saved is only sent to {saved.url}, not {url}; "
+                          f"run xo login --url {url} to use this address")
+        source, key = SAVED, saved.key
     else:
-        source, key = KEY_ENV, (os.environ.get(KEY_ENV) or "").strip()
+        source, key = SAVED, ""
     if not key:
-        raise XoError(f"no API key: set {KEY_ENV} or pass --api-key - to read it from stdin "
+        raise XoError(f"no API key: run xo login, set {KEY_ENV}, or pass --api-key - to read it from stdin "
                       "(get a key from the XO team)")
+    return check_key(key, source)
+
+
+def read_key() -> str:
+    """One key from stdin: asked for without echo on a terminal, so it never lands in the scrollback."""
+    typed = getpass.getpass("XO API key: ") if sys.stdin.isatty() else sys.stdin.readline()
+    return typed.strip()
+
+
+def check_key(key: str, source: str) -> str:
+    """`key` if it holds only characters an API key may have; the error never shows it."""
     # Only characters that JSON and repr never escape, so redaction finds the key as sent; redact()
     # also looks for the forms a URL, an escaping JSON writer or an HTML writer would give them.
     if not KEY_CHARS.fullmatch(key):
         raise XoError(f"{source} holds characters an API key cannot have "
                       "(only letters, digits and _ . - + / = are allowed); the key is not shown")
     return key
+
+
+def credentials_path() -> Path:
+    """Where `xo login` keeps the key: $XDG_CONFIG_HOME/xo/credentials, else ~/.config/xo/credentials."""
+    base = os.environ.get(CONFIG_ENV) or ""
+    root = Path(base) if os.path.isabs(base) else Path.home() / ".config"
+    return root / "xo" / "credentials"
+
+
+def _private(st: os.stat_result) -> bool:
+    """Only its owner, the current user, can read or write it (Windows has no such mode bits)."""
+    if os.name == "nt":
+        return True
+    return st.st_mode & 0o077 == 0 and st.st_uid == os.getuid()
+
+
+@dataclass(frozen=True)
+class Login:
+    """What `xo login` saved: the address and the key that goes only to it."""
+    url: str
+    key: str = dataclasses.field(repr=False)
+
+
+def saved_login() -> Login | None:
+    """What `xo login` saved, or None when nothing is. A file other users could read is refused
+    rather than used: the key in it should be treated as leaked."""
+    path = credentials_path()
+    try:
+        # Non-blocking, so a FIFO put there cannot hang every command.
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    except FileNotFoundError:
+        return None
+    except OSError as e:
+        raise XoError(f"cannot read {path} ({e.strerror}); run xo logout, then xo login") from None
+    st = os.fstat(fd)
+    if not stat.S_ISREG(st.st_mode):
+        os.close(fd)
+        raise XoError(f"{path} is not a file xo login wrote; run xo logout, then xo login")
+    with os.fdopen(fd) as f:
+        if not _private(st):
+            raise XoError(f"{path} can be read by other users, so xo will not use it; run xo logout, "
+                          "ask the XO team for a new key, then xo login")
+        text = f.read(8192)
+    try:
+        data = json.loads(text)
+    except ValueError:
+        data = None
+    if not (isinstance(data, dict) and isinstance(data.get("url"), str) and isinstance(data.get("key"), str)
+            and data["url"] and data["key"]):
+        raise XoError(f"{path} is not a file xo login wrote; run xo logout, then xo login")
+    return Login(data["url"], data["key"])
+
+
+def save_login(login: Login) -> Path:
+    """Write `login` where saved_login() reads it: the folder 0700, the file 0600 from the start, and
+    swapped in whole (rename), so no other user and no half-written file ever sees it."""
+    path = credentials_path()
+    tmp = path.with_name(f".credentials.{secrets.token_hex(8)}.tmp")
+    try:
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if os.name != "nt":
+            os.chmod(path.parent, 0o700)
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        if os.name != "nt":
+            os.fchmod(fd, 0o600)  # whatever the umask took away, the owner can read it back
+        with os.fdopen(fd, "w") as f:
+            f.write(json.dumps({"url": login.url, "key": login.key}) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except OSError as e:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise XoError(f"cannot save the key to {path} ({e.strerror})") from None
+    return path
+
+
+def forget_login() -> Path | None:
+    """Delete what xo login saved (a folder put there is left for the user); the path it was at, or None when there was none."""
+    path = credentials_path()
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return None
+    except IsADirectoryError:
+        raise XoError(f"{path} is a folder, not a file xo login wrote; remove it yourself") from None
+    except OSError as e:
+        raise XoError(f"cannot delete {path} ({e.strerror})") from None
+    return path
 
 
 def redact(value: Any, key: str | None) -> Any:
@@ -187,7 +303,7 @@ class Client:
                 body: Any = None, headers: dict[str, str] | None = None, auth: bool = True) -> Response:
         """Send one request and return the parsed response, or raise XoError. 2xx only."""
         if auth and not self._key:
-            raise XoError(f"no API key: set {KEY_ENV} or pass --api-key -")
+            raise XoError(f"no API key: run xo login, set {KEY_ENV}, or pass --api-key -")
         sent = {"Accept": "application/json", "User-Agent": f"xo/{__version__}", **(headers or {})}
         data = None
         if body is not None:

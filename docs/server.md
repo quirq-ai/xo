@@ -2,18 +2,19 @@
 
 One package, two deployments:
 
-- **The command line** runs on each user's machine with their XO API key (`XO_API_KEY`).
+- **The command line** runs on each user's machine with their XO API key (`XO_API_KEY`, or the key `xo login` saved).
 - **The server**, `xo serve`, runs once, on a machine XO controls, with Clerk's Secret Key. It is
   the only place that key exists.
 
-`xo me` and `xo user-metadata` go to the server (`https://xo.quirq.dev`, or `XO_SERVER_URL`).
-Every other command still goes to the core API at app.xo.builders, as before.
+Every command goes to the server (`https://xo.quirq.dev`, `XO_URL`, or the address `xo login`
+saved). It answers `xo me` and `xo user-metadata` itself, and passes the creates and `xo spaces`
+on to XO's core API, so the CLI needs one address.
 
 ```
 xo me ──────────────┐                      ┌── POST /v1/api_keys/verify
-xo user-metadata ───┼─ XO_API_KEY ─► xo serve ─ CLERK_SECRET_KEY ─► api.clerk.com
-                    │                      └── GET /v1/users/{id}, PATCH /v1/users/{id}/metadata
-xo codex, ... ──────┴─ XO_API_KEY ─► app.xo.builders (unchanged)
+xo user-metadata ───┤                      ├─ CLERK_SECRET_KEY ─► api.clerk.com
+                    ├─ XO_API_KEY ─► xo serve └── GET /v1/users/{id}, PATCH /v1/users/{id}/metadata
+xo codex, ... ──────┘                      └── /api/core/v1/... ─ the caller's key ─► app.xo.builders
 ```
 
 ## Routes
@@ -26,19 +27,46 @@ xo codex, ... ──────┴─ XO_API_KEY ─► app.xo.builders (unchan
 | GET | `/me` | any user key | `id`, `username`, `firstName`, `lastName`, `imageUrl`, `createdAt`; never email or metadata |
 | GET | `/user-metadata/{userId}` | admin keys | `publicMetadata`, `privateMetadata` |
 | PATCH | `/user-metadata/{userId}` | admin keys | both buckets after a deep merge; `null` removes a key |
+| POST | `/api/core/v1/{create}` | an `ak_` key | XO's answer: `claude-code`, `codex`, `antigravity`, `hermes`, `openclaw`, `xo-cowork`, `nebius-openclaw` |
+| GET | `/api/core/v1/spaces/{spaceId}` | an `ak_` key | XO's answer |
 
 Answers use the core API's envelope: `{"success": true, "data": ...}` or
 `{"success": false, "error": "..."}`, with 401 (bad key, or a key not tied to a user), 403 (not an
 admin key), 404 (no such user), 405, 413 (body over 32KB), 422 (bad body, a key that is not
 editable, a bad user id, or over Clerk's 8KB per bucket), 429 (this key's rate limit), 502 (Clerk
 did not answer) and 503 (the server is busy, or misconfigured: Clerk refused its Secret Key, which
-it also says in one line on stderr).
+it also says in one line on stderr). A core API route answers whatever XO answered.
+
+## Passing the core API on
+
+The server sends a core API request on to `XO_CORE_API_URL` (default
+`https://app.xo.builders/api/core/v1`) with the caller's own key and body, and passes XO's status
+and JSON back as they came. XO checks the key; the server does not ask Clerk about it.
+
+- **Only the routes above.** Nothing else under `/api/core/v1` leaves the server: other paths,
+  methods, a path with any `%` escape in it, and a space id beyond 64 letters, digits, `-` and `_`
+  are a 404. The query string is dropped. The XO address comes only from the server's environment.
+- **Only an API key.** A request without a bearer token that looks like an `ak_` key is a 401 and
+  goes nowhere. Each key may send 30 a minute (per instance); the Firewall rule in
+  docs/deploy-vercel.md caps each address.
+- **Only the key and the body go on.** The request carries `Authorization`, `Accept`,
+  `Content-Type` and the server's own `User-Agent`; no cookie, forwarded address or other header of
+  the caller's. Redirects are not followed.
+- **Nothing is logged** but the request line (method and path, which holds a space id). Keys,
+  bodies (with their provider keys and bot tokens) and answers are never logged or kept. The status
+  page names the route (`/api/core/v1/codex`, `/api/core/v1/spaces/{spaceId}`), never an id.
+- **What it costs.** The keys and provider tokens in a create now pass through this server's
+  memory. Every user reaches XO from the server's addresses, not their own. XO's failures do not
+  count toward **Degraded**, which is about Clerk.
+- **Timeouts.** XO gets 25 seconds. A create that times out answers 504 "XO did not answer in time;
+  it may have been received, so check before you retry"; one XO never answered, 502.
 
 ## The status page
 
 `/` shows whether the server answers, how many requests and `/healthz` pings it has served, how
 many were refused or failed, and the last 100 requests. Each entry is only the time, method,
-route (`/me`, `/user-metadata/{userId}`, `/healthz` or `other`), status and duration: never a key,
+route (`/me`, `/user-metadata/{userId}`, `/healthz`, a core API route such as
+`/api/core/v1/spaces/{spaceId}`, or `other`), status and duration: never a key,
 key id, user id, path or address, so it is public. The page and `/status` are not counted. The
 counts live in the process's memory: on Vercel each instance keeps its own and starts empty, so the
 page shows what the instance answering you has seen. The audit log stays in the logs only.
@@ -80,6 +108,7 @@ Environment only, so the secret never lands in shell history or the process list
 | `XO_CLERK_PER_SECOND` | no | calls to Clerk per second for the whole process; default 20 |
 | `XO_SERVE_MAX_CONNECTIONS` | no | connections served at once; default 64, then 503 |
 | `CLERK_API_URL` | no | default `https://api.clerk.com`; tests point it at a fake |
+| `XO_CORE_API_URL` | no | where `/api/core/v1` goes; default `https://app.xo.builders/api/core/v1`; https only |
 
 ```sh
 xo serve --host 127.0.0.1 --port 8787

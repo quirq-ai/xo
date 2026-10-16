@@ -17,10 +17,20 @@ class FakeXo:
         self.requests: list[dict] = []
         # path -> (status, body or None, extra headers)
         self.routes: dict[tuple[str, str], tuple[int, object, dict]] = {}
+        self.strip = True  # match core API paths without /api/core/v1 (the `core` fixture turns it off)
 
     def route(self, method: str, path: str, status: int = 200, body: object = None,
               headers: dict | None = None) -> None:
         self.routes[(method, path)] = (status, body, headers or {})
+
+
+@pytest.fixture(autouse=True)
+def config_home(tmp_path, monkeypatch):
+    """Every test gets its own empty config folder, so a key saved by xo login on this machine is
+    never read, and no test writes to the real one."""
+    home = tmp_path / "config"
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(home))
+    return home
 
 
 @pytest.fixture
@@ -32,6 +42,8 @@ def fake(monkeypatch):
             length = int(self.headers.get("Content-Length") or 0)
             raw = self.rfile.read(length) if length else b""
             path, _, query = self.path.partition("?")
+            if state.strip and path.startswith("/api/core/v1/"):
+                path = path[len("/api/core/v1"):]  # the test spec's routes sit at the root
             state.requests.append({"method": self.command, "path": path, "query": query,
                                    "headers": dict(self.headers),
                                    "body": json.loads(raw) if raw else None})
@@ -58,7 +70,7 @@ def fake(monkeypatch):
     thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
     thread.start()
     state.base = f"http://127.0.0.1:{server.server_address[1]}"
-    monkeypatch.setenv("XO_BASE_URL", state.base)
+    monkeypatch.setenv("XO_URL", state.base)
     monkeypatch.setenv("XO_API_KEY", KEY)
     monkeypatch.setenv("XO_SPEC", str(FIXTURES / "openapi.json"))
     yield state

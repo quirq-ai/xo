@@ -25,13 +25,19 @@ The last line should print `xo 0.1.0`. If any step fails, the ones after it don'
 
 The install is pinned to the reviewed commit of xo. The pin covers xo's own code only: pip still fetches its build tool (setuptools) unpinned while it installs.
 
-## 2. Give xo your key (each new terminal)
+## 2. Log in with your key (once)
 
 ```sh
-printf 'XO API key: '; read -rs XO_API_KEY && export XO_API_KEY; echo
+xo login
 ```
 
-Paste your key and press Enter. Nothing shows while you type, and the key stays out of your shell history. The same line works in zsh and bash.
+xo first prints the address it logs in to (`https://xo.quirq.dev`). Paste your key at the `XO API key:` prompt and press Enter. Nothing shows while you type, and the key stays out of your shell history. xo refuses anything that isn't an XO API key (those start with `ak_`) without sending it anywhere. Then it checks the key with XO, through that address, and saves the key and the address in `~/.config/xo/credentials`, which only you can read. If the check fails, nothing is saved. It also prints the account the key belongs to, when the xo server can tell.
+
+Every later `xo` command, in any terminal, uses the saved key and sends it only to the saved address. To use a different key, run `xo login` again. `xo logout` deletes the saved key. A key in `XO_API_KEY` wins over the saved one, so a terminal where you set that variable uses it instead.
+
+### One address for everything
+
+Every command goes to one address: your creates, `xo spaces`, `xo me` and `xo user-metadata` alike. The xo server answers `xo me` and `xo user-metadata` itself and passes the rest on to XO (`app.xo.builders`). To use another address, log in to it with `xo login --url https://...`. `XO_URL` or `--url` changes it for one terminal or one command, and the saved key is never sent to a different address than the one you logged in to.
 
 ## 3. Check it works (creates nothing)
 
@@ -95,9 +101,10 @@ To update xo, replace `NEW_SHA` with the commit you were given:
 
 To see which commit you have: `~/.xo/bin/pip freeze | grep quirq-xo`.
 
-To remove xo, delete its folder, remove the PATH line from `~/.zshrc` (or the bash file you used), and clear the key from the current terminal:
+To remove xo, delete the saved key, then xo's folder, and remove the PATH line from `~/.zshrc` (or the bash file you used):
 
 ```sh
+xo logout
 rm -rf ~/.xo
 unset XO_API_KEY
 ```

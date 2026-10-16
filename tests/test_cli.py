@@ -19,7 +19,7 @@ def test_no_key_is_one_actionable_line(fake, capsys, monkeypatch):
     monkeypatch.delenv("XO_API_KEY")
     code, out, err = run(capsys, "call", "health")
     assert code == 1
-    assert "set XO_API_KEY or pass --api-key" in err
+    assert "run xo login, set XO_API_KEY, or pass --api-key" in err
     assert "from the XO team" in err
     assert fake.requests == []
 
@@ -65,15 +65,16 @@ def test_a_sign_in_redirect_says_the_route_wants_a_browser(fake, capsys):
     assert code == 1 and "does not accept an API key" in err
 
 
-@pytest.mark.parametrize("url", ["http://app.xo.builders", "ftp://x", "app.xo.builders"])
+@pytest.mark.parametrize("url", ["http://app.xo.builders", "ftp://x", "app.xo.builders", "https://x.dev/?a=1",
+                                 "https://u:p@x.dev"])
 def test_plain_http_off_this_machine_is_refused(fake, capsys, url):
-    code, _, err = run(capsys, "--base-url", url, "call", "health")
-    assert code == 1 and "must be https://" in err
+    code, _, err = run(capsys, "--url", url, "call", "health")
+    assert code == 1 and "--url must be an https:// address" in err
     assert fake.requests == []
 
 
 def test_unreachable_api(fake, capsys):
-    code, _, err = run(capsys, "--base-url", "http://127.0.0.1:1", "call", "health")
+    code, _, err = run(capsys, "--url", "http://127.0.0.1:1", "call", "health")
     assert code == 1 and "could not reach" in err
 
 
@@ -291,7 +292,7 @@ def test_a_single_operation_endpoint_is_one_command(fake, capsys):
     fake.route("POST", "/claude-code", body={"ok": True})
     code, out, err = run(capsys, "claude-code", "--prompt", "hello", "--project-id", "p1")
     assert code == 0 and json.loads(out) == {"ok": True}
-    assert err == f"xo: POST {fake.base}/claude-code\n"
+    assert err == f"xo: POST {fake.base}/api/core/v1/claude-code\n"
     assert fake.requests[0]["body"] == {"prompt": "hello", "project_id": "p1"}
     assert fake.requests[0]["headers"]["Authorization"] == f"Bearer {KEY}"
 
@@ -634,7 +635,7 @@ def test_a_key_glued_to_an_option_name_is_not_echoed(fake, capsys, monkeypatch, 
 def test_the_notice_before_a_change_is_redacted(fake, capsys):
     fake.route("POST", f"/x/{KEY}", body={})
     code, _, err = run(capsys, "api", "POST", f"/x/{KEY}", "--data", "{}")
-    assert code == 0 and err == f"xo: POST {fake.base}/x/<redacted>\n"
+    assert code == 0 and err == f"xo: POST {fake.base}/api/core/v1/x/<redacted>\n"
 
 
 def test_a_typo_still_lists_the_real_commands(fake, capsys):
@@ -656,13 +657,26 @@ def test_a_typed_choose_from_cannot_carry_a_value_past_the_hiding(fake, capsys, 
 def core(fake, monkeypatch):
     """The spec bundled with xo, against the fake API under the core API's base path."""
     monkeypatch.delenv("XO_SPEC")
-    monkeypatch.setenv("XO_BASE_URL", fake.base + "/api/core/v1")
+    fake.strip = False
     return fake
 
 
-def test_the_default_base_is_the_core_api():
-    from xo.client import DEFAULT_BASE_URL
-    assert DEFAULT_BASE_URL == "https://app.xo.builders/api/core/v1"
+def test_the_default_url_is_the_xo_server():
+    from xo.client import CORE_PATH, DEFAULT_URL
+    assert DEFAULT_URL == "https://xo.quirq.dev" and CORE_PATH == "/api/core/v1"
+
+
+def test_every_command_goes_to_one_url(core, capsys, monkeypatch):
+    monkeypatch.delenv("XO_URL")
+    out = run(capsys, "codex", "--name", "a", "--volume-size", "20", "--dry-run")[1]
+    assert json.loads(out)["url"] == "https://xo.quirq.dev/api/core/v1/codex"
+    out = run(capsys, "me", "--dry-run")[1]
+    assert json.loads(out)["url"] == "https://xo.quirq.dev/me"
+    monkeypatch.setenv("XO_URL", "https://other.example/")
+    out = run(capsys, "spaces", "--space-id", "s1", "--dry-run")[1]
+    assert json.loads(out)["url"] == "https://other.example/api/core/v1/spaces/s1"
+    out = run(capsys, "--url", "http://localhost:8787", "me", "--dry-run")[1]
+    assert json.loads(out)["url"] == "http://localhost:8787/me"
 
 
 def test_every_core_endpoint_is_a_command(core, capsys):
@@ -934,54 +948,46 @@ def test_only_near_misses_of_a_flag_are_shown(core, capsys):  # R5-N1, R5-N3
 
 @pytest.fixture
 def xs(core, monkeypatch):
-    """The fake API standing in for an xo server under /xo."""
-    monkeypatch.setenv("XO_SERVER_URL", core.base + "/xo")
+    """The fake API standing in for an xo server: /me and /user-metadata at its root."""
     return core
 
 
 def test_me_goes_to_the_xo_server(xs, capsys):
-    xs.route("GET", "/xo/me", body={"success": True, "data": {"id": "user_1", "username": "sam"}})
+    xs.route("GET", "/me", body={"success": True, "data": {"id": "user_1", "username": "sam"}})
     code, out, _ = run(capsys, "me")
     assert code == 0 and json.loads(out)["data"]["username"] == "sam"
     assert xs.requests[0]["headers"]["Authorization"] == f"Bearer {KEY}"
 
 
-def test_server_commands_default_to_xo_quirq_dev(core, capsys, monkeypatch):
-    monkeypatch.delenv("XO_SERVER_URL", raising=False)
-    code, out, _ = run(capsys, "me", "--dry-run")
-    assert code == 0 and json.loads(out)["url"] == "https://xo.quirq.dev/me"
-    assert core.requests == []
-
-
-def test_the_server_url_must_be_https(core, capsys, monkeypatch):
-    monkeypatch.setenv("XO_SERVER_URL", "http://xo-server.example")
+def test_the_url_must_be_https(core, capsys, monkeypatch):
+    monkeypatch.setenv("XO_URL", "http://xo-server.example")
     code, _, err = run(capsys, "me")
     assert code == 1 and core.requests == []
-    assert err == "xo: XO_SERVER_URL must be https:// (or http:// to localhost)\n"
-    code, _, err = run(capsys, "me", "--server-url", "http://10.1.1.1")
-    assert code == 1 and err == "xo: --server-url must be https:// (or http:// to localhost)\n"
+    assert err.startswith("xo: XO_URL must be an https:// address (or http:// to localhost)")
+    code, _, err = run(capsys, "me", "--url", "http://10.1.1.1")
+    assert code == 1 and err.startswith("xo: --url must be an https:// address")
 
 
-def test_core_commands_ignore_the_server_url(xs, capsys):
+def test_core_commands_go_under_the_core_path(xs, capsys):
     xs.route("GET", "/api/core/v1/spaces/s1", body={"success": True, "data": {}})
     assert run(capsys, "spaces", "--space-id", "s1")[0] == 0
     assert xs.requests[0]["path"] == "/api/core/v1/spaces/s1"
 
 
 def test_user_metadata_get(xs, capsys):
-    xs.route("GET", "/xo/user-metadata/user_1",
+    xs.route("GET", "/user-metadata/user_1",
              body={"success": True, "data": {"publicMetadata": {"plan": "pro"}, "privateMetadata": {}}})
     code, out, _ = run(capsys, "user-metadata", "get", "--user-id", "user_1")
     assert code == 0 and json.loads(out)["data"]["publicMetadata"] == {"plan": "pro"}
 
 
 def test_user_metadata_update_sends_both_buckets_as_json(xs, capsys):
-    xs.route("PATCH", "/xo/user-metadata/user_1", body={"success": True, "data": {}})
+    xs.route("PATCH", "/user-metadata/user_1", body={"success": True, "data": {}})
     code, _, err = run(capsys, "user-metadata", "update", "--user-id", "user_1",
                        "--public-metadata", '{"plan": "pro", "beta": null}',
                        "--private-metadata", '{"stripeId": "cus_1"}')
     assert code == 0
-    assert err == f"xo: PATCH {xs.base}/xo/user-metadata/user_1\n"
+    assert err == f"xo: PATCH {xs.base}/user-metadata/user_1\n"
     assert xs.requests[0]["body"] == {"publicMetadata": {"plan": "pro", "beta": None},
                                       "privateMetadata": {"stripeId": "cus_1"}}
 
@@ -990,7 +996,7 @@ def test_user_metadata_update_dry_run_sends_nothing(xs, capsys):
     code, out, _ = run(capsys, "user-metadata", "update", "--user-id", "user_1",
                        "--private-metadata", '{"stripeId": "cus_1"}', "--dry-run")
     assert code == 0 and json.loads(out)["body"] == {"privateMetadata": {"stripeId": "cus_1"}}
-    assert json.loads(out)["url"] == f"{xs.base}/xo/user-metadata/user_1"
+    assert json.loads(out)["url"] == f"{xs.base}/user-metadata/user_1"
     assert xs.requests == []
 
 
@@ -1020,3 +1026,340 @@ def test_a_secret_with_a_space_is_redacted_in_its_form_encoded_form():  # #8 aud
     secret = "bot token with spaces"
     for form in (secret, urllib.parse.quote_plus(secret), urllib.parse.quote(secret)):
         assert redact(f"x {form} y", secret) == "x <redacted> y", form
+
+
+# --- xo login and xo logout ------------------------------------------------------------------------
+
+ME = {"success": True, "data": {"id": "user_1", "username": "sam", "firstName": "Sam", "lastName": "Lee"}}
+PROBE = "/api/core/v1/spaces/00000000-0000-0000-0000-000000000000"
+
+
+@pytest.fixture
+def login(xs, monkeypatch):
+    """xo login against the fake xo server, with no key in the environment and one typed in."""
+    monkeypatch.delenv("XO_API_KEY")
+    xs.route("GET", PROBE, status=404, body={"success": False, "error": "Space not found"})
+    xs.route("GET", "/me", body=ME)
+
+    def typed(text: str = KEY + "\n") -> None:
+        import io
+        monkeypatch.setattr("sys.stdin", io.StringIO(text))
+    typed()
+    xs.typed = typed
+    return xs
+
+
+def test_login_checks_the_key_then_saves_it_private(login, capsys, config_home):
+    import os
+    import stat
+    code, out, err = run(capsys, "login")
+    assert code == 0 and out == ""
+    assert [r["path"] for r in login.requests] == [PROBE, "/me"]  # XO takes the key, then whose it is
+    assert all(r["headers"]["Authorization"] == f"Bearer {KEY}" for r in login.requests)
+    assert "xo: logged in as sam (user_1)\n" in err
+    saved = config_home / "xo" / "credentials"
+    assert f"key and URL saved to {saved}" in err
+    assert json.loads(saved.read_text()) == {"url": login.base, "key": KEY}
+    assert stat.S_IMODE(os.stat(saved).st_mode) == 0o600
+    assert stat.S_IMODE(os.stat(saved.parent).st_mode) == 0o700
+    assert [p.name for p in saved.parent.iterdir()] == ["credentials"]  # no temp file left
+
+
+def test_later_commands_use_the_saved_key(login, capsys):
+    assert run(capsys, "login")[0] == 0
+    login.route("GET", "/me", body=ME)
+    assert run(capsys, "me")[0] == 0
+    assert login.requests[-1]["headers"]["Authorization"] == f"Bearer {KEY}"
+
+
+def test_the_variable_wins_over_the_saved_key(login, capsys, monkeypatch):
+    assert run(capsys, "login")[0] == 0
+    monkeypatch.setenv("XO_API_KEY", "ak_from_variable")
+    assert run(capsys, "me")[0] == 0
+    assert login.requests[-1]["headers"]["Authorization"] == "Bearer ak_from_variable"
+
+
+def test_login_says_when_the_variable_hides_the_saved_key(login, capsys, monkeypatch):
+    monkeypatch.setenv("XO_API_KEY", "ak_from_variable")
+    code, _, err = run(capsys, "login")
+    assert code == 0 and "XO_API_KEY is set in this terminal and is used instead" in err
+    assert login.requests[0]["headers"]["Authorization"] == f"Bearer {KEY}"  # the typed key is checked
+    assert "ak_from_variable" not in err
+
+
+def test_a_refused_key_is_not_saved(login, capsys, config_home):
+    login.route("GET", PROBE, status=401, body={"error": "Invalid API key"})
+    code, _, err = run(capsys, "login")
+    assert code == 1 and [r["path"] for r in login.requests] == [PROBE]
+    assert err == (f"xo: logging in to {login.base}; the key will only ever be sent there\n"
+                   f"xo: GET {PROBE}: HTTP 401 (check the API key): Invalid API key; nothing saved\n")
+    assert not (config_home / "xo" / "credentials").exists()
+
+
+@pytest.mark.parametrize("status,body", [(404, {"error": "Not found"}), (403, {"error": "Space not found"}),
+                                         (502, {"error": "XO did not answer"}), (404, None)])
+def test_only_xos_space_not_found_counts_as_a_working_key(login, capsys, config_home, status, body):
+    login.route("GET", PROBE, status=status, body=body)  # an xo server that does not pass it on, say
+    code, _, err = run(capsys, "login")
+    assert code == 1 and "nothing saved" in err
+    assert not (config_home / "xo" / "credentials").exists()
+
+
+def test_a_refused_key_leaves_the_old_saved_key(login, capsys, config_home):
+    assert run(capsys, "login")[0] == 0
+    login.route("GET", PROBE, status=401, body={"error": "Invalid API key"})
+    login.typed("ak_another_key_1234\n")
+    assert run(capsys, "login")[0] == 1
+    assert json.loads((config_home / "xo" / "credentials").read_text())["key"] == KEY
+
+
+def test_an_unreachable_server_saves_nothing(login, capsys, config_home, monkeypatch):
+    monkeypatch.setenv("XO_URL", "http://127.0.0.1:9")
+    code, _, err = run(capsys, "login")
+    assert code == 1 and "could not reach" in err and "nothing saved" in err
+    assert not (config_home / "xo" / "credentials").exists()
+
+
+@pytest.mark.parametrize("status,body", [(401, {"error": "Invalid API key"}), (200, {"success": True}),
+                                         (200, {"success": True, "data": "x"})])
+def test_a_working_key_the_server_cannot_name_is_still_saved(login, capsys, config_home, status, body):
+    login.route("GET", "/me", status=status, body=body)  # a development Clerk that does not know XO's key
+    code, _, err = run(capsys, "login")
+    assert code == 0 and "xo: logged in; the key works with XO\n" in err
+    assert json.loads((config_home / "xo" / "credentials").read_text())["key"] == KEY
+
+
+@pytest.mark.parametrize("typed", ["sk_test_clerk_secret_1234", "sk-ant-api03-provider", "pk_live_x",
+                                   "AK_upper_1234"])
+def test_login_refuses_what_is_not_an_xo_key_before_sending_it(login, capsys, config_home, typed):
+    login.typed(typed + "\n")
+    code, _, err = run(capsys, "login")
+    assert code == 1 and login.requests == [] and typed not in err
+    assert err.endswith("xo: that is not an XO API key (those start with ak_); nothing sent or saved, "
+                        "and it is not shown\n")
+    assert not (config_home / "xo").exists()
+
+
+@pytest.mark.parametrize("text", ["\n", "", "   \n"])
+def test_login_with_nothing_typed_saves_nothing(login, capsys, config_home, text):
+    login.typed(text)
+    code, _, err = run(capsys, "login")
+    assert code == 1 and err.endswith("xo: no key entered; nothing saved\n") and login.requests == []
+    assert not (config_home / "xo").exists()
+
+
+def test_login_refuses_a_bad_key_without_showing_it(login, capsys, config_home):
+    login.typed("ak_bad key\"<>\n")
+    code, _, err = run(capsys, "login")
+    assert code == 1 and login.requests == [] and "bad" not in err
+    assert "the key entered holds characters an API key cannot have" in err
+    assert not (config_home / "xo").exists()
+
+
+def test_login_takes_no_key_flag(login, capsys):
+    code, _, err = run(capsys, "--api-key", "ak_typed_on_the_line", "login")
+    assert code == 1 and login.requests == []
+    assert err == "xo: xo login asks for the key itself; leave out --api-key\n"
+    with pytest.raises(SystemExit):
+        cli.main(["login", "--api-key", "ak_typed_on_the_line"])
+    assert "ak_typed_on_the_line" not in capsys.readouterr().err and login.requests == []
+
+
+def test_login_never_prints_the_key_even_in_the_name(login, capsys):
+    login.route("GET", "/me", body={"success": True, "data": {"id": "user_1", "username": KEY}})
+    code, _, err = run(capsys, "login")  # run() asserts the key is not in the output
+    assert code == 0 and "logged in as <redacted> (user_1)" in err
+
+
+def test_login_uses_the_name_when_there_is_no_username(login, capsys):
+    login.route("GET", "/me", body={"success": True, "data": {"id": "user_1", "firstName": "Sam"}})
+    assert "logged in as Sam (user_1)" in run(capsys, "login")[2]
+
+
+def test_a_saved_key_others_can_read_is_refused(login, capsys, config_home):
+    import os
+    assert run(capsys, "login")[0] == 0
+    saved = config_home / "xo" / "credentials"
+    os.chmod(saved, 0o644)
+    code, _, err = run(capsys, "me")
+    assert code == 1 and len(login.requests) == 2  # only login's checks went out
+    assert err == (f"xo: {saved} can be read by other users, so xo will not use it; run xo logout, "
+                   "ask the XO team for a new key, then xo login\n")
+
+
+def test_a_symlinked_saved_key_is_refused(login, capsys, config_home, tmp_path):
+    other = tmp_path / "elsewhere"
+    other.write_text(KEY + "\n")
+    (config_home / "xo").mkdir(parents=True)
+    (config_home / "xo" / "credentials").symlink_to(other)
+    code, _, err = run(capsys, "me")
+    assert code == 1 and login.requests == [] and "cannot read" in err
+
+
+def test_login_replaces_the_saved_key(login, capsys, config_home):
+    assert run(capsys, "login")[0] == 0
+    login.typed("ak_second_key_5678\n")
+    assert run(capsys, "login")[0] == 0
+    assert (config_home / "xo" / "credentials").read_text() == json.dumps({"url": login.base, "key": "ak_second_key_5678"}) + "\n"
+
+
+def test_logout_deletes_the_saved_key(login, capsys, config_home):
+    assert run(capsys, "login")[0] == 0
+    saved = config_home / "xo" / "credentials"
+    code, _, err = run(capsys, "logout")
+    assert code == 0 and err == f"xo: deleted {saved}\n" and not saved.exists()
+    code, _, err = run(capsys, "logout")
+    assert code == 0 and err == f"xo: no saved key at {saved}\n"
+    code, _, err = run(capsys, "me")
+    assert code == 1 and "no API key: run xo login" in err
+
+
+def test_logout_says_the_variable_is_still_set(login, capsys, monkeypatch):
+    monkeypatch.setenv("XO_API_KEY", "ak_from_variable")
+    assert "XO_API_KEY is still set in this terminal" in run(capsys, "logout")[2]
+
+
+def test_the_config_folder_defaults_to_home(monkeypatch, tmp_path):
+    from xo import client
+    monkeypatch.delenv("XDG_CONFIG_HOME")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert client.credentials_path() == tmp_path / ".config" / "xo" / "credentials"
+    monkeypatch.setenv("XDG_CONFIG_HOME", "relative/path")  # the spec says ignore a relative one
+    assert client.credentials_path() == tmp_path / ".config" / "xo" / "credentials"
+
+
+def test_login_tightens_an_existing_xo_folder(login, capsys, config_home):
+    import os
+    import stat
+    (config_home / "xo").mkdir(parents=True, mode=0o755)
+    os.chmod(config_home / "xo", 0o755)
+    assert run(capsys, "login")[0] == 0
+    assert stat.S_IMODE(os.stat(config_home / "xo").st_mode) == 0o700
+
+
+def test_a_folder_that_cannot_be_made_is_one_line(login, capsys, config_home):
+    config_home.mkdir(parents=True)
+    (config_home / "xo").write_text("a file where the folder goes")
+    code, _, err = run(capsys, "login")
+    assert code == 1 and err.split("\n")[1].startswith(f"xo: cannot save the key to {config_home / 'xo' / 'credentials'} (")
+
+
+def test_a_long_name_is_cut_after_the_key_is_redacted(login, capsys):
+    login.route("GET", "/me", body={"success": True, "data": {"id": "user_1", "username": "x" * 110 + KEY}})
+    code, _, err = run(capsys, "login")
+    assert code == 0 and KEY[:8] not in err and "logged in as " + "x" * 108 in err
+
+
+def test_login_names_the_url_before_it_reads_the_key(login, capsys, monkeypatch):
+    import io
+
+    class Typed(io.StringIO):
+        def readline(self, *a):
+            assert "logging in to" in capsys.readouterr().err  # already on screen
+            return super().readline(*a)
+    monkeypatch.setattr("sys.stdin", Typed(KEY + "\n"))
+    assert cli.main(["login"]) == 0
+
+
+def test_the_saved_key_is_never_sent_to_another_url(login, capsys, monkeypatch):
+    assert run(capsys, "login")[0] == 0
+    monkeypatch.setenv("XO_URL", "http://127.0.0.1:9")
+    code, _, err = run(capsys, "me")
+    assert code == 1 and len(login.requests) == 2
+    assert err == (f"xo: the key xo login saved is only sent to {login.base}, not http://127.0.0.1:9; "
+                   "run xo login --url http://127.0.0.1:9 to use this address\n")
+    monkeypatch.delenv("XO_URL")
+    code, _, err = run(capsys, "--url", "http://localhost:9", "spaces", "--space-id", "s1")
+    assert code == 1 and "only sent to" in err and len(login.requests) == 2
+
+
+def test_later_commands_use_the_saved_url(login, capsys, monkeypatch):
+    assert run(capsys, "login")[0] == 0
+    monkeypatch.delenv("XO_URL")  # nothing set now: the saved URL, not https://xo.quirq.dev
+    login.route("GET", "/api/core/v1/spaces/s1", body={"success": True, "data": {}})
+    assert run(capsys, "spaces", "--space-id", "s1")[0] == 0
+    assert login.requests[-1]["path"] == "/api/core/v1/spaces/s1"
+    assert run(capsys, "me")[0] == 0
+
+
+def test_login_url_flag_is_saved(login, capsys, config_home, monkeypatch):
+    monkeypatch.delenv("XO_URL")
+    assert run(capsys, "login", "--url", login.base + "/")[0] == 0
+    assert json.loads((config_home / "xo" / "credentials").read_text())["url"] == login.base
+
+
+def test_a_key_from_the_variable_follows_the_url(login, capsys, monkeypatch):
+    assert run(capsys, "login")[0] == 0
+    monkeypatch.setenv("XO_API_KEY", "ak_from_variable")
+    monkeypatch.setenv("XO_URL", "http://127.0.0.1:9")
+    code, _, err = run(capsys, "me")
+    assert code == 1 and "could not reach http://127.0.0.1:9" in err  # tried, with the variable's key
+
+
+@pytest.mark.parametrize("text", ["ak_old_plain_key\n", "{}", '{"url": "", "key": "k"}', "[1]"])
+def test_a_saved_file_xo_did_not_write_is_refused(login, capsys, config_home, text):
+    import os
+    (config_home / "xo").mkdir(parents=True)
+    path = config_home / "xo" / "credentials"
+    path.write_text(text)
+    os.chmod(path, 0o600)
+    code, _, err = run(capsys, "me")
+    assert code == 1 and login.requests == []
+    assert err == f"xo: {path} is not a file xo login wrote; run xo logout, then xo login\n"
+    assert run(capsys, "login")[0] == 0  # login replaces it
+    assert json.loads(path.read_text())["key"] == KEY
+
+
+def test_a_saved_file_another_user_owns_is_refused(login, capsys, monkeypatch):
+    import os
+    assert run(capsys, "login")[0] == 0
+    uid = os.getuid()
+    monkeypatch.setattr(os, "getuid", lambda: uid + 1)
+    code, _, err = run(capsys, "me")
+    assert code == 1 and "can be read by other users" in err
+
+
+def test_control_characters_in_the_name_are_dropped(login, capsys):
+    login.route("GET", "/me", body={"success": True, "data": {"id": "user_1", "username": "sam\x1b[31m\x07\r"}})
+    err = run(capsys, "login")[2]
+    assert "logged in as sam[31m (user_1)\n" in err and "\x1b" not in err and "\x07" not in err
+
+
+def test_a_failed_save_leaves_no_temp_file(login, capsys, config_home, monkeypatch):
+    import os
+
+    def refuse(*a):
+        raise OSError(28, "No space left on device")
+    monkeypatch.setattr(os, "replace", refuse)
+    code, _, err = run(capsys, "login")
+    assert code == 1 and "cannot save the key to" in err and "No space left on device" in err
+    assert list((config_home / "xo").iterdir()) == []
+
+
+def test_a_fifo_or_folder_at_the_saved_path_is_refused(login, capsys, config_home):
+    import os
+    folder = config_home / "xo"
+    folder.mkdir(parents=True)
+    os.mkfifo(folder / "credentials", 0o600)
+    code, _, err = run(capsys, "me")  # would hang if it waited for a writer
+    assert code == 1 and err == f"xo: {folder / 'credentials'} is not a file xo login wrote; run xo logout, then xo login\n"
+    os.unlink(folder / "credentials")
+    (folder / "credentials").mkdir()
+    code, _, err = run(capsys, "me", "--dry-run")
+    assert code == 0  # a dry run needs no key
+    code, _, err = run(capsys, "me")
+    assert code == 1 and "is not a file xo login wrote" in err
+    code, _, err = run(capsys, "logout")
+    assert code == 1 and "is a folder, not a file xo login wrote; remove it yourself" in err
+
+
+def test_a_strict_umask_still_leaves_a_readable_key(login, capsys, config_home):
+    import os
+    import stat
+    old = os.umask(0o477)
+    try:
+        assert run(capsys, "login")[0] == 0
+    finally:
+        os.umask(old)
+    assert stat.S_IMODE(os.stat(config_home / "xo" / "credentials").st_mode) == 0o600
+    assert run(capsys, "me")[0] == 0

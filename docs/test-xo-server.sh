@@ -4,14 +4,15 @@
 #     bash docs/test-xo-server.sh
 #
 # It runs xo straight from this checkout's src/ (nothing is installed or downloaded), checks
-# /healthz, asks for a test user's API key without echoing it, checks `xo me` and three refusals,
-# and last checks that the Vercel Firewall rule is active. The key is never printed, written to a
+# /healthz, asks for a test user's API key without echoing it, checks `xo me`, that the server
+# passes the core API on to XO (with a made-up key, never yours), and three refusals, and last
+# checks that the Vercel Firewall rule is active. The key is never printed, written to a
 # file, put on a command line or exported: only the xo calls that need it get it. Its only network
 # calls go to the server. Works with macOS bash 3.2.
-# XO_SERVER_URL overrides the server (default https://xo.quirq.dev).
+# XO_URL overrides the server (default https://xo.quirq.dev).
 set -u
 
-server="${XO_SERVER_URL:-https://xo.quirq.dev}"
+server="${XO_URL:-https://xo.quirq.dev}"
 server="${server%/}"
 repo="$(cd "$(dirname "$0")/.." && pwd)"
 failed=0
@@ -35,9 +36,10 @@ fi
 work="$(mktemp -d "${TMPDIR:-/tmp}/xo-test.XXXXXX")" || exit 1
 trap 'rm -rf "$work"' EXIT
 
-# xo from this checkout, isolated from any installed copy (-I), talking only to $server.
+# xo from this checkout, isolated from any installed copy (-I) and any key xo login saved,
+# talking only to $server.
 xo() {
-  XO_SERVER_URL="$server" "$python" -I -c \
+  XDG_CONFIG_HOME="$work/config" XO_URL="$server" "$python" -I -c \
     'import sys; sys.path.insert(0, sys.argv[1]); from xo.cli import main; sys.exit(main(sys.argv[2:]))' \
     "$repo/src" "$@"
 }
@@ -95,7 +97,18 @@ else
   fail "xo me: $(head -c 300 "$work/me.err")"
 fi
 
-# 5. What must be refused.
+# 5. The core API goes through the server to XO. The key is made up, so XO answers 401 (or 404 for
+#    the space); a server without the forwarding answers its own bare "Not found".
+probe="00000000-0000-0000-0000-000000000000"
+if XO_API_KEY=ak_made_up_for_the_xo_test xo spaces --space-id "$probe" >/dev/null 2>"$work/core.err"; then
+  fail "the core API check: XO accepted a made-up key"
+elif grep -q -e "HTTP 401" -e "Space not found" "$work/core.err"; then
+  pass "the server passes the core API on to XO"
+else
+  fail "the core API check: $(head -c 300 "$work/core.err") (is the latest main deployed?)"
+fi
+
+# 6. What must be refused.
 expect() {  # expect LABEL TEXT KEY -- xo arguments...
   label="$1"; text="$2"; with="$3"; shift 4
   if XO_API_KEY="$with" xo "$@" >/dev/null 2>"$work/err"; then
@@ -112,7 +125,7 @@ expect "your key cannot read metadata (no admin keys yet)" "HTTP 403" "$key" -- 
   user-metadata get --user-id user_test
 key=""; with=""
 
-# 6. The Firewall rule: requests to /me with no key (each a 401 from the server, with no Clerk call)
+# 7. The Firewall rule: requests to /me with no key (each a 401 from the server, with no Clerk call)
 #    must run into Vercel's limit of 60 a minute. Its window is fixed, so one that ends mid-burst
 #    lets up to 60 more through: up to 130 are sent, and the first 429 (or 403, if the rule denies)
 #    ends it. Any other answer stops the check, so a server error is never taken for the rule. Last,

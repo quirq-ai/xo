@@ -12,6 +12,9 @@ verifies it with Clerk and answers:
     GET   /me                       any user key: the key's own account, a fixed list of fields
     GET   /user-metadata/{userId}   admin keys only: public and private metadata
     PATCH /user-metadata/{userId}   admin keys only: deep-merge changes into allow-listed keys
+    POST  /api/core/v1/{create}     passed on to XO's core API as sent, key included, and its
+    GET   /api/core/v1/spaces/{id}  answer passed back: the creates and the space read only, so
+                                    the CLI needs one URL for everything
 
 An admin key is a Clerk API key whose claims carry `xo_admin: true` AND whose id is in
 $XO_ADMIN_KEY_IDS. Only top-level metadata keys named in $XO_EDITABLE_PUBLIC_KEYS and
@@ -32,6 +35,7 @@ Configuration (environment only, so the secret never lands in shell history or t
     XO_CLERK_PER_SECOND       calls to Clerk per second for the whole process (default 20)
     XO_SERVE_MAX_CONNECTIONS  connections served at once (default 64)
     CLERK_API_URL             default https://api.clerk.com (tests point it at a fake)
+    XO_CORE_API_URL           where /api/core/v1 goes; default https://app.xo.builders/api/core/v1
 
 It listens on 127.0.0.1 by default: put it behind an HTTPS proxy before giving it any other host.
 On Vercel, the repo's root app.py serves the same routes through `wsgi_app()` (docs/deploy-vercel.md).
@@ -65,6 +69,19 @@ CLERK_TIMEOUT = 10.0
 # The Backend API version xo was written against (@clerk/backend sends the same header).
 CLERK_API_VERSION = "2026-05-12"
 USER_ID = re.compile(r"user_[A-Za-z0-9]{1,64}")
+CORE_ENV = "XO_CORE_API_URL"
+DEFAULT_CORE_URL = "https://app.xo.builders/api/core/v1"
+CORE_PREFIX = "/api/core/v1"  # the client's CORE_PATH
+# Under the 30 seconds the CLI waits by default and the server's REQUEST_DEADLINE, so the caller
+# hears why rather than timing out itself.
+CORE_TIMEOUT = 25.0
+MAX_CORE_ANSWER = 1024 * 1024
+# What is passed on to the core API: the bundled spec's routes that the server does not answer
+# itself (a test keeps the two in step). Each is (method, path pattern, route name); nothing else
+# under /api/core/v1 leaves the server, and a path with any escape in it matches none.
+CORE_ROUTES = [("POST", re.compile(r"/(claude-code|codex|antigravity|hermes|openclaw|xo-cowork|nebius-openclaw)"),
+                None),
+               ("GET", re.compile(r"/spaces/[A-Za-z0-9_-]{1,64}"), "/spaces/{spaceId}")]
 # What a Clerk API key looks like; anything else is refused without asking Clerk (the SDK checks
 # the ak_ prefix the same way). The characters are the CLI's (client.KEY_CHARS): letters, digits and
 # _ . - plus base64's + / = (Clerk's own test key has / and =).
@@ -73,7 +90,7 @@ BUCKETS = {"publicMetadata": "public_metadata", "privateMetadata": "private_meta
 MAX_BODY = 32 * 1024  # two 8KB buckets with room for JSON overhead
 # Requests per minute per key: /me, then /user-metadata. Clerk allows 1000 Backend API calls per
 # 10 seconds for the whole instance and 10 metadata writes per 10 seconds per user.
-LIMITS = {"me": 60, "user-metadata": 20}
+LIMITS = {"me": 60, "user-metadata": 20, "core": 30}
 MAX_TRACKED = 10_000  # tokens remembered for rate limiting; the least recently seen go first
 ME_CACHE_SECONDS = 60
 ACTIVITY_KEPT = 100  # recent requests the status page lists, per process
@@ -117,6 +134,11 @@ class Config:
         if not (parts.scheme == "https" or (parts.scheme == "http" and parts.hostname in LOCAL_HOSTS)):
             raise XoError(f"{CLERK_URL_ENV} must be https:// (or http:// to localhost)")
         self.clerk_url = url
+        core = (os.environ.get(CORE_ENV) or DEFAULT_CORE_URL).rstrip("/")
+        parts = urllib.parse.urlsplit(core)
+        if not (parts.scheme == "https" or (parts.scheme == "http" and parts.hostname in LOCAL_HOSTS)):
+            raise XoError(f"{CORE_ENV} must be https:// (or http:// to localhost)")
+        self.core_url = core
         self.admin_ids = _list_env("XO_ADMIN_KEY_IDS")
         self.editable = {"publicMetadata": _list_env("XO_EDITABLE_PUBLIC_KEYS"),
                          "privateMetadata": _list_env("XO_EDITABLE_PRIVATE_KEYS")}
@@ -210,6 +232,55 @@ class Clerk:
         return self._call("PATCH", "/users/" + urllib.parse.quote(user_id, safe="") + "/metadata", body)
 
 
+class Core:
+    """The other network door: XO's core API, for the routes the server passes on."""
+
+    def __init__(self, cfg: Config) -> None:
+        self._cfg = cfg
+        self._opener = urllib.request.build_opener(_NoRedirect)
+
+    def forward(self, method: str, path: str, token: str, body: bytes | None) -> tuple[int, dict]:
+        """XO's answer to the caller's request, sent with the caller's own key and body."""
+        headers = {"Accept": "application/json", "User-Agent": f"xo-server/{__version__}"}
+        if body is not None:
+            headers["Content-Type"] = "application/json"
+        req = urllib.request.Request(self._cfg.core_url + path, data=body, method=method, headers=headers)
+        req.add_unredirected_header("Authorization", f"Bearer {token}")
+        try:
+            with self._opener.open(req, timeout=CORE_TIMEOUT) as resp:
+                status, raw = resp.status, resp.read(MAX_CORE_ANSWER)
+        except urllib.error.HTTPError as e:
+            if 300 <= e.code < 400:  # never followed, so the key goes nowhere else
+                return 502, {"success": False, "error": f"XO redirected the request ({e.code}); not followed"}
+            try:
+                status, raw = e.code, e.read(MAX_CORE_ANSWER)
+            except (OSError, http.client.HTTPException, ValueError):
+                status, raw = e.code, b""  # the status still says what happened
+        except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException, ValueError) as e:
+            late = isinstance(getattr(e, "reason", e), TimeoutError)
+            maybe = "; it may have been received, so check before you retry" if method != "GET" else ""
+            return (504, {"success": False, "error": "XO did not answer in time" + maybe}) if late else \
+                   (502, {"success": False, "error": "XO did not answer" + maybe})
+        try:
+            payload = json.loads(raw)
+        except (ValueError, RecursionError):
+            payload = None
+        if status not in _KNOWN_STATUSES:
+            return 502, {"success": False, "error": f"XO answered with status {status}"}
+        if not isinstance(payload, dict):
+            return status, {"success": 200 <= status < 300, "error": f"XO answered {status} without a JSON object"}
+        return status, payload
+
+
+class _Forwarded(Exception):
+    """XO's answer, passed back to the caller as it came."""
+
+    def __init__(self, status: int, payload: dict) -> None:
+        super().__init__(status)
+        self.status = status
+        self.payload = payload
+
+
 class _Reply(Exception):
     def __init__(self, status: int, error: str, clerk: int | str | None = None) -> None:
         super().__init__(error)
@@ -236,9 +307,11 @@ def _clerk_failure(e: ClerkError) -> _Reply:
 class App:
     """Routing, auth, limits and audit, apart from the HTTP plumbing so tests can drive it."""
 
-    def __init__(self, cfg: Config, clerk: Clerk | None = None, audit=None, clock=time.monotonic) -> None:
+    def __init__(self, cfg: Config, clerk: Clerk | None = None, audit=None, clock=time.monotonic,
+                 core: Core | None = None) -> None:
         self.cfg = cfg
         self.clerk = clerk or Clerk(cfg, clock)
+        self.core = core or Core(cfg)
         self.audit_out = audit or (lambda line: print(line, file=sys.stderr, flush=True))
         self.clock = clock
         self._lock = threading.Lock()
@@ -272,14 +345,19 @@ class App:
         if over:
             raise _Reply(429, "Too many requests; try again in a minute")
 
-    def _key(self, headers: dict[str, str], group: str) -> dict:
+    def _token(self, headers: dict[str, str], group: str) -> str:
+        """The caller's bearer token, if it looks like an API key and is within its rate limit."""
         auth = headers.get("authorization", "")
         token = auth[7:].strip() if auth[:7].lower() == "bearer " else ""
         if not token:
             raise _Reply(401, "Missing API key")
         if not API_KEY.fullmatch(token):
-            raise _Reply(401, "Invalid API key")  # never sent to Clerk
+            raise _Reply(401, "Invalid API key")  # never sent to Clerk or XO
         self._limit(token, group)
+        return token
+
+    def _key(self, headers: dict[str, str], group: str) -> dict:
+        token = self._token(headers, group)
         try:
             key = self.clerk.verify_key(token)  # never cached: a revoked key stops at once
         except ClerkError as e:
@@ -300,6 +378,8 @@ class App:
         start = time.monotonic()
         try:
             status, payload = 200, {"success": True, "data": self._route(method, path, headers, body)}
+        except _Forwarded as f:
+            status, payload = f.status, f.payload
         except _Reply as r:
             status, payload = r.status, {"success": False, "error": r.error}
         self.record(method, path, status, start)
@@ -351,6 +431,8 @@ class App:
             if method != "GET":
                 raise _Reply(405, "Method not allowed")
             return self._me(self._key(headers, "me"))
+        if path.startswith(CORE_PREFIX + "/"):
+            return self._forward(method, path[len(CORE_PREFIX):], headers, body)
         if path.startswith("/user-metadata/"):
             if method not in ("GET", "PATCH"):
                 self.audit(method=method[:10], route="/user-metadata", keyId=None, caller=None, target=None,
@@ -358,6 +440,14 @@ class App:
                 raise _Reply(405, "Method not allowed")
             return self._metadata(method, urllib.parse.unquote(path[len("/user-metadata/"):]), headers, body)
         raise _Reply(404, "Not found")
+
+    def _forward(self, method: str, path: str, headers: dict[str, str], body: bytes | None) -> Any:
+        """Pass a core API request on to XO: only the routes in CORE_ROUTES, only with something
+        that looks like an API key, within its rate limit. XO checks the key itself."""
+        if not _passes_on(method, path):
+            raise _Reply(404, "Not found")
+        token = self._token(headers, "core")
+        raise _Forwarded(*self.core.forward(method, path, token, body if method != "GET" else None))
 
     def _me(self, key: dict) -> dict:
         subject = key["subject"]
@@ -441,6 +531,12 @@ class App:
 
 
 _METHODS = frozenset({"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"})
+_KNOWN_STATUSES = frozenset(s.value for s in http.HTTPStatus if s.value >= 200)
+
+
+def _passes_on(method: str, path: str) -> bool:
+    """Whether the server passes this core API request (path below CORE_PREFIX) on to XO."""
+    return any(method == m and pattern.fullmatch(path) for m, pattern, _ in CORE_ROUTES)
 
 
 def _iso(t: float) -> str:
@@ -457,6 +553,10 @@ def _route_name(path: str) -> str | None:
         return path
     if path.startswith("/user-metadata/"):
         return "/user-metadata/{userId}"
+    if path.startswith(CORE_PREFIX + "/"):
+        sub = path[len(CORE_PREFIX):]
+        return next((CORE_PREFIX + (name or sub) for _, pattern, name in CORE_ROUTES if pattern.fullmatch(sub)),
+                    "other")
     return "other"
 
 
