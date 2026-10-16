@@ -108,9 +108,22 @@ def test_sync_stops_when_both_changed_one_project(space):
     _stored(space).update(rev=4, projects=[{"o/a": "other"}, {"o/b": "v1"}, {"notes": "main"}])
     git("fetch", "-q", cwd="dev/o/a")
     git("switch", "-q", "feature", cwd="dev/o/a")
-    with pytest.raises(XoError, match="both you and the space changed o/a"):
+    with pytest.raises(XoError, match="both you and the space changed o/a.*./dev/o/a were rebased and pushed"):
         workspace.sync(space.client, "space", "dev")
     assert space.store.patches == [] and git("branch", "--show-current", cwd="dev/o/a") == "feature"
+
+
+def test_a_sync_that_pushed_nothing_does_not_say_it_did(space):
+    space.hub.commit("o/b", "main", "v2 work", tag="v2")
+    space.hub.commit("o/b", "main", "v3 work", tag="v3")
+    workspace.install(space.client, "space", "dev")
+    _stored(space).update(rev=4, projects=[{"o/a": "main"}, {"o/b": "v3"}, {"notes": "main"}])
+    git("switch", "-q", "--detach", cwd="dev/o/a")
+    git("fetch", "-q", "--tags", cwd="dev/o/b")
+    git("switch", "-q", "--detach", "v2", cwd="dev/o/b")
+    with pytest.raises(XoError, match="both you and the space changed o/b") as stopped:
+        workspace.sync(space.client, "space", "dev")
+    assert "pushed" not in str(stopped.value) and "No checkout was moved" in str(stopped.value)
 
 
 def test_sync_with_nothing_changed_writes_nothing(space):
@@ -222,7 +235,7 @@ def test_sync_stops_when_the_space_went_back_to_an_older_rev(space):
     # A stale writer put rev 1 back, and someone may have recorded on top of it: neither side wins.
     _stored(space).update(rev=1, projects=[{"o/a": "main"}, {"o/b": "v1"}, {"notes": "main"}])
     patches = len(space.store.patches)
-    with pytest.raises(XoError, match="went back to rev 1 from your rev 2.*o/a.*nothing was recorded"):
+    with pytest.raises(XoError, match="went back to rev 1 from your rev 2.*o/a.*./dev/o/a were rebased and pushed.*nothing was recorded"):
         workspace.sync(space.client, "space", "dev")
     assert git("branch", "--show-current", cwd="dev/o/a") == "feature" and len(space.store.patches) == patches
 
