@@ -1348,6 +1348,56 @@ class _RacingClerk:
         return json.loads(json.dumps(self.stored))
 
 
+class _OnWriteClerk(_RacingClerk):
+    """A Clerk where `race(private)` plays another writer once, right after this request's first write."""
+
+    def __init__(self, stored: dict, race) -> None:
+        super().__init__(stored, races=0)
+        self.race = race
+
+    def update_metadata(self, user_id: str, changes: dict) -> dict:
+        out = super().update_metadata(user_id, changes)
+        if self.race:
+            self.race(self.stored["private_metadata"])
+            self.race = None
+        return out
+
+
+def _connect_repo(fake, body=None):
+    app = server.App(server.Config(), clerk=fake, audit=lambda line: None)
+    return app.handle("POST", "/me/projects/connect", {"authorization": f"Bearer {USER_KEY}"},
+                      json.dumps(body or {"name": "foo", "repo": "o/r"}).encode())
+
+
+@pytest.mark.parametrize("racing, want", [
+    (["foo", "x", "o/r"], ["o/r", "x"]),  # a stale add of the repo: listed once
+    (["x"], ["x", "o/r"]),  # a stale write dropped both: the repo is added again
+])
+def test_connect_repo_racing_a_projects_write_lists_the_repo_once(clerk, racing, want):
+    user = {"id": "user_alice", "private_metadata": {"projects": ["foo", "x"]}}
+    fake = _OnWriteClerk(user, lambda private: private.update(projects=list(racing)))
+    status, out = _connect_repo(fake)
+    assert status == 200 and user["private_metadata"]["projects"] == want and len(fake.patches) == 2
+
+
+def test_connect_repo_puts_the_name_back_when_a_space_takes_it_meanwhile(clerk):
+    user = {"id": "user_alice", "private_metadata": {"projects": ["foo", "x"], "spaces": [_space("dev")]}}
+
+    def race(private):
+        private["spaces"] = [_space("dev", projects=[{"foo": "main"}])]  # a racing xo connect
+    fake = _OnWriteClerk(user, race)
+    status, out = _connect_repo(fake)
+    assert status == 409 and "dev" in out["error"]
+    assert user["private_metadata"]["projects"] == ["foo", "x"] and len(fake.patches) == 2
+
+
+@pytest.mark.parametrize("spaces", [5, None, [{"no": "name"}]])
+def test_connect_repo_refuses_spaces_it_cannot_read(clerk, spaces):
+    user = {"id": "user_alice", "private_metadata": {"projects": ["foo"], "spaces": spaces}}
+    fake = _OnWriteClerk(user, None)
+    assert _connect_repo(fake)[0] == 409 and fake.patches == []
+
+
 def test_add_project_tries_again_when_another_write_replaced_the_list(clerk):
     user = {"id": "user_alice", "private_metadata": {"stripeId": "cus_1", "projects": []}}
     fake = _RacingClerk(user, races=1)

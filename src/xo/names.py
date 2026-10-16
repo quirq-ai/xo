@@ -18,7 +18,8 @@ _SPACE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
 # A branch, tag or 40-character commit sha; git's ref rules, never starting with "-".
 _REF = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,199}")
 # The kinds of space XO's core API creates: `xo create space NAME KIND`, and the creates the server
-# passes on. One list, so the CLI's kinds and the server's routes cannot drift apart.
+# passes on (server.CORE_ROUTES is built from it). One list, so the CLI's kinds and the server's routes
+# cannot drift apart.
 SPACE_KINDS = ("claude-code", "codex", "antigravity", "hermes", "openclaw", "xo-cowork", "nebius-openclaw")
 # XO's own space name: `xo create space NAME KIND` uses NAME as the space's name on XO too.
 _XO_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,31}")

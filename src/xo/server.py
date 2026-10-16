@@ -109,8 +109,7 @@ MAX_CORE_ANSWER = 1024 * 1024
 # What is passed on to the core API: the bundled spec's routes that the server does not answer
 # itself (a test keeps the two in step). Each is (method, path pattern, route name); nothing else
 # under /api/core/v1 leaves the server, and a path with any escape in it matches none.
-CORE_ROUTES = [("POST", re.compile(r"/(claude-code|codex|antigravity|hermes|openclaw|xo-cowork|nebius-openclaw)"),
-                None),
+CORE_ROUTES = [("POST", re.compile("/(" + "|".join(names.SPACE_KINDS) + ")"), None),
                ("GET", re.compile(r"/spaces/[A-Za-z0-9_-]{1,64}"), "/spaces/{spaceId}")]
 # What a Clerk API key looks like; anything else is refused without asking Clerk (the SDK checks
 # the ak_ prefix the same way). The characters are the CLI's (client.KEY_CHARS): letters, digits and
@@ -957,8 +956,9 @@ class App:
 
         def step(projects: list, private: dict, wrote: bool) -> tuple[str, list]:
             present = any(isinstance(p, str) and p.casefold() == name.casefold() for p in projects)
-            # No user route removes a project, so anything read earlier and gone now was dropped
-            # by a racing write that started from an older list: put it back.
+            # Anything read earlier and gone now was dropped by a racing write that started from an
+            # older list: put it back. The one route that removes a name, `xo connect --repo`
+            # renaming it, can race this too and see the old name come back (docs/server.md, Races).
             missing = [p for p in seen if p not in projects and p != name]
             if wrote and present and not missing:
                 return "done", projects
@@ -991,6 +991,7 @@ class App:
         if not names.is_github(repo):
             raise self._refuse(who, 422, "repo must be a GitHub OWNER/REPO")
         seen: list = []
+        undone: list = []  # the space a racing write put the project in, after this rename landed
 
         def same(p: Any, q: str) -> bool:
             return isinstance(p, str) and p.casefold() == q.casefold()
@@ -998,27 +999,45 @@ class App:
         def step(projects: list, private: dict, wrote: bool) -> tuple[str, list]:
             has_name = any(same(p, name) for p in projects)
             has_repo = any(same(p, repo) for p in projects)
-            # No user route removes a project, so anything read earlier and gone now was dropped
-            # by a racing write that started from an older list: put it back.
+            spaces = private.get("spaces", [])
+            self._readable_spaces(spaces, who)
+            # Checked on every read: a racing `xo connect project:NAME space:S` may land at any time.
+            held = sorted(e["name"] for e in spaces
+                          if any(isinstance(x, dict) and any(same(k, name) for k in x) for x in _space_projects(e)))
+            # Only this route removes a name from `projects` (renaming it), so anything else read
+            # earlier and gone now was dropped by a racing write that started from an older list:
+            # put it back.
             missing = [p for p in seen if p not in projects and not same(p, name) and not same(p, repo)]
-            if wrote and has_repo and not has_name and not missing:
+            if undone:
+                # A space came to name the project after the rename landed: the rename is put back
+                # so that space still names a project in `projects`.
+                if has_name and not has_repo and not missing:
+                    return "done", projects
+                return "write", [name if same(p, repo) else p for p in projects
+                                 if not same(p, name)] + ([] if has_repo else [name]) + missing
+            if held:
+                if wrote:
+                    undone[:] = held
+                    return "write", [name if same(p, repo) else p for p in projects
+                                     if not same(p, name)] + ([] if has_repo else [name]) + missing
+                # TODO(suraj): rename the project inside its spaces too (one merge naming `projects`
+                # and `spaces`), so a project already in a space can get its repo.
+                raise self._refuse(who, 409, f"{name} is in space {held[0]}, which would still name it {name}; "
+                                             "nothing was changed")
+            if wrote and has_repo and not has_name and not missing and \
+                    sum(same(p, repo) for p in projects) == 1:
                 return "done", projects
             if not wrote:
                 if not has_name:
                     raise self._refuse(who, 404, f"{name} is not in your projects; nothing was changed")
                 if has_repo:
                     raise self._refuse(who, 409, f"{repo} is already in your projects; nothing was changed")
-                spaces = private.get("spaces", [])
-                held = sorted(e["name"] for e in spaces if isinstance(spaces, list) and isinstance(e, dict)
-                              and isinstance(e.get("name"), str)
-                              and any(isinstance(x, dict) and any(same(k, name) for k in x) for x in
-                                      (e.get("projects") if isinstance(e.get("projects"), list) else [])))
-                if held:
-                    # TODO(suraj): rename the project inside its spaces too (one merge naming `projects`
-                    # and `spaces`), so a project already in a space can get its repo.
-                    raise self._refuse(who, 409, f"{name} is in space {held[0]}, which would still name it {name}; "
-                                                 "nothing was changed")
-            wanted = [repo if same(p, name) else p for p in projects]
+            # NAME becomes REPO in place; REPO is listed once, whatever a racing write added.
+            wanted: list = []
+            for p in projects:
+                q = repo if same(p, name) else p
+                if not (same(q, repo) and any(same(w, repo) for w in wanted)):
+                    wanted.append(q)
             if not any(same(p, repo) for p in wanted):
                 wanted.append(repo)
             wanted += missing
@@ -1028,6 +1047,9 @@ class App:
         projects = self._change(key["subject"], who, "projects", step, "projects",
                                 "Your projects changed while this ran; run xo projects to see whether "
                                 f"{repo} is there before trying again")
+        if undone:
+            raise self._refuse(who, 409, f"{name} was put in space {undone[0]} while this ran, so it keeps its "
+                                         "name; nothing was changed")
         return {"projects": _mask_secrets(projects)}
 
     def _project_name(self, name: str, who: dict) -> None:

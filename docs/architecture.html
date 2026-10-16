@@ -4,9 +4,6 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>xo Architecture</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap">
 <style>
 /* Layout: a spec sheet. Sticky section nav, one column of figures, each figure a bordered plate with its claim underneath. */
 :root {
@@ -184,9 +181,9 @@ html { scroll-behavior: smooth; }
 <body>
 <div class="wrap">
 	<header class="top">
-		<div class="eyebrow">quirq-ai/xo · main @ 4027932 + unified create</div>
+		<div class="eyebrow">quirq-ai/xo · main as of this change: through #37 (sharing) + unified create</div>
 		<h1>xo: one package, a CLI and <span class="x">its server</span></h1>
-		<p class="lede">The command line for XO Cloud's core API. The same Python package runs on your machine as <code>xo</code> and on Vercel as the xo server, which holds the Clerk Secret Key so the CLI never needs it. Standard library only. It also keeps your <code>projects</code> and <code>spaces</code> in your own Clerk metadata. It also installs those projects on your machine and keeps them in step. Every command has its own diagram in section 03. Left out: test internals, the redaction rules in detail, and the Vercel deploy steps (see <code>docs/</code>).</p>
+		<p class="lede">The command line for XO Cloud's core API. The same Python package runs on your machine as <code>xo</code> and on Vercel as the xo server, which holds the Clerk Secret Key so the CLI never needs it. Standard library only. It also keeps your <code>projects</code> and <code>spaces</code> in your own Clerk metadata, lets you share a space or project with another user as an invite they accept or reject, and installs those projects on your machine and keeps them in step. Every command has its own diagram in section 03. Left out: test internals, the redaction rules in detail, and the Vercel deploy steps (see <code>docs/</code>).</p>
 		<div class="scroll">
 			<table class="modes">
 				<thead><tr><th>Mode</th><th>Runs on</th><th>Holds</th><th>Entry point</th></tr></thead>
@@ -205,7 +202,7 @@ html { scroll-behavior: smooth; }
 		<li><a href="#commands">Commands</a></li>
 		<li><a href="#every">Every command</a></li>
 		<li><a href="#server">The server</a></li>
-		<li><a href="#projects">Projects and spaces</a></li>
+		<li><a href="#projects">Projects, spaces, invites</a></li>
 		<li><a href="#workspace">Install and sync</a></li>
 		<li><a href="#access">Access</a></li>
 		<li><a href="#state">State</a></li>
@@ -217,7 +214,7 @@ html { scroll-behavior: smooth; }
 
 <section id="system">
 	<h2><span class="num">01</span>System context</h2>
-	<p>The CLI sends your XO key to exactly one address, the xo server. The server answers account questions and writes your two lists itself through Clerk, and passes space creates and reads on to XO's core API with your key as sent. Coder and GitHub are reached through their own CLIs and their own logins; projects are cloned with your own git.</p>
+	<p>The CLI sends your XO key to exactly one address, the xo server. The server answers account questions and writes your lists itself through Clerk (and, when you share, an invite in the other user's <code>shared</code>), and passes space creates and reads on to XO's core API with your key as sent. Coder and GitHub are reached through their own CLIs and their own logins; projects are cloned with your own git.</p>
 	<figure>
 		<div class="canvas">
 			<svg class="d" viewBox="0 0 960 420" role="img" aria-label="On your machine the xo CLI reads its saved key and runs the coder, gh and git CLIs. It sends the XO API key only to the xo server, which verifies keys with Clerk and forwards creates to XO's core API. The coder CLI talks to the Coder deployment, and gh and git to GitHub.">
@@ -305,7 +302,7 @@ html { scroll-behavior: smooth; }
 	<p>Most commands are not written by hand. <code>commands.register()</code> reads the bundled OpenAPI spec and makes one command per operation, with every parameter and body field as a flag. A handful of built-ins sit beside them, and <code>xo coder VERB</code> is caught before argparse and handed to the coder CLI.</p>
 	<figure>
 		<div class="canvas">
-			<svg class="d" viewBox="0 0 960 320" role="img" aria-label="cli.main parses argv. coder VERB goes to _coder_pass and then the coder CLI. Built-in parsers and spec-generated endpoint commands, which read openapi.json, both send through Client.request.">
+			<svg class="d" viewBox="0 0 960 320" role="img" aria-label="cli.main parses argv. coder VERB goes to _coder_pass and then the coder CLI. Built-in parsers (login, create, connect, list, install, update, sync, share, accept, reject and the rest) and spec-generated endpoint commands, which read openapi.json, both send through Client.request.">
 				<defs>
 					<marker id="f2a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
 					<marker id="f2h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
@@ -332,7 +329,7 @@ html { scroll-behavior: smooth; }
 
 				<rect class="box" x="420" y="100" width="250" height="56" rx="8"/>
 				<text class="m" x="436" y="123">built-in parsers</text>
-				<text class="s" x="436" y="143">login · create · connect · list · sync</text>
+				<text class="s" x="436" y="143">login · create · connect · sync · share · accept</text>
 
 				<rect class="box hot" x="420" y="180" width="250" height="56" rx="8"/>
 				<text class="m" x="436" y="203">commands.register()</text>
@@ -369,7 +366,7 @@ html { scroll-behavior: smooth; }
 				<tr><td>xo create space NAME codex --volume-size GB</td><td>server, then XO</td><td>A Codex space</td></tr>
 				<tr><td>xo create space NAME antigravity --volume-size GB</td><td>server, then XO</td><td>An Antigravity space</td></tr>
 				<tr><td>xo create space NAME hermes --volume-size GB</td><td>server, then XO</td><td>Plus a provider key (<code>--providers-anthropic-api-key</code>, <code>openai</code>, <code>openrouter</code>) and a Telegram or Slack bot token</td></tr>
-				<tr><td>xo create space NAME openclaw --volume-size GB</td><td>server, then XO</td><td>Plus at least one provider key and one channel (Telegram, WhatsApp or Slack)</td></tr>
+				<tr><td>xo create space NAME openclaw --volume-size GB --providers-anthropic-api-key K --notification-channels-telegram-bot-token T</td><td>server, then XO</td><td>At least one provider key (Anthropic, OpenAI or OpenRouter) and one channel (Telegram, WhatsApp or Slack)</td></tr>
 				<tr><td>xo create space NAME xo-cowork --volume-size GB</td><td>server, then XO</td><td>Providers and channels optional</td></tr>
 				<tr><td>xo create space NAME nebius-openclaw --token-factory-api-key K --telegram-bot-token T</td><td>server, then XO</td><td>Feature flagged, 404 when off</td></tr>
 				<tr><td>xo spaces --space-id ID</td><td>server, then XO</td><td><code>GET /spaces/{spaceId}</code>: connection URLs; they carry a session token</td></tr>
@@ -377,9 +374,12 @@ html { scroll-behavior: smooth; }
 				<tr><td>xo projects [add NAME]</td><td>server only</td><td>Read or append to the <code>projects</code> list in your private metadata</td></tr>
 				<tr><td>xo create project NAME [URL]</td><td>server, then git</td><td>Adds the project, then clones <code>OWNER/REPO</code> here or runs <code>git init</code> for a plain name; a NAME given with a URL must match it</td></tr>
 				<tr><td>xo connect project:P space:S [--ref R]</td><td>server only</td><td>Sets P in space S at <code>--ref</code> (default <code>main</code>)</td></tr>
-				<tr><td>xo connect project:P --repo URL</td><td>server, then git</td><td>A project made with a name only gets its repo and is renamed <code>OWNER/REPO</code>; <code>./P</code> gets that origin and moves to <code>./OWNER/REPO</code></td></tr>
+				<tr><td>xo connect project:P --repo URL</td><td>server, then git</td><td>A project made with a name only gets its repo and is renamed <code>OWNER/REPO</code> (refused while P is in a space); <code>./P</code> gets that origin only if it has none, and moves to <code>./OWNER/REPO</code> only if its origin is that repo</td></tr>
 				<tr><td>xo connect space:S [--id ID]</td><td>server, then XO</td><td>Records a space entry; <code>--id</code> ties it to an XO space your key can read</td></tr>
-				<tr><td>xo list projects | spaces</td><td>server only</td><td>Shows either list</td></tr>
+				<tr><td>xo list projects | spaces | shared</td><td>server only</td><td>Shows your projects, your spaces, or the invites shared with you (each with an id)</td></tr>
+				<tr><td>xo share space:S | project:OWNER/REPO USERNAME</td><td>server only</td><td>An invite in that user's <code>shared</code>: a space's name and GitHub projects, or one GitHub project</td></tr>
+				<tr><td>xo accept ID [--as NAME | --space S [--ref R]] [--yes]</td><td>server only</td><td>Shows the invite and asks, then adds a shared space as your own (<code>--as</code> renames it), or a shared project to your space S at R</td></tr>
+				<tr><td>xo reject ID</td><td>server only</td><td>Takes the invite off your <code>shared</code>; its sender can share again</td></tr>
 				<tr><td>xo install project:P | space:S</td><td>server, git</td><td>Clones or fetches P here; for a space, each project into <code>./S/</code> at its ref</td></tr>
 				<tr><td>xo update project:P | space:S</td><td>git, server</td><td>Pushes P (never forced); for a space, records the refs checked out under <code>./S/</code></td></tr>
 				<tr><td>xo sync project:P | space:S</td><td>git, server</td><td><code>pull --rebase</code> and push P; for a space, merges its changes with yours, then records</td></tr>
@@ -400,7 +400,8 @@ html { scroll-behavior: smooth; }
 	</div>
 	<ul class="facts">
 		<li><strong>Every non-GET prints a warning line first</strong>, and creates that copy your key into the new space say so on a second line.</li>
-		<li><strong><code>--dry-run</code></strong> needs no key, sends nothing and shows provider keys as <code>&lt;hidden&gt;</code>. Every invocation in this table passes it on main.</li>
+		<li><strong><code>--dry-run</code></strong> needs no key, sends nothing and shows provider keys as <code>&lt;hidden&gt;</code>. Each create row, and each endpoint row (<code>xo spaces</code>, <code>xo me</code>, <code>xo user-metadata</code>), runs as shown with <code>--dry-run</code> added; the other commands have no <code>--dry-run</code>.</li>
+		<li><strong>Space names are lowercase.</strong> XO lowercases space names, so <code>xo create space</code> lowercases NAME before sending it, and says so when that changes it.</li>
 		<li><strong>Give a secret as <code>-</code></strong> to type it without echo; only one <code>-</code> works per command.</li>
 		<li><strong>No list, delete, start or stop for spaces</strong> exists in the API. Keep the <code>data.id</code> a create prints.</li>
 	</ul>
@@ -408,33 +409,33 @@ html { scroll-behavior: smooth; }
 
 <section id="every">
 <h2><span class="num">03</span>Every command, step by step</h2>
-<p>One swimlane per command: who does each step, in order, and what moves between them. Highlighted is the step the command exists for; dashed is a step that happens only sometimes.</p>
-<p class="jump"><a href="#cmd-log-in-and-check">Log in and check</a> · <a href="#cmd-your-account">Your account</a> · <a href="#cmd-spaces-on-xo">Spaces on XO</a> · <a href="#cmd-projects-and-spaces-in-your-metadata">Projects and spaces in your metadata</a> · <a href="#cmd-install-update-and-sync">Install, update and sync</a> · <a href="#cmd-lower-level">Lower level</a> · <a href="#cmd-coder-and-the-server">Coder and the server</a></p>
+<p>One swimlane per command: who does each step, in order, and what moves between them. A solid arrow is a call and a dashed arrow its answer: the CLI calls the xo server, git, gh and coder; only the server calls Clerk and XO, and their answers come back through it. Highlighted is the step the command exists for; a label that starts with &quot;if&quot; is a step that happens only sometimes.</p>
+<p class="jump"><a href="#cmd-log-in-and-check">Log in and check</a> · <a href="#cmd-your-account">Your account</a> · <a href="#cmd-spaces-on-xo">Spaces on XO</a> · <a href="#cmd-projects-and-spaces-in-your-metadata">Projects, spaces and sharing in your metadata</a> · <a href="#cmd-install-update-and-sync">Install, update and sync</a> · <a href="#cmd-lower-level">Lower level</a> · <a href="#cmd-coder-and-the-server">Coder and the server</a></p>
 <h3 id="cmd-log-in-and-check">Log in and check</h3>
 <p>Setup commands. Only <code>xo login</code> sends your key anywhere, and only to the xo server.</p>
 <h4><code>xo login</code></h4>
 <figure>
 <div class="canvas">
-<svg class="d" viewBox="0 0 960 710" role="img" aria-label="xo login: A key is saved only after XO accepts it.">
+<svg class="d" viewBox="0 0 960 878" role="img" aria-label="xo login: A key is saved only after XO accepts it.">
 <defs>
 <marker id="c1a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
 <marker id="c1h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
 </defs>
-<line class="life" x1="112" y1="40" x2="112" y2="704"/>
+<line class="life" x1="112" y1="40" x2="112" y2="872"/>
 <rect class="hdr" x="32" y="12" width="160" height="28" rx="7"/>
 <text class="t" x="112" y="31" text-anchor="middle">You: xo CLI</text>
-<line class="life" x1="296" y1="40" x2="296" y2="704"/>
+<line class="life" x1="296" y1="40" x2="296" y2="872"/>
 <rect class="hdr" x="216" y="12" width="160" height="28" rx="7"/>
 <text class="t" x="296" y="31" text-anchor="middle">xo server</text>
-<line class="life" x1="480" y1="40" x2="480" y2="704"/>
+<line class="life" x1="480" y1="40" x2="480" y2="872"/>
 <rect class="hdr" x="400" y="12" width="160" height="28" rx="7"/>
 <text class="t" x="480" y="31" text-anchor="middle">XO core API</text>
-<line class="life" x1="664" y1="40" x2="664" y2="704"/>
+<line class="life" x1="664" y1="40" x2="664" y2="872"/>
 <rect class="hdr" x="584" y="12" width="160" height="28" rx="7"/>
-<text class="t" x="664" y="31" text-anchor="middle">git · GitHub</text>
-<line class="life" x1="848" y1="40" x2="848" y2="704"/>
+<text class="t" x="664" y="31" text-anchor="middle">coder · Coder</text>
+<line class="life" x1="848" y1="40" x2="848" y2="872"/>
 <rect class="hdr" x="768" y="12" width="160" height="28" rx="7"/>
-<text class="t" x="848" y="31" text-anchor="middle">Coder</text>
+<text class="t" x="848" y="31" text-anchor="middle">gh · GitHub</text>
 <rect class="box" x="32" y="58" width="160" height="46" rx="8"/>
 <text class="m" x="112" y="78" text-anchor="middle">xo login</text>
 <text class="s" x="112" y="95" text-anchor="middle">or: xo login coder</text>
@@ -445,8 +446,8 @@ html { scroll-behavior: smooth; }
 <text class="lbl" x="204" y="119" text-anchor="middle">fetch</text>
 <rect class="box" x="32" y="226" width="160" height="46" rx="8"/>
 <text class="t" x="112" y="246" text-anchor="middle">ask for your key</text>
-<text class="s" x="112" y="263" text-anchor="middle">hidden; must start ak_</text>
-<path class="edge" d="M296,188 V208 H112 V224" marker-end="url(#c1a)"/>
+<text class="s" x="112" y="263" text-anchor="middle">hidden, must start ak_</text>
+<path class="edge dash" d="M296,188 V208 H112 V224" marker-end="url(#c1a)"/>
 <text class="lbl" x="204" y="203" text-anchor="middle">the list</text>
 <rect class="box" x="216" y="310" width="160" height="46" rx="8"/>
 <text class="m" x="296" y="330" text-anchor="middle">GET spaces/0000...</text>
@@ -455,103 +456,123 @@ html { scroll-behavior: smooth; }
 <text class="lbl" x="204" y="287" text-anchor="middle">your key</text>
 <rect class="box" x="400" y="394" width="160" height="46" rx="8"/>
 <text class="t" x="480" y="414" text-anchor="middle">Space not found</text>
-<text class="s" x="480" y="431" text-anchor="middle">404 means the key works</text>
+<text class="s" x="480" y="431" text-anchor="middle">404: the key works</text>
 <path class="edge" d="M296,356 V376 H480 V392" marker-end="url(#c1a)"/>
 <text class="lbl" x="388" y="371" text-anchor="middle">forwarded</text>
-<rect class="box hot" x="32" y="478" width="160" height="46" rx="8"/>
-<text class="t" x="112" y="498" text-anchor="middle">save key + URL</text>
-<text class="s" x="112" y="515" text-anchor="middle">~/.config/xo/credentials</text>
-<path class="edge hot" d="M480,440 V460 H112 V476" marker-end="url(#c1h)"/>
-<text class="lbl hot" x="296" y="455" text-anchor="middle">404</text>
-<rect class="box" x="768" y="562" width="160" height="46" rx="8"/>
-<text class="m" x="848" y="582" text-anchor="middle">coder login</text>
-<text class="s" x="848" y="599" text-anchor="middle">in your terminal</text>
-<path class="edge" d="M112,524 V544 H848 V560" marker-end="url(#c1a)"/>
-<text class="lbl" x="480" y="539" text-anchor="middle">then</text>
+<rect class="box" x="216" y="478" width="160" height="46" rx="8"/>
+<text class="t" x="296" y="498" text-anchor="middle">passes it back</text>
+<text class="s" x="296" y="515" text-anchor="middle">XO&#x27;s answer as sent</text>
+<path class="edge dash" d="M480,440 V460 H296 V476" marker-end="url(#c1a)"/>
+<text class="lbl" x="388" y="455" text-anchor="middle">404</text>
+<rect class="box hot" x="32" y="562" width="160" height="46" rx="8"/>
+<text class="t" x="112" y="582" text-anchor="middle">save key + URL</text>
+<text class="s" x="112" y="599" text-anchor="middle">~/.config/xo/credentials</text>
+<path class="edge hot dash" d="M296,524 V544 H112 V560" marker-end="url(#c1h)"/>
+<text class="lbl hot" x="204" y="539" text-anchor="middle">404</text>
 <rect class="box" x="584" y="646" width="160" height="46" rx="8"/>
-<text class="m" x="664" y="666" text-anchor="middle">gh auth login</text>
-<text class="s" x="664" y="683" text-anchor="middle">only if not logged in</text>
-<path class="edge" d="M848,608 V628 H664 V644" marker-end="url(#c1a)"/>
-<text class="lbl" x="756" y="623" text-anchor="middle">then</text>
+<text class="m" x="664" y="666" text-anchor="middle">coder login</text>
+<text class="s" x="664" y="683" text-anchor="middle">in your terminal</text>
+<path class="edge" d="M112,608 V628 H664 V644" marker-end="url(#c1a)"/>
+<text class="lbl" x="388" y="623" text-anchor="middle">runs</text>
+<rect class="box" x="32" y="730" width="160" height="46" rx="8"/>
+<text class="t" x="112" y="750" text-anchor="middle">one line each</text>
+<text class="s" x="112" y="767" text-anchor="middle">me, xo, then coder</text>
+<path class="edge dash" d="M664,692 V712 H112 V728" marker-end="url(#c1a)"/>
+<text class="lbl" x="388" y="707" text-anchor="middle">logged in</text>
+<rect class="box" x="768" y="814" width="160" height="46" rx="8"/>
+<text class="m" x="848" y="834" text-anchor="middle">gh auth login</text>
+<text class="s" x="848" y="851" text-anchor="middle">only if not logged in</text>
+<path class="edge" d="M112,776 V796 H848 V812" marker-end="url(#c1a)"/>
+<text class="lbl" x="480" y="791" text-anchor="middle">runs</text>
 </svg>
 </div>
-<figcaption><strong>A key is saved only after XO accepts it.</strong> A 401, or the server's own bare 404, saves nothing. Each service prints one line; <code>xo login xo</code>, <code>coder</code> or <code>github</code> does just that one.</figcaption>
+<figcaption><strong>A key is saved only after XO accepts it.</strong> A 401, or the server&#x27;s own bare 404, saves nothing. xo also asks the server&#x27;s <code>/me</code> whose key it is, for the line it prints. Each service prints one line; <code>xo login xo</code>, <code>coder</code> or <code>github</code> does just that one.</figcaption>
 </figure>
 <h4><code>xo logout</code></h4>
 <figure>
 <div class="canvas">
-<svg class="d" viewBox="0 0 960 374" role="img" aria-label="xo logout: Logout is local first.">
+<svg class="d" viewBox="0 0 960 458" role="img" aria-label="xo logout: Logout is local first.">
 <defs>
 <marker id="c2a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
 <marker id="c2h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
-</defs>
-<line class="life" x1="240" y1="40" x2="240" y2="368"/>
-<rect class="hdr" x="135" y="12" width="210" height="28" rx="7"/>
-<text class="t" x="240" y="31" text-anchor="middle">You: xo CLI</text>
-<line class="life" x1="480" y1="40" x2="480" y2="368"/>
-<rect class="hdr" x="375" y="12" width="210" height="28" rx="7"/>
-<text class="t" x="480" y="31" text-anchor="middle">git · GitHub</text>
-<line class="life" x1="720" y1="40" x2="720" y2="368"/>
-<rect class="hdr" x="615" y="12" width="210" height="28" rx="7"/>
-<text class="t" x="720" y="31" text-anchor="middle">Coder</text>
-<rect class="box" x="135" y="58" width="210" height="46" rx="8"/>
-<text class="m" x="240" y="86" text-anchor="middle">xo logout</text>
-<rect class="box hot" x="135" y="142" width="210" height="46" rx="8"/>
-<text class="t" x="240" y="162" text-anchor="middle">delete key + addresses</text>
-<text class="s" x="240" y="179" text-anchor="middle">the files login saved</text>
-<line class="edge hot" x1="240" y1="104" x2="240" y2="140" marker-end="url(#c2h)"/>
-<rect class="box" x="615" y="226" width="210" height="46" rx="8"/>
-<text class="m" x="720" y="246" text-anchor="middle">coder logout</text>
-<text class="s" x="720" y="263" text-anchor="middle">asks; xo&#x27;s deployment only</text>
-<path class="edge dash" d="M240,188 V208 H720 V224" marker-end="url(#c2a)"/>
-<text class="lbl" x="480" y="203" text-anchor="middle">if logged in there</text>
-<rect class="box" x="375" y="310" width="210" height="46" rx="8"/>
-<text class="m" x="480" y="330" text-anchor="middle">gh auth logout</text>
-<text class="s" x="480" y="347" text-anchor="middle">asks first</text>
-<path class="edge dash" d="M720,272 V292 H480 V308" marker-end="url(#c2a)"/>
-<text class="lbl" x="600" y="287" text-anchor="middle">if you say yes</text>
-</svg>
-</div>
-<figcaption><strong>Logout is local first.</strong> Coder and gh are logged out only where they point at xo's deployment and github.com, and only after asking.</figcaption>
-</figure>
-<h4><code>xo status</code></h4>
-<figure>
-<div class="canvas">
-<svg class="d" viewBox="0 0 960 458" role="img" aria-label="xo status: Status sends no key.">
-<defs>
-<marker id="c3a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
-<marker id="c3h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
 </defs>
 <line class="life" x1="240" y1="40" x2="240" y2="452"/>
 <rect class="hdr" x="135" y="12" width="210" height="28" rx="7"/>
 <text class="t" x="240" y="31" text-anchor="middle">You: xo CLI</text>
 <line class="life" x1="480" y1="40" x2="480" y2="452"/>
 <rect class="hdr" x="375" y="12" width="210" height="28" rx="7"/>
-<text class="t" x="480" y="31" text-anchor="middle">git · GitHub</text>
+<text class="t" x="480" y="31" text-anchor="middle">coder · Coder</text>
 <line class="life" x1="720" y1="40" x2="720" y2="452"/>
 <rect class="hdr" x="615" y="12" width="210" height="28" rx="7"/>
-<text class="t" x="720" y="31" text-anchor="middle">Coder</text>
+<text class="t" x="720" y="31" text-anchor="middle">gh · GitHub</text>
+<rect class="box" x="135" y="58" width="210" height="46" rx="8"/>
+<text class="m" x="240" y="86" text-anchor="middle">xo logout</text>
+<rect class="box hot" x="135" y="142" width="210" height="46" rx="8"/>
+<text class="t" x="240" y="162" text-anchor="middle">delete key + addresses</text>
+<text class="s" x="240" y="179" text-anchor="middle">the files login saved</text>
+<line class="edge hot" x1="240" y1="104" x2="240" y2="140" marker-end="url(#c2h)"/>
+<rect class="box" x="375" y="226" width="210" height="46" rx="8"/>
+<text class="m" x="480" y="246" text-anchor="middle">coder logout</text>
+<text class="s" x="480" y="263" text-anchor="middle">asks, xo&#x27;s deployment only</text>
+<path class="edge" d="M240,188 V208 H480 V224" marker-end="url(#c2a)"/>
+<text class="lbl" x="360" y="203" text-anchor="middle">if logged in there</text>
+<rect class="box" x="135" y="310" width="210" height="46" rx="8"/>
+<text class="t" x="240" y="330" text-anchor="middle">one line</text>
+<text class="s" x="240" y="347" text-anchor="middle">then GitHub</text>
+<path class="edge dash" d="M480,272 V292 H240 V308" marker-end="url(#c2a)"/>
+<text class="lbl" x="360" y="287" text-anchor="middle">done</text>
+<rect class="box" x="615" y="394" width="210" height="46" rx="8"/>
+<text class="m" x="720" y="414" text-anchor="middle">gh auth logout</text>
+<text class="s" x="720" y="431" text-anchor="middle">asks first</text>
+<path class="edge" d="M240,356 V376 H720 V392" marker-end="url(#c2a)"/>
+<text class="lbl" x="480" y="371" text-anchor="middle">if gh is installed</text>
+</svg>
+</div>
+<figcaption><strong>Logout is local first.</strong> Coder and gh are logged out only where they point at xo&#x27;s deployment and github.com, and only after asking.</figcaption>
+</figure>
+<h4><code>xo status</code></h4>
+<figure>
+<div class="canvas">
+<svg class="d" viewBox="0 0 960 542" role="img" aria-label="xo status: Status sends no key.">
+<defs>
+<marker id="c3a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
+<marker id="c3h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
+</defs>
+<line class="life" x1="240" y1="40" x2="240" y2="536"/>
+<rect class="hdr" x="135" y="12" width="210" height="28" rx="7"/>
+<text class="t" x="240" y="31" text-anchor="middle">You: xo CLI</text>
+<line class="life" x1="480" y1="40" x2="480" y2="536"/>
+<rect class="hdr" x="375" y="12" width="210" height="28" rx="7"/>
+<text class="t" x="480" y="31" text-anchor="middle">coder · Coder</text>
+<line class="life" x1="720" y1="40" x2="720" y2="536"/>
+<rect class="hdr" x="615" y="12" width="210" height="28" rx="7"/>
+<text class="t" x="720" y="31" text-anchor="middle">gh · GitHub</text>
 <rect class="box" x="135" y="58" width="210" height="46" rx="8"/>
 <text class="m" x="240" y="86" text-anchor="middle">xo status</text>
 <rect class="box" x="135" y="142" width="210" height="46" rx="8"/>
 <text class="t" x="240" y="162" text-anchor="middle">read saved login</text>
 <text class="s" x="240" y="179" text-anchor="middle">never prints the key</text>
 <line class="edge" x1="240" y1="104" x2="240" y2="140" marker-end="url(#c3a)"/>
-<rect class="box" x="615" y="226" width="210" height="46" rx="8"/>
-<text class="t" x="720" y="246" text-anchor="middle">where is Coder?</text>
-<text class="s" x="720" y="263" text-anchor="middle">asked without a URL</text>
-<path class="edge" d="M240,188 V208 H720 V224" marker-end="url(#c3a)"/>
-<text class="lbl" x="480" y="203" text-anchor="middle">ask</text>
-<rect class="box" x="375" y="310" width="210" height="46" rx="8"/>
-<text class="m" x="480" y="330" text-anchor="middle">gh auth status</text>
-<text class="s" x="480" y="347" text-anchor="middle">who, on github.com</text>
-<path class="edge" d="M720,272 V292 H480 V308" marker-end="url(#c3a)"/>
-<text class="lbl" x="600" y="287" text-anchor="middle">ask</text>
-<rect class="box hot" x="135" y="394" width="210" height="46" rx="8"/>
-<text class="t" x="240" y="414" text-anchor="middle">four rows</text>
-<text class="s" x="240" y="431" text-anchor="middle">me, xo, coder, github</text>
-<path class="edge hot" d="M480,356 V376 H240 V392" marker-end="url(#c3h)"/>
-<text class="lbl hot" x="360" y="371" text-anchor="middle">answers</text>
+<rect class="box" x="375" y="226" width="210" height="46" rx="8"/>
+<text class="m" x="480" y="246" text-anchor="middle">coder whoami</text>
+<text class="s" x="480" y="263" text-anchor="middle">asked without a URL</text>
+<path class="edge" d="M240,188 V208 H480 V224" marker-end="url(#c3a)"/>
+<text class="lbl" x="360" y="203" text-anchor="middle">ask</text>
+<rect class="box" x="135" y="310" width="210" height="46" rx="8"/>
+<text class="t" x="240" y="330" text-anchor="middle">coder row</text>
+<text class="s" x="240" y="347" text-anchor="middle">where, and as whom</text>
+<path class="edge dash" d="M480,272 V292 H240 V308" marker-end="url(#c3a)"/>
+<text class="lbl" x="360" y="287" text-anchor="middle">answer</text>
+<rect class="box" x="615" y="394" width="210" height="46" rx="8"/>
+<text class="m" x="720" y="414" text-anchor="middle">gh auth status</text>
+<text class="s" x="720" y="431" text-anchor="middle">who, on github.com</text>
+<path class="edge" d="M240,356 V376 H720 V392" marker-end="url(#c3a)"/>
+<text class="lbl" x="480" y="371" text-anchor="middle">ask</text>
+<rect class="box hot" x="135" y="478" width="210" height="46" rx="8"/>
+<text class="t" x="240" y="498" text-anchor="middle">four rows</text>
+<text class="s" x="240" y="515" text-anchor="middle">me, xo, coder, github</text>
+<path class="edge hot dash" d="M720,440 V460 H240 V476" marker-end="url(#c3h)"/>
+<text class="lbl hot" x="480" y="455" text-anchor="middle">answer</text>
 </svg>
 </div>
 <figcaption><strong>Status sends no key.</strong> It only asks the Coder and GitHub CLIs who they are logged in as.</figcaption>
@@ -561,18 +582,18 @@ html { scroll-behavior: smooth; }
 <h4><code>xo me</code></h4>
 <figure>
 <div class="canvas">
-<svg class="d" viewBox="0 0 960 542" role="img" aria-label="xo me: You see your own metadata, masked.">
+<svg class="d" viewBox="0 0 960 626" role="img" aria-label="xo me: You see your own metadata, masked.">
 <defs>
 <marker id="c4a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
 <marker id="c4h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
 </defs>
-<line class="life" x1="240" y1="40" x2="240" y2="536"/>
+<line class="life" x1="240" y1="40" x2="240" y2="620"/>
 <rect class="hdr" x="135" y="12" width="210" height="28" rx="7"/>
 <text class="t" x="240" y="31" text-anchor="middle">You: xo CLI</text>
-<line class="life" x1="480" y1="40" x2="480" y2="536"/>
+<line class="life" x1="480" y1="40" x2="480" y2="620"/>
 <rect class="hdr" x="375" y="12" width="210" height="28" rx="7"/>
 <text class="t" x="480" y="31" text-anchor="middle">xo server</text>
-<line class="life" x1="720" y1="40" x2="720" y2="536"/>
+<line class="life" x1="720" y1="40" x2="720" y2="620"/>
 <rect class="hdr" x="615" y="12" width="210" height="28" rx="7"/>
 <text class="t" x="720" y="31" text-anchor="middle">Clerk</text>
 <rect class="box" x="135" y="58" width="210" height="46" rx="8"/>
@@ -587,20 +608,26 @@ html { scroll-behavior: smooth; }
 <text class="s" x="720" y="263" text-anchor="middle">every call, never cached</text>
 <path class="edge" d="M480,188 V208 H720 V224" marker-end="url(#c4a)"/>
 <text class="lbl" x="600" y="203" text-anchor="middle">verify</text>
-<rect class="box" x="615" y="310" width="210" height="46" rx="8"/>
-<text class="t" x="720" y="330" text-anchor="middle">read user</text>
-<text class="s" x="720" y="347" text-anchor="middle">profile cached 60 s</text>
-<line class="edge" x1="720" y1="272" x2="720" y2="308" marker-end="url(#c4a)"/>
-<rect class="box hot" x="375" y="394" width="210" height="46" rx="8"/>
-<text class="t" x="480" y="414" text-anchor="middle">mask secrets</text>
-<text class="s" x="480" y="431" text-anchor="middle">email + both buckets</text>
-<path class="edge hot" d="M720,356 V376 H480 V392" marker-end="url(#c4h)"/>
-<text class="lbl hot" x="600" y="371" text-anchor="middle">user</text>
-<rect class="box" x="135" y="478" width="210" height="46" rx="8"/>
-<text class="t" x="240" y="498" text-anchor="middle">print profile</text>
-<text class="s" x="240" y="515" text-anchor="middle">{&quot;xo&quot;: {...}}</text>
-<path class="edge" d="M480,440 V460 H240 V476" marker-end="url(#c4a)"/>
-<text class="lbl" x="360" y="455" text-anchor="middle">profile</text>
+<rect class="box" x="375" y="310" width="210" height="46" rx="8"/>
+<text class="t" x="480" y="330" text-anchor="middle">key is valid</text>
+<text class="s" x="480" y="347" text-anchor="middle">its user id</text>
+<path class="edge dash" d="M720,272 V292 H480 V308" marker-end="url(#c4a)"/>
+<text class="lbl" x="600" y="287" text-anchor="middle">user id</text>
+<rect class="box" x="615" y="394" width="210" height="46" rx="8"/>
+<text class="t" x="720" y="414" text-anchor="middle">read user</text>
+<text class="s" x="720" y="431" text-anchor="middle">cached 60 s by the server</text>
+<path class="edge" d="M480,356 V376 H720 V392" marker-end="url(#c4a)"/>
+<text class="lbl" x="600" y="371" text-anchor="middle">if not cached</text>
+<rect class="box hot" x="375" y="478" width="210" height="46" rx="8"/>
+<text class="t" x="480" y="498" text-anchor="middle">mask secrets</text>
+<text class="s" x="480" y="515" text-anchor="middle">email + both buckets</text>
+<path class="edge hot dash" d="M720,440 V460 H480 V476" marker-end="url(#c4h)"/>
+<text class="lbl hot" x="600" y="455" text-anchor="middle">user</text>
+<rect class="box" x="135" y="562" width="210" height="46" rx="8"/>
+<text class="t" x="240" y="582" text-anchor="middle">print profile</text>
+<text class="s" x="240" y="599" text-anchor="middle">{&quot;xo&quot;: {...}}</text>
+<path class="edge dash" d="M480,524 V544 H240 V560" marker-end="url(#c4a)"/>
+<text class="lbl" x="360" y="539" text-anchor="middle">profile</text>
 </svg>
 </div>
 <figcaption><strong>You see your own metadata, masked.</strong> Values under credential-like names, or that look like keys, show only their last 4 characters or <code>(hidden)</code>. <code>XO_ME_PRIVATE_KEYS</code> can narrow the private keys shown.</figcaption>
@@ -635,23 +662,25 @@ html { scroll-behavior: smooth; }
 <text class="s" x="720" y="263" text-anchor="middle">has claim xo_admin?</text>
 <path class="edge" d="M480,188 V208 H720 V224" marker-end="url(#c5a)"/>
 <text class="lbl" x="600" y="203" text-anchor="middle">verify</text>
-<rect class="box hot" x="375" y="310" width="210" height="46" rx="8"/>
+<rect class="box" x="375" y="310" width="210" height="46" rx="8"/>
 <text class="t" x="480" y="330" text-anchor="middle">admin check</text>
 <text class="s" x="480" y="347" text-anchor="middle">id in XO_ADMIN_KEY_IDS</text>
-<path class="edge hot" d="M720,272 V292 H480 V308" marker-end="url(#c5h)"/>
-<text class="lbl hot" x="600" y="287" text-anchor="middle">claims</text>
-<rect class="box" x="615" y="394" width="210" height="46" rx="8"/>
-<text class="m" x="720" y="414" text-anchor="middle">GET or PATCH user</text>
+<path class="edge dash" d="M720,272 V292 H480 V308" marker-end="url(#c5a)"/>
+<text class="lbl" x="600" y="287" text-anchor="middle">claims</text>
+<rect class="box hot" x="615" y="394" width="210" height="46" rx="8"/>
+<text class="t" x="720" y="414" text-anchor="middle">GET or PATCH user</text>
 <text class="s" x="720" y="431" text-anchor="middle">allow-listed keys only</text>
-<path class="edge" d="M480,356 V376 H720 V392" marker-end="url(#c5a)"/>
-<text class="lbl" x="600" y="371" text-anchor="middle">if admin</text>
+<path class="edge hot" d="M480,356 V376 H720 V392" marker-end="url(#c5h)"/>
+<text class="lbl hot" x="600" y="371" text-anchor="middle">if admin</text>
 <rect class="box" x="375" y="478" width="210" height="46" rx="8"/>
 <text class="t" x="480" y="498" text-anchor="middle">audit line</text>
 <text class="s" x="480" y="515" text-anchor="middle">ids and key names only</text>
-<path class="edge" d="M720,440 V460 H480 V476" marker-end="url(#c5a)"/>
+<path class="edge dash" d="M720,440 V460 H480 V476" marker-end="url(#c5a)"/>
+<text class="lbl" x="600" y="455" text-anchor="middle">user</text>
 <rect class="box" x="135" y="562" width="210" height="46" rx="8"/>
-<text class="t" x="240" y="590" text-anchor="middle">both buckets</text>
-<path class="edge" d="M480,524 V544 H240 V560" marker-end="url(#c5a)"/>
+<text class="t" x="240" y="582" text-anchor="middle">print answer</text>
+<text class="s" x="240" y="599" text-anchor="middle">both buckets</text>
+<path class="edge dash" d="M480,524 V544 H240 V560" marker-end="url(#c5a)"/>
 <text class="lbl" x="360" y="539" text-anchor="middle">answer</text>
 </svg>
 </div>
@@ -662,21 +691,21 @@ html { scroll-behavior: smooth; }
 <h4><code>xo create space NAME KIND</code></h4>
 <figure>
 <div class="canvas">
-<svg class="d" viewBox="0 0 960 542" role="img" aria-label="xo create space NAME KIND: One name, on XO and in your spaces.">
+<svg class="d" viewBox="0 0 960 794" role="img" aria-label="xo create space NAME KIND: One name, on XO and in your spaces.">
 <defs>
 <marker id="c6a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
 <marker id="c6h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
 </defs>
-<line class="life" x1="135" y1="40" x2="135" y2="536"/>
+<line class="life" x1="135" y1="40" x2="135" y2="788"/>
 <rect class="hdr" x="32" y="12" width="206" height="28" rx="7"/>
 <text class="t" x="135" y="31" text-anchor="middle">You: xo CLI</text>
-<line class="life" x1="365" y1="40" x2="365" y2="536"/>
+<line class="life" x1="365" y1="40" x2="365" y2="788"/>
 <rect class="hdr" x="262" y="12" width="206" height="28" rx="7"/>
 <text class="t" x="365" y="31" text-anchor="middle">xo server</text>
-<line class="life" x1="595" y1="40" x2="595" y2="536"/>
+<line class="life" x1="595" y1="40" x2="595" y2="788"/>
 <rect class="hdr" x="492" y="12" width="206" height="28" rx="7"/>
 <text class="t" x="595" y="31" text-anchor="middle">Clerk</text>
-<line class="life" x1="825" y1="40" x2="825" y2="536"/>
+<line class="life" x1="825" y1="40" x2="825" y2="788"/>
 <rect class="hdr" x="722" y="12" width="206" height="28" rx="7"/>
 <text class="t" x="825" y="31" text-anchor="middle">XO core API</text>
 <rect class="box" x="32" y="58" width="206" height="46" rx="8"/>
@@ -684,30 +713,46 @@ html { scroll-behavior: smooth; }
 <text class="s" x="135" y="95" text-anchor="middle">KIND&#x27;s flags, no --name</text>
 <rect class="box" x="262" y="142" width="206" height="46" rx="8"/>
 <text class="m" x="365" y="162" text-anchor="middle">POST /me/spaces</text>
-<text class="s" x="365" y="179" text-anchor="middle">name, room, 6KB first</text>
+<text class="s" x="365" y="179" text-anchor="middle">kind, name, body</text>
 <path class="edge" d="M135,104 V124 H365 V140" marker-end="url(#c6a)"/>
 <text class="lbl" x="250" y="119" text-anchor="middle">kind + body</text>
-<rect class="box" x="722" y="226" width="206" height="46" rx="8"/>
-<text class="t" x="825" y="246" text-anchor="middle">create space</text>
-<text class="s" x="825" y="263" text-anchor="middle">named dev on XO too</text>
-<path class="edge" d="M365,188 V208 H825 V224" marker-end="url(#c6a)"/>
-<text class="lbl" x="595" y="203" text-anchor="middle">POST + key</text>
+<rect class="box" x="492" y="226" width="206" height="46" rx="8"/>
+<text class="t" x="595" y="246" text-anchor="middle">verify, read user</text>
+<text class="s" x="595" y="263" text-anchor="middle">name free? room? 6KB?</text>
+<path class="edge" d="M365,188 V208 H595 V224" marker-end="url(#c6a)"/>
+<text class="lbl" x="480" y="203" text-anchor="middle">verify</text>
 <rect class="box" x="262" y="310" width="206" height="46" rx="8"/>
-<text class="t" x="365" y="338" text-anchor="middle">got the id</text>
-<path class="edge" d="M825,272 V292 H365 V308" marker-end="url(#c6a)"/>
-<text class="lbl" x="595" y="287" text-anchor="middle">new id</text>
-<rect class="box hot" x="492" y="394" width="206" height="46" rx="8"/>
-<text class="t" x="595" y="414" text-anchor="middle">merge {spaces}</text>
-<text class="s" x="595" y="431" text-anchor="middle">name, kind, id, rev 1</text>
-<path class="edge hot" d="M365,356 V376 H595 V392" marker-end="url(#c6h)"/>
-<text class="lbl hot" x="480" y="371" text-anchor="middle">write</text>
-<rect class="box" x="32" y="478" width="206" height="46" rx="8"/>
-<text class="t" x="135" y="506" text-anchor="middle">space recorded</text>
-<path class="edge" d="M595,440 V460 H135 V476" marker-end="url(#c6a)"/>
-<text class="lbl" x="365" y="455" text-anchor="middle">200</text>
+<text class="t" x="365" y="330" text-anchor="middle">checks pass</text>
+<text class="s" x="365" y="347" text-anchor="middle">before XO is called</text>
+<path class="edge dash" d="M595,272 V292 H365 V308" marker-end="url(#c6a)"/>
+<text class="lbl" x="480" y="287" text-anchor="middle">user</text>
+<rect class="box" x="722" y="394" width="206" height="46" rx="8"/>
+<text class="t" x="825" y="414" text-anchor="middle">create space</text>
+<text class="s" x="825" y="431" text-anchor="middle">named dev on XO too</text>
+<path class="edge" d="M365,356 V376 H825 V392" marker-end="url(#c6a)"/>
+<text class="lbl" x="595" y="371" text-anchor="middle">POST + key</text>
+<rect class="box" x="262" y="478" width="206" height="46" rx="8"/>
+<text class="t" x="365" y="506" text-anchor="middle">got the id</text>
+<path class="edge dash" d="M825,440 V460 H365 V476" marker-end="url(#c6a)"/>
+<text class="lbl" x="595" y="455" text-anchor="middle">new id</text>
+<rect class="box hot" x="492" y="562" width="206" height="46" rx="8"/>
+<text class="t" x="595" y="582" text-anchor="middle">merge {spaces}</text>
+<text class="s" x="595" y="599" text-anchor="middle">name, kind, id, rev 1</text>
+<path class="edge hot" d="M365,524 V544 H595 V560" marker-end="url(#c6h)"/>
+<text class="lbl hot" x="480" y="539" text-anchor="middle">write</text>
+<rect class="box" x="262" y="646" width="206" height="46" rx="8"/>
+<text class="t" x="365" y="666" text-anchor="middle">read back</text>
+<text class="s" x="365" y="683" text-anchor="middle">after 0.3 s</text>
+<path class="edge dash" d="M595,608 V628 H365 V644" marker-end="url(#c6a)"/>
+<text class="lbl" x="480" y="623" text-anchor="middle">written</text>
+<rect class="box" x="32" y="730" width="206" height="46" rx="8"/>
+<text class="t" x="135" y="750" text-anchor="middle">print the space</text>
+<text class="s" x="135" y="767" text-anchor="middle">XO&#x27;s answer, masked</text>
+<path class="edge dash" d="M365,692 V712 H135 V728" marker-end="url(#c6a)"/>
+<text class="lbl" x="250" y="707" text-anchor="middle">200</text>
 </svg>
 </div>
-<figcaption><strong>One name, on XO and in your spaces.</strong> KIND is <code>claude-code</code>, <code>codex</code>, <code>antigravity</code>, <code>hermes</code>, <code>openclaw</code>, <code>xo-cowork</code> or <code>nebius-openclaw</code>; NAME is 1 to 32 letters, digits or hyphens. Everything recording needs is checked before XO is called. Every kind but <code>nebius-openclaw</code> stores your key inside the new space, and xo says so first.</figcaption>
+<figcaption><strong>One name, on XO and in your spaces.</strong> KIND is <code>claude-code</code>, <code>codex</code>, <code>antigravity</code>, <code>hermes</code>, <code>openclaw</code>, <code>xo-cowork</code> or <code>nebius-openclaw</code>; NAME is 1 to 32 letters, digits or hyphens. XO lowercases space names, so xo lowercases NAME before it sends it and says so when that changes it. Everything recording needs is checked before XO is called. Every kind but <code>nebius-openclaw</code> stores your key inside the new space, and xo says so first.</figcaption>
 </figure>
 <h4><code>xo claude-code | codex | ... (removed)</code></h4>
 <figure>
@@ -734,47 +779,52 @@ html { scroll-behavior: smooth; }
 <h4><code>xo spaces --space-id ID</code></h4>
 <figure>
 <div class="canvas">
-<svg class="d" viewBox="0 0 960 374" role="img" aria-label="xo spaces --space-id ID: The only way back to a space XO made.">
+<svg class="d" viewBox="0 0 960 458" role="img" aria-label="xo spaces --space-id ID: The only way back to a space XO made.">
 <defs>
 <marker id="c8a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
 <marker id="c8h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
 </defs>
-<line class="life" x1="240" y1="40" x2="240" y2="368"/>
+<line class="life" x1="240" y1="40" x2="240" y2="452"/>
 <rect class="hdr" x="135" y="12" width="210" height="28" rx="7"/>
 <text class="t" x="240" y="31" text-anchor="middle">You: xo CLI</text>
-<line class="life" x1="480" y1="40" x2="480" y2="368"/>
+<line class="life" x1="480" y1="40" x2="480" y2="452"/>
 <rect class="hdr" x="375" y="12" width="210" height="28" rx="7"/>
 <text class="t" x="480" y="31" text-anchor="middle">xo server</text>
-<line class="life" x1="720" y1="40" x2="720" y2="368"/>
+<line class="life" x1="720" y1="40" x2="720" y2="452"/>
 <rect class="hdr" x="615" y="12" width="210" height="28" rx="7"/>
 <text class="t" x="720" y="31" text-anchor="middle">XO core API</text>
 <rect class="box" x="135" y="58" width="210" height="46" rx="8"/>
 <text class="m" x="240" y="86" text-anchor="middle">xo spaces --space-id</text>
 <rect class="box" x="375" y="142" width="210" height="46" rx="8"/>
-<text class="m" x="480" y="162" text-anchor="middle">/api/core/v1/spaces/ID</text>
+<text class="m" x="480" y="162" text-anchor="middle">GET /api/core/v1/spaces/ID</text>
 <text class="s" x="480" y="179" text-anchor="middle">id: 64 safe characters</text>
 <path class="edge" d="M240,104 V124 H480 V140" marker-end="url(#c8a)"/>
 <text class="lbl" x="360" y="119" text-anchor="middle">GET + key</text>
-<rect class="box" x="615" y="226" width="210" height="46" rx="8"/>
+<rect class="box hot" x="615" y="226" width="210" height="46" rx="8"/>
 <text class="t" x="720" y="246" text-anchor="middle">read space</text>
 <text class="s" x="720" y="263" text-anchor="middle">owner only</text>
-<path class="edge" d="M480,188 V208 H720 V224" marker-end="url(#c8a)"/>
-<text class="lbl" x="600" y="203" text-anchor="middle">same key</text>
-<rect class="box hot" x="135" y="310" width="210" height="46" rx="8"/>
-<text class="t" x="240" y="330" text-anchor="middle">connection URLs</text>
-<text class="s" x="240" y="347" text-anchor="middle">carry a session token</text>
-<path class="edge hot" d="M720,272 V292 H240 V308" marker-end="url(#c8h)"/>
-<text class="lbl hot" x="480" y="287" text-anchor="middle">answer</text>
+<path class="edge hot" d="M480,188 V208 H720 V224" marker-end="url(#c8h)"/>
+<text class="lbl hot" x="600" y="203" text-anchor="middle">same key</text>
+<rect class="box" x="375" y="310" width="210" height="46" rx="8"/>
+<text class="t" x="480" y="330" text-anchor="middle">passes it back</text>
+<text class="s" x="480" y="347" text-anchor="middle">as XO sent it</text>
+<path class="edge dash" d="M720,272 V292 H480 V308" marker-end="url(#c8a)"/>
+<text class="lbl" x="600" y="287" text-anchor="middle">answer</text>
+<rect class="box" x="135" y="394" width="210" height="46" rx="8"/>
+<text class="t" x="240" y="414" text-anchor="middle">print</text>
+<text class="s" x="240" y="431" text-anchor="middle">connection URLs</text>
+<path class="edge dash" d="M480,356 V376 H240 V392" marker-end="url(#c8a)"/>
+<text class="lbl" x="360" y="371" text-anchor="middle">answer</text>
 </svg>
 </div>
-<figcaption><strong>The only way back to a space XO made.</strong> The API has no list, delete, start or stop. Treat the URLs as secrets: their token lasts up to an hour.</figcaption>
+<figcaption><strong>The only way back to a space XO made.</strong> The API has no list, delete, start or stop. Treat the URLs as secrets: they carry a session token.</figcaption>
 </figure>
-<h3 id="cmd-projects-and-spaces-in-your-metadata">Projects and spaces in your metadata</h3>
-<p>Each write goes through the server's one engine: a per-user lock, a write that names one list, a read-back after 0.3 s, up to 3 writes.</p>
+<h3 id="cmd-projects-and-spaces-in-your-metadata">Projects, spaces and sharing in your metadata</h3>
+<p>Each write goes through the server&#x27;s one engine: a per-user lock, a write that names only the keys it changes, a read-back after 0.3 s, up to 3 writes.</p>
 <h4><code>xo projects [add NAME]</code></h4>
 <figure>
 <div class="canvas">
-<svg class="d" viewBox="0 0 960 626" role="img" aria-label="xo projects [add NAME]: Only the projects list changes.">
+<svg class="d" viewBox="0 0 960 626" role="img" aria-label="xo projects [add NAME]: Only the `projects` list changes.">
 <defs>
 <marker id="c9a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
 <marker id="c9h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
@@ -803,22 +853,22 @@ html { scroll-behavior: smooth; }
 <rect class="box" x="375" y="310" width="210" height="46" rx="8"/>
 <text class="t" x="480" y="330" text-anchor="middle">append name</text>
 <text class="s" x="480" y="347" text-anchor="middle">rules, 30 max, 6KB</text>
-<path class="edge" d="M720,272 V292 H480 V308" marker-end="url(#c9a)"/>
-<text class="lbl" x="600" y="287" text-anchor="middle">list</text>
+<path class="edge dash" d="M720,272 V292 H480 V308" marker-end="url(#c9a)"/>
+<text class="lbl" x="600" y="287" text-anchor="middle">user</text>
 <rect class="box hot" x="615" y="394" width="210" height="46" rx="8"/>
 <text class="t" x="720" y="414" text-anchor="middle">merge {projects}</text>
 <text class="s" x="720" y="431" text-anchor="middle">nothing else written</text>
 <path class="edge hot" d="M480,356 V376 H720 V392" marker-end="url(#c9h)"/>
 <text class="lbl hot" x="600" y="371" text-anchor="middle">write</text>
-<rect class="box" x="615" y="478" width="210" height="46" rx="8"/>
-<text class="t" x="720" y="498" text-anchor="middle">read back</text>
-<text class="s" x="720" y="515" text-anchor="middle">dropped? write again</text>
-<line class="edge" x1="720" y1="440" x2="720" y2="476" marker-end="url(#c9a)"/>
-<text class="lbl" x="728" y="463">0.3 s</text>
+<rect class="box" x="375" y="478" width="210" height="46" rx="8"/>
+<text class="t" x="480" y="498" text-anchor="middle">read back</text>
+<text class="s" x="480" y="515" text-anchor="middle">dropped? write again</text>
+<path class="edge dash" d="M720,440 V460 H480 V476" marker-end="url(#c9a)"/>
+<text class="lbl" x="600" y="455" text-anchor="middle">written</text>
 <rect class="box" x="135" y="562" width="210" height="46" rx="8"/>
-<text class="t" x="240" y="590" text-anchor="middle">the new list</text>
-<path class="edge" d="M720,524 V544 H240 V560" marker-end="url(#c9a)"/>
-<text class="lbl" x="480" y="539" text-anchor="middle">200</text>
+<text class="t" x="240" y="590" text-anchor="middle">print the new list</text>
+<path class="edge dash" d="M480,524 V544 H240 V560" marker-end="url(#c9a)"/>
+<text class="lbl" x="360" y="539" text-anchor="middle">200</text>
 </svg>
 </div>
 <figcaption><strong>Only the <code>projects</code> list changes.</strong> A duplicate (ignoring case), a credential-like name, or a full list is refused with nothing written.</figcaption>
@@ -826,21 +876,21 @@ html { scroll-behavior: smooth; }
 <h4><code>xo create project NAME [URL]</code></h4>
 <figure>
 <div class="canvas">
-<svg class="d" viewBox="0 0 960 542" role="img" aria-label="xo create project NAME [URL]: A project is named after its repo.">
+<svg class="d" viewBox="0 0 960 626" role="img" aria-label="xo create project NAME [URL]: A project is named after its repo.">
 <defs>
 <marker id="c10a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
 <marker id="c10h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
 </defs>
-<line class="life" x1="135" y1="40" x2="135" y2="536"/>
+<line class="life" x1="135" y1="40" x2="135" y2="620"/>
 <rect class="hdr" x="32" y="12" width="206" height="28" rx="7"/>
 <text class="t" x="135" y="31" text-anchor="middle">You: xo CLI</text>
-<line class="life" x1="365" y1="40" x2="365" y2="536"/>
+<line class="life" x1="365" y1="40" x2="365" y2="620"/>
 <rect class="hdr" x="262" y="12" width="206" height="28" rx="7"/>
 <text class="t" x="365" y="31" text-anchor="middle">xo server</text>
-<line class="life" x1="595" y1="40" x2="595" y2="536"/>
+<line class="life" x1="595" y1="40" x2="595" y2="620"/>
 <rect class="hdr" x="492" y="12" width="206" height="28" rx="7"/>
 <text class="t" x="595" y="31" text-anchor="middle">Clerk</text>
-<line class="life" x1="825" y1="40" x2="825" y2="536"/>
+<line class="life" x1="825" y1="40" x2="825" y2="620"/>
 <rect class="hdr" x="722" y="12" width="206" height="28" rx="7"/>
 <text class="t" x="825" y="31" text-anchor="middle">git · GitHub</text>
 <rect class="box" x="32" y="58" width="206" height="46" rx="8"/>
@@ -856,18 +906,23 @@ html { scroll-behavior: smooth; }
 <path class="edge" d="M135,188 V208 H365 V224" marker-end="url(#c10a)"/>
 <text class="lbl" x="250" y="203" text-anchor="middle">name</text>
 <rect class="box" x="492" y="310" width="206" height="46" rx="8"/>
-<text class="t" x="595" y="338" text-anchor="middle">merge {projects}</text>
+<text class="t" x="595" y="330" text-anchor="middle">verify, read, merge</text>
+<text class="s" x="595" y="347" text-anchor="middle">{projects}, then read back</text>
 <path class="edge" d="M365,272 V292 H595 V308" marker-end="url(#c10a)"/>
 <text class="lbl" x="480" y="287" text-anchor="middle">write</text>
-<rect class="box" x="32" y="394" width="206" height="46" rx="8"/>
-<text class="t" x="135" y="422" text-anchor="middle">listed</text>
-<path class="edge" d="M595,356 V376 H135 V392" marker-end="url(#c10a)"/>
-<text class="lbl" x="365" y="371" text-anchor="middle">200</text>
-<rect class="box hot" x="722" y="478" width="206" height="46" rx="8"/>
-<text class="t" x="825" y="498" text-anchor="middle">clone or git init</text>
-<text class="s" x="825" y="515" text-anchor="middle">OWNER/REPO: clone</text>
-<path class="edge hot" d="M135,440 V460 H825 V476" marker-end="url(#c10h)"/>
-<text class="lbl hot" x="480" y="455" text-anchor="middle">make ./NAME</text>
+<rect class="box" x="262" y="394" width="206" height="46" rx="8"/>
+<text class="t" x="365" y="422" text-anchor="middle">listed</text>
+<path class="edge dash" d="M595,356 V376 H365 V392" marker-end="url(#c10a)"/>
+<text class="lbl" x="480" y="371" text-anchor="middle">written</text>
+<rect class="box" x="32" y="478" width="206" height="46" rx="8"/>
+<text class="t" x="135" y="506" text-anchor="middle">make ./NAME</text>
+<path class="edge dash" d="M365,440 V460 H135 V476" marker-end="url(#c10a)"/>
+<text class="lbl" x="250" y="455" text-anchor="middle">200</text>
+<rect class="box hot" x="722" y="562" width="206" height="46" rx="8"/>
+<text class="t" x="825" y="582" text-anchor="middle">clone or git init</text>
+<text class="s" x="825" y="599" text-anchor="middle">OWNER/REPO: clone</text>
+<path class="edge hot" d="M135,524 V544 H825 V560" marker-end="url(#c10h)"/>
+<text class="lbl hot" x="480" y="539" text-anchor="middle">runs git</text>
 </svg>
 </div>
 <figcaption><strong>A project is named after its repo.</strong> Give a name (<code>git init ./notes</code>), a GitHub URL (cloned as <code>OWNER/REPO</code>), or both when they name the same repository; a different name with a URL is refused before anything is sent. Record first, then make the folder.</figcaption>
@@ -875,21 +930,21 @@ html { scroll-behavior: smooth; }
 <h4><code>xo connect project:P --repo URL</code></h4>
 <figure>
 <div class="canvas">
-<svg class="d" viewBox="0 0 960 542" role="img" aria-label="xo connect project:P --repo URL: A project made with a name gets its repo later.">
+<svg class="d" viewBox="0 0 960 794" role="img" aria-label="xo connect project:P --repo URL: A project made with a name gets its repo later.">
 <defs>
 <marker id="c11a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
 <marker id="c11h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
 </defs>
-<line class="life" x1="135" y1="40" x2="135" y2="536"/>
+<line class="life" x1="135" y1="40" x2="135" y2="788"/>
 <rect class="hdr" x="32" y="12" width="206" height="28" rx="7"/>
 <text class="t" x="135" y="31" text-anchor="middle">You: xo CLI</text>
-<line class="life" x1="365" y1="40" x2="365" y2="536"/>
+<line class="life" x1="365" y1="40" x2="365" y2="788"/>
 <rect class="hdr" x="262" y="12" width="206" height="28" rx="7"/>
 <text class="t" x="365" y="31" text-anchor="middle">xo server</text>
-<line class="life" x1="595" y1="40" x2="595" y2="536"/>
+<line class="life" x1="595" y1="40" x2="595" y2="788"/>
 <rect class="hdr" x="492" y="12" width="206" height="28" rx="7"/>
 <text class="t" x="595" y="31" text-anchor="middle">Clerk</text>
-<line class="life" x1="825" y1="40" x2="825" y2="536"/>
+<line class="life" x1="825" y1="40" x2="825" y2="788"/>
 <rect class="hdr" x="722" y="12" width="206" height="28" rx="7"/>
 <text class="t" x="825" y="31" text-anchor="middle">git · GitHub</text>
 <rect class="box" x="32" y="58" width="206" height="46" rx="8"/>
@@ -901,70 +956,103 @@ html { scroll-behavior: smooth; }
 <path class="edge" d="M135,104 V124 H365 V140" marker-end="url(#c11a)"/>
 <text class="lbl" x="250" y="119" text-anchor="middle">name, repo</text>
 <rect class="box" x="492" y="226" width="206" height="46" rx="8"/>
-<text class="t" x="595" y="246" text-anchor="middle">read user</text>
+<text class="t" x="595" y="246" text-anchor="middle">verify, read user</text>
 <text class="s" x="595" y="263" text-anchor="middle">notes in no space?</text>
 <path class="edge" d="M365,188 V208 H595 V224" marker-end="url(#c11a)"/>
-<text class="lbl" x="480" y="203" text-anchor="middle">read</text>
-<rect class="box hot" x="492" y="310" width="206" height="46" rx="8"/>
-<text class="t" x="595" y="330" text-anchor="middle">merge {projects}</text>
-<text class="s" x="595" y="347" text-anchor="middle">notes becomes OWNER/REPO</text>
-<line class="edge hot" x1="595" y1="272" x2="595" y2="308" marker-end="url(#c11h)"/>
-<text class="lbl hot" x="603" y="295">write</text>
-<rect class="box" x="32" y="394" width="206" height="46" rx="8"/>
-<text class="t" x="135" y="422" text-anchor="middle">the new list</text>
-<path class="edge" d="M595,356 V376 H135 V392" marker-end="url(#c11a)"/>
-<text class="lbl" x="365" y="371" text-anchor="middle">200</text>
-<rect class="box" x="722" y="478" width="206" height="46" rx="8"/>
-<text class="t" x="825" y="498" text-anchor="middle">set origin</text>
-<text class="s" x="825" y="515" text-anchor="middle">./notes to ./OWNER/REPO</text>
-<path class="edge dash" d="M135,440 V460 H825 V476" marker-end="url(#c11a)"/>
-<text class="lbl" x="480" y="455" text-anchor="middle">if ./notes is here</text>
+<text class="lbl" x="480" y="203" text-anchor="middle">verify</text>
+<rect class="box" x="262" y="310" width="206" height="46" rx="8"/>
+<text class="t" x="365" y="330" text-anchor="middle">replace in place</text>
+<text class="s" x="365" y="347" text-anchor="middle">notes becomes OWNER/REPO</text>
+<path class="edge dash" d="M595,272 V292 H365 V308" marker-end="url(#c11a)"/>
+<text class="lbl" x="480" y="287" text-anchor="middle">user</text>
+<rect class="box hot" x="492" y="394" width="206" height="46" rx="8"/>
+<text class="t" x="595" y="414" text-anchor="middle">merge {projects}</text>
+<text class="s" x="595" y="431" text-anchor="middle">nothing else written</text>
+<path class="edge hot" d="M365,356 V376 H595 V392" marker-end="url(#c11h)"/>
+<text class="lbl hot" x="480" y="371" text-anchor="middle">write</text>
+<rect class="box" x="262" y="478" width="206" height="46" rx="8"/>
+<text class="t" x="365" y="498" text-anchor="middle">read back</text>
+<text class="s" x="365" y="515" text-anchor="middle">after 0.3 s</text>
+<path class="edge dash" d="M595,440 V460 H365 V476" marker-end="url(#c11a)"/>
+<text class="lbl" x="480" y="455" text-anchor="middle">written</text>
+<rect class="box" x="32" y="562" width="206" height="46" rx="8"/>
+<text class="t" x="135" y="590" text-anchor="middle">./notes here?</text>
+<path class="edge dash" d="M365,524 V544 H135 V560" marker-end="url(#c11a)"/>
+<text class="lbl" x="250" y="539" text-anchor="middle">200</text>
+<rect class="box" x="722" y="646" width="206" height="46" rx="8"/>
+<text class="m" x="825" y="666" text-anchor="middle">git remote</text>
+<text class="s" x="825" y="683" text-anchor="middle">origin set only if none</text>
+<path class="edge" d="M135,608 V628 H825 V644" marker-end="url(#c11a)"/>
+<text class="lbl" x="480" y="623" text-anchor="middle">if ./notes is here</text>
+<rect class="box" x="32" y="730" width="206" height="46" rx="8"/>
+<text class="t" x="135" y="750" text-anchor="middle">move if origin matches</text>
+<text class="s" x="135" y="767" text-anchor="middle">to ./OWNER/REPO</text>
+<path class="edge dash" d="M825,692 V712 H135 V728" marker-end="url(#c11a)"/>
+<text class="lbl" x="480" y="707" text-anchor="middle">origin</text>
 </svg>
 </div>
-<figcaption><strong>A project made with a name gets its repo later.</strong> The name is replaced in place, through the same engine as an add. Refused while the project is in a space, since the space would still name it the old way. An origin the folder already has is left as it is.</figcaption>
+<figcaption><strong>A project made with a name gets its repo later.</strong> The name is replaced in place, through the same engine as an add. Refused while the project is in a space, since the space would still name it the old way. If <code>./notes</code> is here, it gets the origin only when it has none, and moves to <code>./OWNER/REPO</code> when its origin is that repository (https or git@ form). A folder whose origin is another repository is not moved, and xo says so.</figcaption>
 </figure>
 <h4><code>xo connect space:S [--id ID]</code></h4>
 <figure>
 <div class="canvas">
-<svg class="d" viewBox="0 0 960 458" role="img" aria-label="xo connect space:S [--id ID]: An entry without creating anything.">
+<svg class="d" viewBox="0 0 960 794" role="img" aria-label="xo connect space:S [--id ID]: An entry without creating anything.">
 <defs>
 <marker id="c12a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
 <marker id="c12h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
 </defs>
-<line class="life" x1="135" y1="40" x2="135" y2="452"/>
+<line class="life" x1="135" y1="40" x2="135" y2="788"/>
 <rect class="hdr" x="32" y="12" width="206" height="28" rx="7"/>
 <text class="t" x="135" y="31" text-anchor="middle">You: xo CLI</text>
-<line class="life" x1="365" y1="40" x2="365" y2="452"/>
+<line class="life" x1="365" y1="40" x2="365" y2="788"/>
 <rect class="hdr" x="262" y="12" width="206" height="28" rx="7"/>
 <text class="t" x="365" y="31" text-anchor="middle">xo server</text>
-<line class="life" x1="595" y1="40" x2="595" y2="452"/>
+<line class="life" x1="595" y1="40" x2="595" y2="788"/>
 <rect class="hdr" x="492" y="12" width="206" height="28" rx="7"/>
 <text class="t" x="595" y="31" text-anchor="middle">Clerk</text>
-<line class="life" x1="825" y1="40" x2="825" y2="452"/>
+<line class="life" x1="825" y1="40" x2="825" y2="788"/>
 <rect class="hdr" x="722" y="12" width="206" height="28" rx="7"/>
 <text class="t" x="825" y="31" text-anchor="middle">XO core API</text>
 <rect class="box" x="32" y="58" width="206" height="46" rx="8"/>
 <text class="m" x="135" y="78" text-anchor="middle">xo connect space:S</text>
 <text class="s" x="135" y="95" text-anchor="middle">--id: an XO space</text>
 <rect class="box" x="262" y="142" width="206" height="46" rx="8"/>
-<text class="m" x="365" y="162" text-anchor="middle">POST .../connect</text>
+<text class="m" x="365" y="162" text-anchor="middle">POST /me/spaces/connect</text>
 <text class="s" x="365" y="179" text-anchor="middle">{&quot;name&quot;, &quot;id&quot;?}</text>
 <path class="edge" d="M135,104 V124 H365 V140" marker-end="url(#c12a)"/>
 <text class="lbl" x="250" y="119" text-anchor="middle">name</text>
-<rect class="box" x="722" y="226" width="206" height="46" rx="8"/>
-<text class="m" x="825" y="246" text-anchor="middle">GET spaces/ID</text>
-<text class="s" x="825" y="263" text-anchor="middle">can your key read it?</text>
-<path class="edge dash" d="M365,188 V208 H825 V224" marker-end="url(#c12a)"/>
-<text class="lbl" x="595" y="203" text-anchor="middle">only with --id</text>
-<rect class="box hot" x="492" y="310" width="206" height="46" rx="8"/>
-<text class="t" x="595" y="330" text-anchor="middle">merge {spaces}</text>
-<text class="s" x="595" y="347" text-anchor="middle">new entry, rev 1</text>
-<path class="edge hot" d="M825,272 V292 H595 V308" marker-end="url(#c12h)"/>
-<text class="lbl hot" x="710" y="287" text-anchor="middle">write</text>
-<rect class="box" x="32" y="394" width="206" height="46" rx="8"/>
-<text class="t" x="135" y="422" text-anchor="middle">the entry</text>
-<path class="edge" d="M595,356 V376 H135 V392" marker-end="url(#c12a)"/>
-<text class="lbl" x="365" y="371" text-anchor="middle">200</text>
+<rect class="box" x="492" y="226" width="206" height="46" rx="8"/>
+<text class="t" x="595" y="254" text-anchor="middle">verify key</text>
+<path class="edge" d="M365,188 V208 H595 V224" marker-end="url(#c12a)"/>
+<text class="lbl" x="480" y="203" text-anchor="middle">verify</text>
+<rect class="box" x="262" y="310" width="206" height="46" rx="8"/>
+<text class="t" x="365" y="338" text-anchor="middle">key is valid</text>
+<path class="edge dash" d="M595,272 V292 H365 V308" marker-end="url(#c12a)"/>
+<text class="lbl" x="480" y="287" text-anchor="middle">user id</text>
+<rect class="box" x="722" y="394" width="206" height="46" rx="8"/>
+<text class="m" x="825" y="414" text-anchor="middle">GET spaces/ID</text>
+<text class="s" x="825" y="431" text-anchor="middle">can your key read it?</text>
+<path class="edge" d="M365,356 V376 H825 V392" marker-end="url(#c12a)"/>
+<text class="lbl" x="595" y="371" text-anchor="middle">if --id</text>
+<rect class="box" x="262" y="478" width="206" height="46" rx="8"/>
+<text class="t" x="365" y="498" text-anchor="middle">readable</text>
+<text class="s" x="365" y="515" text-anchor="middle">403 or 404 there: 404 here</text>
+<path class="edge dash" d="M825,440 V460 H365 V476" marker-end="url(#c12a)"/>
+<text class="lbl" x="595" y="455" text-anchor="middle">answer</text>
+<rect class="box hot" x="492" y="562" width="206" height="46" rx="8"/>
+<text class="t" x="595" y="582" text-anchor="middle">read, merge {spaces}</text>
+<text class="s" x="595" y="599" text-anchor="middle">new entry, rev 1</text>
+<path class="edge hot" d="M365,524 V544 H595 V560" marker-end="url(#c12h)"/>
+<text class="lbl hot" x="480" y="539" text-anchor="middle">write</text>
+<rect class="box" x="262" y="646" width="206" height="46" rx="8"/>
+<text class="t" x="365" y="666" text-anchor="middle">read back</text>
+<text class="s" x="365" y="683" text-anchor="middle">after 0.3 s</text>
+<path class="edge dash" d="M595,608 V628 H365 V644" marker-end="url(#c12a)"/>
+<text class="lbl" x="480" y="623" text-anchor="middle">written</text>
+<rect class="box" x="32" y="730" width="206" height="46" rx="8"/>
+<text class="t" x="135" y="758" text-anchor="middle">print the entry</text>
+<path class="edge dash" d="M365,692 V712 H135 V728" marker-end="url(#c12a)"/>
+<text class="lbl" x="250" y="707" text-anchor="middle">200</text>
 </svg>
 </div>
 <figcaption><strong>An entry without creating anything.</strong> With an id, XO must confirm your key can read that space (403 or 404 there is a 404 here). A name or id already recorded is refused.</figcaption>
@@ -972,18 +1060,18 @@ html { scroll-behavior: smooth; }
 <h4><code>xo connect project:P space:S [--ref R]</code></h4>
 <figure>
 <div class="canvas">
-<svg class="d" viewBox="0 0 960 458" role="img" aria-label="xo connect project:P space:S [--ref R]: One project, one ref, one more rev.">
+<svg class="d" viewBox="0 0 960 626" role="img" aria-label="xo connect project:P space:S [--ref R]: One project, one ref, one more rev.">
 <defs>
 <marker id="c13a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
 <marker id="c13h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
 </defs>
-<line class="life" x1="240" y1="40" x2="240" y2="452"/>
+<line class="life" x1="240" y1="40" x2="240" y2="620"/>
 <rect class="hdr" x="135" y="12" width="210" height="28" rx="7"/>
 <text class="t" x="240" y="31" text-anchor="middle">You: xo CLI</text>
-<line class="life" x1="480" y1="40" x2="480" y2="452"/>
+<line class="life" x1="480" y1="40" x2="480" y2="620"/>
 <rect class="hdr" x="375" y="12" width="210" height="28" rx="7"/>
 <text class="t" x="480" y="31" text-anchor="middle">xo server</text>
-<line class="life" x1="720" y1="40" x2="720" y2="452"/>
+<line class="life" x1="720" y1="40" x2="720" y2="620"/>
 <rect class="hdr" x="615" y="12" width="210" height="28" rx="7"/>
 <text class="t" x="720" y="31" text-anchor="middle">Clerk</text>
 <rect class="box" x="135" y="58" width="210" height="46" rx="8"/>
@@ -995,27 +1083,37 @@ html { scroll-behavior: smooth; }
 <path class="edge" d="M240,104 V124 H480 V140" marker-end="url(#c13a)"/>
 <text class="lbl" x="360" y="119" text-anchor="middle">P, ref</text>
 <rect class="box" x="615" y="226" width="210" height="46" rx="8"/>
-<text class="t" x="720" y="246" text-anchor="middle">read user</text>
+<text class="t" x="720" y="246" text-anchor="middle">verify, read user</text>
 <text class="s" x="720" y="263" text-anchor="middle">P must be in projects</text>
 <path class="edge" d="M480,188 V208 H720 V224" marker-end="url(#c13a)"/>
-<text class="lbl" x="600" y="203" text-anchor="middle">read</text>
-<rect class="box hot" x="615" y="310" width="210" height="46" rx="8"/>
-<text class="t" x="720" y="330" text-anchor="middle">merge {spaces}</text>
-<text class="s" x="720" y="347" text-anchor="middle">{P: R}, rev + 1</text>
-<line class="edge hot" x1="720" y1="272" x2="720" y2="308" marker-end="url(#c13h)"/>
-<text class="lbl hot" x="728" y="295">write</text>
-<rect class="box" x="135" y="394" width="210" height="46" rx="8"/>
-<text class="t" x="240" y="422" text-anchor="middle">the space</text>
-<path class="edge" d="M720,356 V376 H240 V392" marker-end="url(#c13a)"/>
-<text class="lbl" x="480" y="371" text-anchor="middle">200</text>
+<text class="lbl" x="600" y="203" text-anchor="middle">verify</text>
+<rect class="box" x="375" y="310" width="210" height="46" rx="8"/>
+<text class="t" x="480" y="330" text-anchor="middle">set P at R</text>
+<text class="s" x="480" y="347" text-anchor="middle">rev + 1</text>
+<path class="edge dash" d="M720,272 V292 H480 V308" marker-end="url(#c13a)"/>
+<text class="lbl" x="600" y="287" text-anchor="middle">user</text>
+<rect class="box hot" x="615" y="394" width="210" height="46" rx="8"/>
+<text class="t" x="720" y="414" text-anchor="middle">merge {spaces}</text>
+<text class="s" x="720" y="431" text-anchor="middle">only spaces written</text>
+<path class="edge hot" d="M480,356 V376 H720 V392" marker-end="url(#c13h)"/>
+<text class="lbl hot" x="600" y="371" text-anchor="middle">write</text>
+<rect class="box" x="375" y="478" width="210" height="46" rx="8"/>
+<text class="t" x="480" y="498" text-anchor="middle">read back</text>
+<text class="s" x="480" y="515" text-anchor="middle">after 0.3 s</text>
+<path class="edge dash" d="M720,440 V460 H480 V476" marker-end="url(#c13a)"/>
+<text class="lbl" x="600" y="455" text-anchor="middle">written</text>
+<rect class="box" x="135" y="562" width="210" height="46" rx="8"/>
+<text class="t" x="240" y="590" text-anchor="middle">print the space</text>
+<path class="edge dash" d="M480,524 V544 H240 V560" marker-end="url(#c13a)"/>
+<text class="lbl" x="360" y="539" text-anchor="middle">200</text>
 </svg>
 </div>
 <figcaption><strong>One project, one ref, one more rev.</strong> A missing ref is <code>main</code>. Connecting P again replaces its ref in place; a space holds at most 10 projects.</figcaption>
 </figure>
-<h4><code>xo list projects | spaces</code></h4>
+<h4><code>xo list projects | spaces | shared</code></h4>
 <figure>
 <div class="canvas">
-<svg class="d" viewBox="0 0 960 458" role="img" aria-label="xo list projects | spaces: A read, masked as /me is.">
+<svg class="d" viewBox="0 0 960 458" role="img" aria-label="xo list projects | spaces | shared: A read, masked as `/me` is.">
 <defs>
 <marker id="c14a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
 <marker id="c14h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
@@ -1031,9 +1129,10 @@ html { scroll-behavior: smooth; }
 <text class="t" x="720" y="31" text-anchor="middle">Clerk</text>
 <rect class="box" x="135" y="58" width="210" height="46" rx="8"/>
 <text class="m" x="240" y="78" text-anchor="middle">xo list spaces</text>
-<text class="s" x="240" y="95" text-anchor="middle">or projects</text>
+<text class="s" x="240" y="95" text-anchor="middle">or projects, or shared</text>
 <rect class="box" x="375" y="142" width="210" height="46" rx="8"/>
-<text class="m" x="480" y="170" text-anchor="middle">GET /me/spaces</text>
+<text class="m" x="480" y="162" text-anchor="middle">GET /me/spaces</text>
+<text class="s" x="480" y="179" text-anchor="middle">/me/projects, /me/shared</text>
 <path class="edge" d="M240,104 V124 H480 V140" marker-end="url(#c14a)"/>
 <text class="lbl" x="360" y="119" text-anchor="middle">key</text>
 <rect class="box" x="615" y="226" width="210" height="46" rx="8"/>
@@ -1043,116 +1142,169 @@ html { scroll-behavior: smooth; }
 <rect class="box hot" x="375" y="310" width="210" height="46" rx="8"/>
 <text class="t" x="480" y="330" text-anchor="middle">mask</text>
 <text class="s" x="480" y="347" text-anchor="middle">refs shown as stored</text>
-<path class="edge hot" d="M720,272 V292 H480 V308" marker-end="url(#c14h)"/>
-<text class="lbl hot" x="600" y="287" text-anchor="middle">list</text>
+<path class="edge hot dash" d="M720,272 V292 H480 V308" marker-end="url(#c14h)"/>
+<text class="lbl hot" x="600" y="287" text-anchor="middle">user</text>
 <rect class="box" x="135" y="394" width="210" height="46" rx="8"/>
 <text class="t" x="240" y="422" text-anchor="middle">print the list</text>
-<path class="edge" d="M480,356 V376 H240 V392" marker-end="url(#c14a)"/>
+<path class="edge dash" d="M480,356 V376 H240 V392" marker-end="url(#c14a)"/>
 <text class="lbl" x="360" y="371" text-anchor="middle">answer</text>
 </svg>
 </div>
-<figcaption><strong>A read, masked as <code>/me</code> is.</strong> Project names and refs are not masked: a repository called <code>auth-service</code> is not a secret.</figcaption>
+<figcaption><strong>A read, masked as <code>/me</code> is.</strong> Project names and refs are not masked: a repository called <code>auth-service</code> is not a secret. <code>xo list shared</code> shows each invite with its id and its sender&#x27;s username now, which the server looks up in one more Clerk call.</figcaption>
 </figure>
-<h3 id="cmd-install-update-and-sync">Install, update and sync</h3>
-<p>Your own git, over https only, with no submodules and none of xo's tokens. The metadata changes only through the server's <code>PUT /me/spaces/{name}</code>.</p>
-<h4><code>xo install space:S</code></h4>
+<h4><code>xo share space:S|project:OWNER/REPO USERNAME</code></h4>
 <figure>
 <div class="canvas">
-<svg class="d" viewBox="0 0 960 626" role="img" aria-label="xo install space:S: The installed rev and refs are the base for later updates.">
+<svg class="d" viewBox="0 0 960 962" role="img" aria-label="xo share space:S|project:OWNER/REPO USERNAME: The one write to another user, and only to their `shared`.">
 <defs>
 <marker id="c15a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
 <marker id="c15h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
 </defs>
-<line class="life" x1="135" y1="40" x2="135" y2="620"/>
-<rect class="hdr" x="32" y="12" width="206" height="28" rx="7"/>
-<text class="t" x="135" y="31" text-anchor="middle">You: xo CLI</text>
-<line class="life" x1="365" y1="40" x2="365" y2="620"/>
-<rect class="hdr" x="262" y="12" width="206" height="28" rx="7"/>
-<text class="t" x="365" y="31" text-anchor="middle">xo server</text>
-<line class="life" x1="595" y1="40" x2="595" y2="620"/>
-<rect class="hdr" x="492" y="12" width="206" height="28" rx="7"/>
-<text class="t" x="595" y="31" text-anchor="middle">Clerk</text>
-<line class="life" x1="825" y1="40" x2="825" y2="620"/>
-<rect class="hdr" x="722" y="12" width="206" height="28" rx="7"/>
-<text class="t" x="825" y="31" text-anchor="middle">git · GitHub</text>
-<rect class="box" x="32" y="58" width="206" height="46" rx="8"/>
-<text class="m" x="135" y="86" text-anchor="middle">xo install space:S</text>
-<rect class="box" x="262" y="142" width="206" height="46" rx="8"/>
-<text class="m" x="365" y="170" text-anchor="middle">GET /me/spaces</text>
-<path class="edge" d="M135,104 V124 H365 V140" marker-end="url(#c15a)"/>
-<text class="lbl" x="250" y="119" text-anchor="middle">key</text>
-<rect class="box" x="492" y="226" width="206" height="46" rx="8"/>
-<text class="t" x="595" y="254" text-anchor="middle">read user</text>
-<path class="edge" d="M365,188 V208 H595 V224" marker-end="url(#c15a)"/>
-<text class="lbl" x="480" y="203" text-anchor="middle">read</text>
-<rect class="box" x="32" y="310" width="206" height="46" rx="8"/>
-<text class="t" x="135" y="330" text-anchor="middle">each project</text>
-<text class="s" x="135" y="347" text-anchor="middle">dirty checkout: refuse</text>
-<path class="edge" d="M595,272 V292 H135 V308" marker-end="url(#c15a)"/>
-<text class="lbl" x="365" y="287" text-anchor="middle">space S</text>
-<rect class="box" x="722" y="394" width="206" height="46" rx="8"/>
-<text class="t" x="825" y="414" text-anchor="middle">clone or fetch</text>
-<text class="s" x="825" y="431" text-anchor="middle">./S/OWNER/REPO</text>
-<path class="edge" d="M135,356 V376 H825 V392" marker-end="url(#c15a)"/>
-<text class="lbl" x="480" y="371" text-anchor="middle">https</text>
-<rect class="box" x="722" y="478" width="206" height="46" rx="8"/>
-<text class="t" x="825" y="498" text-anchor="middle">checkout ref</text>
-<text class="s" x="825" y="515" text-anchor="middle">fast-forward only</text>
-<line class="edge" x1="825" y1="440" x2="825" y2="476" marker-end="url(#c15a)"/>
-<rect class="box hot" x="32" y="562" width="206" height="46" rx="8"/>
-<text class="t" x="135" y="582" text-anchor="middle">save state.json</text>
-<text class="s" x="135" y="599" text-anchor="middle">rev N and refs</text>
-<path class="edge hot" d="M825,524 V544 H135 V560" marker-end="url(#c15h)"/>
-<text class="lbl hot" x="480" y="539" text-anchor="middle">done</text>
+<line class="life" x1="240" y1="40" x2="240" y2="956"/>
+<rect class="hdr" x="135" y="12" width="210" height="28" rx="7"/>
+<text class="t" x="240" y="31" text-anchor="middle">You: xo CLI</text>
+<line class="life" x1="480" y1="40" x2="480" y2="956"/>
+<rect class="hdr" x="375" y="12" width="210" height="28" rx="7"/>
+<text class="t" x="480" y="31" text-anchor="middle">xo server</text>
+<line class="life" x1="720" y1="40" x2="720" y2="956"/>
+<rect class="hdr" x="615" y="12" width="210" height="28" rx="7"/>
+<text class="t" x="720" y="31" text-anchor="middle">Clerk</text>
+<rect class="box" x="135" y="58" width="210" height="46" rx="8"/>
+<text class="m" x="240" y="78" text-anchor="middle">xo share space:dev bob</text>
+<text class="s" x="240" y="95" text-anchor="middle">or project:OWNER/REPO</text>
+<rect class="box" x="375" y="142" width="210" height="46" rx="8"/>
+<text class="m" x="480" y="162" text-anchor="middle">POST /me/share</text>
+<text class="s" x="480" y="179" text-anchor="middle">{&quot;item&quot;, &quot;to&quot;}</text>
+<path class="edge" d="M240,104 V124 H480 V140" marker-end="url(#c15a)"/>
+<text class="lbl" x="360" y="119" text-anchor="middle">item, to</text>
+<rect class="box" x="615" y="226" width="210" height="46" rx="8"/>
+<text class="t" x="720" y="246" text-anchor="middle">verify, read you</text>
+<text class="s" x="720" y="263" text-anchor="middle">your item, your username</text>
+<path class="edge" d="M480,188 V208 H720 V224" marker-end="url(#c15a)"/>
+<text class="lbl" x="600" y="203" text-anchor="middle">verify</text>
+<rect class="box" x="375" y="310" width="210" height="46" rx="8"/>
+<text class="t" x="480" y="330" text-anchor="middle">build the invite</text>
+<text class="s" x="480" y="347" text-anchor="middle">name + GitHub projects</text>
+<path class="edge dash" d="M720,272 V292 H480 V308" marker-end="url(#c15a)"/>
+<text class="lbl" x="600" y="287" text-anchor="middle">you</text>
+<rect class="box" x="615" y="394" width="210" height="46" rx="8"/>
+<text class="t" x="720" y="414" text-anchor="middle">find bob</text>
+<text class="s" x="720" y="431" text-anchor="middle">users?username=bob</text>
+<path class="edge" d="M480,356 V376 H720 V392" marker-end="url(#c15a)"/>
+<text class="lbl" x="600" y="371" text-anchor="middle">look up</text>
+<rect class="box" x="375" y="478" width="210" height="46" rx="8"/>
+<text class="t" x="480" y="498" text-anchor="middle">exactly one user?</text>
+<text class="s" x="480" y="515" text-anchor="middle">else 404: could not share</text>
+<path class="edge dash" d="M720,440 V460 H480 V476" marker-end="url(#c15a)"/>
+<text class="lbl" x="600" y="455" text-anchor="middle">users</text>
+<rect class="box" x="615" y="562" width="210" height="46" rx="8"/>
+<text class="t" x="720" y="582" text-anchor="middle">read bob</text>
+<text class="s" x="720" y="599" text-anchor="middle">his shared: room, limits</text>
+<path class="edge" d="M480,524 V544 H720 V560" marker-end="url(#c15a)"/>
+<text class="lbl" x="600" y="539" text-anchor="middle">read</text>
+<rect class="box" x="375" y="646" width="210" height="46" rx="8"/>
+<text class="t" x="480" y="666" text-anchor="middle">add your invite</text>
+<text class="s" x="480" y="683" text-anchor="middle">1.5KB shared, 6KB whole</text>
+<path class="edge dash" d="M720,608 V628 H480 V644" marker-end="url(#c15a)"/>
+<text class="lbl" x="600" y="623" text-anchor="middle">bob&#x27;s metadata</text>
+<rect class="box hot" x="615" y="730" width="210" height="46" rx="8"/>
+<text class="t" x="720" y="750" text-anchor="middle">merge {shared} on bob</text>
+<text class="s" x="720" y="767" text-anchor="middle">nothing else of his</text>
+<path class="edge hot" d="M480,692 V712 H720 V728" marker-end="url(#c15h)"/>
+<text class="lbl hot" x="600" y="707" text-anchor="middle">write</text>
+<rect class="box" x="375" y="814" width="210" height="46" rx="8"/>
+<text class="t" x="480" y="834" text-anchor="middle">read back</text>
+<text class="s" x="480" y="851" text-anchor="middle">1.5 s at least in all</text>
+<path class="edge dash" d="M720,776 V796 H480 V812" marker-end="url(#c15a)"/>
+<text class="lbl" x="600" y="791" text-anchor="middle">written</text>
+<rect class="box" x="135" y="898" width="210" height="46" rx="8"/>
+<text class="t" x="240" y="918" text-anchor="middle">print the invite</text>
+<text class="s" x="240" y="935" text-anchor="middle">to, item, projects</text>
+<path class="edge dash" d="M480,860 V880 H240 V896" marker-end="url(#c15a)"/>
+<text class="lbl" x="360" y="875" text-anchor="middle">200</text>
 </svg>
 </div>
-<figcaption><strong>The installed rev and refs are the base for later updates.</strong> A project with no GitHub remote is left as it is. A branch that has moved on from its remote is refused, never merged.</figcaption>
+<figcaption><strong>The one write to another user, and only to their <code>shared</code>.</strong> The invite holds a space&#x27;s name and its GitHub projects at their refs, never its id, kind or rev; a space&#x27;s local projects are left out. Everything about the recipient (no such username, a full list, no room) is the same 404 &quot;Could not share ITEM with USERNAME&quot;, and every answer takes at least 1.5 seconds. At most 20 invites wait on anyone, 5 from one sender.</figcaption>
 </figure>
-<h4><code>xo install project:P</code></h4>
+<h4><code>xo accept ID · xo reject ID</code></h4>
 <figure>
 <div class="canvas">
-<svg class="d" viewBox="0 0 960 458" role="img" aria-label="xo install project:P: Clone once, then only fast-forward.">
+<svg class="d" viewBox="0 0 960 962" role="img" aria-label="xo accept ID · xo reject ID: One write of your own metadata, and only when you say yes.">
 <defs>
 <marker id="c16a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
 <marker id="c16h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
 </defs>
-<line class="life" x1="240" y1="40" x2="240" y2="452"/>
+<line class="life" x1="240" y1="40" x2="240" y2="956"/>
 <rect class="hdr" x="135" y="12" width="210" height="28" rx="7"/>
 <text class="t" x="240" y="31" text-anchor="middle">You: xo CLI</text>
-<line class="life" x1="480" y1="40" x2="480" y2="452"/>
+<line class="life" x1="480" y1="40" x2="480" y2="956"/>
 <rect class="hdr" x="375" y="12" width="210" height="28" rx="7"/>
 <text class="t" x="480" y="31" text-anchor="middle">xo server</text>
-<line class="life" x1="720" y1="40" x2="720" y2="452"/>
+<line class="life" x1="720" y1="40" x2="720" y2="956"/>
 <rect class="hdr" x="615" y="12" width="210" height="28" rx="7"/>
-<text class="t" x="720" y="31" text-anchor="middle">git · GitHub</text>
+<text class="t" x="720" y="31" text-anchor="middle">Clerk</text>
 <rect class="box" x="135" y="58" width="210" height="46" rx="8"/>
-<text class="m" x="240" y="86" text-anchor="middle">xo install project:P</text>
+<text class="m" x="240" y="78" text-anchor="middle">xo accept ID</text>
+<text class="s" x="240" y="95" text-anchor="middle">--as NAME, or --space S</text>
 <rect class="box" x="375" y="142" width="210" height="46" rx="8"/>
-<text class="m" x="480" y="162" text-anchor="middle">GET /me/projects</text>
-<text class="s" x="480" y="179" text-anchor="middle">P must be listed</text>
+<text class="m" x="480" y="162" text-anchor="middle">GET /me/shared</text>
+<text class="s" x="480" y="179" text-anchor="middle">your invites</text>
 <path class="edge" d="M240,104 V124 H480 V140" marker-end="url(#c16a)"/>
 <text class="lbl" x="360" y="119" text-anchor="middle">key</text>
-<rect class="box" x="135" y="226" width="210" height="46" rx="8"/>
-<text class="m" x="240" y="254" text-anchor="middle">./P here?</text>
-<path class="edge" d="M480,188 V208 H240 V224" marker-end="url(#c16a)"/>
-<text class="lbl" x="360" y="203" text-anchor="middle">yes</text>
-<rect class="box" x="615" y="310" width="210" height="46" rx="8"/>
-<text class="t" x="720" y="330" text-anchor="middle">clone, or fetch</text>
-<text class="s" x="720" y="347" text-anchor="middle">over https</text>
-<path class="edge" d="M240,272 V292 H720 V308" marker-end="url(#c16a)"/>
-<text class="lbl" x="480" y="287" text-anchor="middle">https</text>
-<rect class="box hot" x="615" y="394" width="210" height="46" rx="8"/>
-<text class="t" x="720" y="414" text-anchor="middle">fast-forward</text>
-<text class="s" x="720" y="431" text-anchor="middle">never a merge</text>
-<line class="edge hot" x1="720" y1="356" x2="720" y2="392" marker-end="url(#c16h)"/>
+<rect class="box" x="615" y="226" width="210" height="46" rx="8"/>
+<text class="t" x="720" y="246" text-anchor="middle">verify, read you</text>
+<text class="s" x="720" y="263" text-anchor="middle">+ senders, one call</text>
+<path class="edge" d="M480,188 V208 H720 V224" marker-end="url(#c16a)"/>
+<text class="lbl" x="600" y="203" text-anchor="middle">verify</text>
+<rect class="box" x="375" y="310" width="210" height="46" rx="8"/>
+<text class="t" x="480" y="330" text-anchor="middle">each with its id</text>
+<text class="s" x="480" y="347" text-anchor="middle">sender&#x27;s username now</text>
+<path class="edge dash" d="M720,272 V292 H480 V308" marker-end="url(#c16a)"/>
+<text class="lbl" x="600" y="287" text-anchor="middle">user</text>
+<rect class="box" x="135" y="394" width="210" height="46" rx="8"/>
+<text class="t" x="240" y="414" text-anchor="middle">show and ask</text>
+<text class="s" x="240" y="431" text-anchor="middle">name, project@ref, --yes</text>
+<path class="edge dash" d="M480,356 V376 H240 V392" marker-end="url(#c16a)"/>
+<text class="lbl" x="360" y="371" text-anchor="middle">invites</text>
+<rect class="box" x="375" y="478" width="210" height="46" rx="8"/>
+<text class="m" x="480" y="498" text-anchor="middle">POST /me/shared/accept</text>
+<text class="s" x="480" y="515" text-anchor="middle">{&quot;id&quot;, &quot;as&quot;} or &quot;space&quot;</text>
+<path class="edge" d="M240,440 V460 H480 V476" marker-end="url(#c16a)"/>
+<text class="lbl" x="360" y="455" text-anchor="middle">id</text>
+<rect class="box" x="615" y="562" width="210" height="46" rx="8"/>
+<text class="t" x="720" y="582" text-anchor="middle">verify, read you</text>
+<text class="s" x="720" y="599" text-anchor="middle">every refusal first</text>
+<path class="edge" d="M480,524 V544 H720 V560" marker-end="url(#c16a)"/>
+<text class="lbl" x="600" y="539" text-anchor="middle">verify</text>
+<rect class="box" x="375" y="646" width="210" height="46" rx="8"/>
+<text class="t" x="480" y="666" text-anchor="middle">build the change</text>
+<text class="s" x="480" y="683" text-anchor="middle">space, projects, invite off</text>
+<path class="edge dash" d="M720,608 V628 H480 V644" marker-end="url(#c16a)"/>
+<text class="lbl" x="600" y="623" text-anchor="middle">user</text>
+<rect class="box hot" x="615" y="730" width="210" height="46" rx="8"/>
+<text class="t" x="720" y="750" text-anchor="middle">merge 3 keys</text>
+<text class="s" x="720" y="767" text-anchor="middle">spaces, projects, shared</text>
+<path class="edge hot" d="M480,692 V712 H720 V728" marker-end="url(#c16h)"/>
+<text class="lbl hot" x="600" y="707" text-anchor="middle">write</text>
+<rect class="box" x="375" y="814" width="210" height="46" rx="8"/>
+<text class="t" x="480" y="834" text-anchor="middle">read back</text>
+<text class="s" x="480" y="851" text-anchor="middle">lost? put it back</text>
+<path class="edge dash" d="M720,776 V796 H480 V812" marker-end="url(#c16a)"/>
+<text class="lbl" x="600" y="791" text-anchor="middle">written</text>
+<rect class="box" x="135" y="898" width="210" height="46" rx="8"/>
+<text class="t" x="240" y="926" text-anchor="middle">print accepted</text>
+<path class="edge dash" d="M480,860 V880 H240 V896" marker-end="url(#c16a)"/>
+<text class="lbl" x="360" y="875" text-anchor="middle">200</text>
 </svg>
 </div>
-<figcaption><strong>Clone once, then only fast-forward.</strong> If your branch and its upstream have both moved on, xo stops and points you to <code>xo sync project:P</code>.</figcaption>
+<figcaption><strong>One write of your own metadata, and only when you say yes.</strong> A shared space becomes a new space of yours at rev 1 (<code>--as</code> names it when its name is taken); a shared project goes into your space <code>--space S</code> at <code>--ref R</code> (default <code>main</code>), and that space&#x27;s rev goes up by one. Either way its projects are added to your <code>projects</code>, and the invite comes off <code>shared</code>. <code>xo reject ID</code> asks nothing: <code>POST /me/shared/reject</code> takes the invite off <code>shared</code> and writes nothing else, so its sender can share it again.</figcaption>
 </figure>
-<h4><code>xo update space:S</code></h4>
+<h3 id="cmd-install-update-and-sync">Install, update and sync</h3>
+<p>Your own git, over https only, with no submodules and none of xo&#x27;s tokens. The metadata changes only through the server&#x27;s <code>PUT /me/spaces/{name}</code>.</p>
+<h4><code>xo install space:S</code></h4>
 <figure>
 <div class="canvas">
-<svg class="d" viewBox="0 0 960 710" role="img" aria-label="xo update space:S: Push, then record, only if nobody moved the space.">
+<svg class="d" viewBox="0 0 960 710" role="img" aria-label="xo install space:S: The installed rev and refs are the base for later updates.">
 <defs>
 <marker id="c17a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
 <marker id="c17h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
@@ -1170,52 +1322,187 @@ html { scroll-behavior: smooth; }
 <rect class="hdr" x="722" y="12" width="206" height="28" rx="7"/>
 <text class="t" x="825" y="31" text-anchor="middle">git · GitHub</text>
 <rect class="box" x="32" y="58" width="206" height="46" rx="8"/>
+<text class="m" x="135" y="86" text-anchor="middle">xo install space:S</text>
+<rect class="box" x="262" y="142" width="206" height="46" rx="8"/>
+<text class="m" x="365" y="170" text-anchor="middle">GET /me/spaces</text>
+<path class="edge" d="M135,104 V124 H365 V140" marker-end="url(#c17a)"/>
+<text class="lbl" x="250" y="119" text-anchor="middle">key</text>
+<rect class="box" x="492" y="226" width="206" height="46" rx="8"/>
+<text class="t" x="595" y="254" text-anchor="middle">verify, read user</text>
+<path class="edge" d="M365,188 V208 H595 V224" marker-end="url(#c17a)"/>
+<text class="lbl" x="480" y="203" text-anchor="middle">verify</text>
+<rect class="box" x="262" y="310" width="206" height="46" rx="8"/>
+<text class="t" x="365" y="330" text-anchor="middle">mask</text>
+<text class="s" x="365" y="347" text-anchor="middle">refs shown as stored</text>
+<path class="edge dash" d="M595,272 V292 H365 V308" marker-end="url(#c17a)"/>
+<text class="lbl" x="480" y="287" text-anchor="middle">user</text>
+<rect class="box" x="32" y="394" width="206" height="46" rx="8"/>
+<text class="t" x="135" y="414" text-anchor="middle">space S</text>
+<text class="s" x="135" y="431" text-anchor="middle">dirty checkout: refuse</text>
+<path class="edge dash" d="M365,356 V376 H135 V392" marker-end="url(#c17a)"/>
+<text class="lbl" x="250" y="371" text-anchor="middle">spaces</text>
+<rect class="box hot" x="722" y="478" width="206" height="46" rx="8"/>
+<text class="t" x="825" y="498" text-anchor="middle">clone or fetch</text>
+<text class="s" x="825" y="515" text-anchor="middle">./S/OWNER/REPO, https</text>
+<path class="edge hot" d="M135,440 V460 H825 V476" marker-end="url(#c17h)"/>
+<text class="lbl hot" x="480" y="455" text-anchor="middle">each project</text>
+<rect class="box" x="722" y="562" width="206" height="46" rx="8"/>
+<text class="t" x="825" y="582" text-anchor="middle">checkout ref</text>
+<text class="s" x="825" y="599" text-anchor="middle">fast-forward only</text>
+<line class="edge" x1="825" y1="524" x2="825" y2="560" marker-end="url(#c17a)"/>
+<rect class="box" x="32" y="646" width="206" height="46" rx="8"/>
+<text class="t" x="135" y="666" text-anchor="middle">save state.json</text>
+<text class="s" x="135" y="683" text-anchor="middle">rev N and refs</text>
+<path class="edge dash" d="M825,608 V628 H135 V644" marker-end="url(#c17a)"/>
+<text class="lbl" x="480" y="623" text-anchor="middle">done</text>
+</svg>
+</div>
+<figcaption><strong>The installed rev and refs are the base for later updates.</strong> A project with no GitHub remote is left as it is. A branch that has moved on from its remote is refused, never merged.</figcaption>
+</figure>
+<h4><code>xo install project:P</code></h4>
+<figure>
+<div class="canvas">
+<svg class="d" viewBox="0 0 960 710" role="img" aria-label="xo install project:P: Clone once, then only fast-forward.">
+<defs>
+<marker id="c18a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
+<marker id="c18h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
+</defs>
+<line class="life" x1="135" y1="40" x2="135" y2="704"/>
+<rect class="hdr" x="32" y="12" width="206" height="28" rx="7"/>
+<text class="t" x="135" y="31" text-anchor="middle">You: xo CLI</text>
+<line class="life" x1="365" y1="40" x2="365" y2="704"/>
+<rect class="hdr" x="262" y="12" width="206" height="28" rx="7"/>
+<text class="t" x="365" y="31" text-anchor="middle">xo server</text>
+<line class="life" x1="595" y1="40" x2="595" y2="704"/>
+<rect class="hdr" x="492" y="12" width="206" height="28" rx="7"/>
+<text class="t" x="595" y="31" text-anchor="middle">Clerk</text>
+<line class="life" x1="825" y1="40" x2="825" y2="704"/>
+<rect class="hdr" x="722" y="12" width="206" height="28" rx="7"/>
+<text class="t" x="825" y="31" text-anchor="middle">git · GitHub</text>
+<rect class="box" x="32" y="58" width="206" height="46" rx="8"/>
+<text class="m" x="135" y="86" text-anchor="middle">xo install project:P</text>
+<rect class="box" x="262" y="142" width="206" height="46" rx="8"/>
+<text class="m" x="365" y="170" text-anchor="middle">GET /me/projects</text>
+<path class="edge" d="M135,104 V124 H365 V140" marker-end="url(#c18a)"/>
+<text class="lbl" x="250" y="119" text-anchor="middle">key</text>
+<rect class="box" x="492" y="226" width="206" height="46" rx="8"/>
+<text class="t" x="595" y="254" text-anchor="middle">verify, read user</text>
+<path class="edge" d="M365,188 V208 H595 V224" marker-end="url(#c18a)"/>
+<text class="lbl" x="480" y="203" text-anchor="middle">verify</text>
+<rect class="box" x="262" y="310" width="206" height="46" rx="8"/>
+<text class="t" x="365" y="338" text-anchor="middle">the list</text>
+<path class="edge dash" d="M595,272 V292 H365 V308" marker-end="url(#c18a)"/>
+<text class="lbl" x="480" y="287" text-anchor="middle">user</text>
+<rect class="box" x="32" y="394" width="206" height="46" rx="8"/>
+<text class="t" x="135" y="414" text-anchor="middle">P listed?</text>
+<text class="s" x="135" y="431" text-anchor="middle">./P here?</text>
+<path class="edge dash" d="M365,356 V376 H135 V392" marker-end="url(#c18a)"/>
+<text class="lbl" x="250" y="371" text-anchor="middle">projects</text>
+<rect class="box hot" x="722" y="478" width="206" height="46" rx="8"/>
+<text class="t" x="825" y="498" text-anchor="middle">clone, or fetch</text>
+<text class="s" x="825" y="515" text-anchor="middle">over https</text>
+<path class="edge hot" d="M135,440 V460 H825 V476" marker-end="url(#c18h)"/>
+<text class="lbl hot" x="480" y="455" text-anchor="middle">runs git</text>
+<rect class="box" x="722" y="562" width="206" height="46" rx="8"/>
+<text class="t" x="825" y="582" text-anchor="middle">fast-forward</text>
+<text class="s" x="825" y="599" text-anchor="middle">never a merge</text>
+<line class="edge" x1="825" y1="524" x2="825" y2="560" marker-end="url(#c18a)"/>
+<rect class="box" x="32" y="646" width="206" height="46" rx="8"/>
+<text class="t" x="135" y="666" text-anchor="middle">print</text>
+<text class="s" x="135" y="683" text-anchor="middle">cloned or moved on</text>
+<path class="edge dash" d="M825,608 V628 H135 V644" marker-end="url(#c18a)"/>
+<text class="lbl" x="480" y="623" text-anchor="middle">done</text>
+</svg>
+</div>
+<figcaption><strong>Clone once, then only fast-forward.</strong> If your branch and its upstream have both moved on, xo stops and points you to <code>xo sync project:P</code>.</figcaption>
+</figure>
+<h4><code>xo update space:S</code></h4>
+<figure>
+<div class="canvas">
+<svg class="d" viewBox="0 0 960 1046" role="img" aria-label="xo update space:S: Push, then record, only if nobody moved the space.">
+<defs>
+<marker id="c19a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
+<marker id="c19h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
+</defs>
+<line class="life" x1="135" y1="40" x2="135" y2="1040"/>
+<rect class="hdr" x="32" y="12" width="206" height="28" rx="7"/>
+<text class="t" x="135" y="31" text-anchor="middle">You: xo CLI</text>
+<line class="life" x1="365" y1="40" x2="365" y2="1040"/>
+<rect class="hdr" x="262" y="12" width="206" height="28" rx="7"/>
+<text class="t" x="365" y="31" text-anchor="middle">xo server</text>
+<line class="life" x1="595" y1="40" x2="595" y2="1040"/>
+<rect class="hdr" x="492" y="12" width="206" height="28" rx="7"/>
+<text class="t" x="595" y="31" text-anchor="middle">Clerk</text>
+<line class="life" x1="825" y1="40" x2="825" y2="1040"/>
+<rect class="hdr" x="722" y="12" width="206" height="28" rx="7"/>
+<text class="t" x="825" y="31" text-anchor="middle">git · GitHub</text>
+<rect class="box" x="32" y="58" width="206" height="46" rx="8"/>
 <text class="m" x="135" y="78" text-anchor="middle">xo update space:S</text>
 <text class="s" x="135" y="95" text-anchor="middle">reads state.json</text>
 <rect class="box" x="32" y="142" width="206" height="46" rx="8"/>
 <text class="t" x="135" y="162" text-anchor="middle">check checkouts</text>
 <text class="s" x="135" y="179" text-anchor="middle">own, clean</text>
-<line class="edge" x1="135" y1="104" x2="135" y2="140" marker-end="url(#c17a)"/>
+<line class="edge" x1="135" y1="104" x2="135" y2="140" marker-end="url(#c19a)"/>
 <rect class="box" x="722" y="226" width="206" height="46" rx="8"/>
 <text class="m" x="825" y="246" text-anchor="middle">git push</text>
 <text class="s" x="825" y="263" text-anchor="middle">each tracked branch</text>
-<path class="edge" d="M135,188 V208 H825 V224" marker-end="url(#c17a)"/>
+<path class="edge" d="M135,188 V208 H825 V224" marker-end="url(#c19a)"/>
 <text class="lbl" x="480" y="203" text-anchor="middle">push</text>
 <rect class="box" x="32" y="310" width="206" height="46" rx="8"/>
 <text class="t" x="135" y="330" text-anchor="middle">read refs here</text>
 <text class="s" x="135" y="347" text-anchor="middle">branch, or commit</text>
-<path class="edge" d="M825,272 V292 H135 V308" marker-end="url(#c17a)"/>
+<path class="edge dash" d="M825,272 V292 H135 V308" marker-end="url(#c19a)"/>
 <text class="lbl" x="480" y="287" text-anchor="middle">pushed</text>
 <rect class="box" x="722" y="394" width="206" height="46" rx="8"/>
 <text class="t" x="825" y="414" text-anchor="middle">ref on remote?</text>
 <text class="s" x="825" y="431" text-anchor="middle">else refuse</text>
-<path class="edge" d="M135,356 V376 H825 V392" marker-end="url(#c17a)"/>
-<text class="lbl" x="480" y="371" text-anchor="middle">check</text>
-<rect class="box hot" x="262" y="478" width="206" height="46" rx="8"/>
-<text class="m" x="365" y="498" text-anchor="middle">PUT /me/spaces/S</text>
-<text class="s" x="365" y="515" text-anchor="middle">rev N + base</text>
-<path class="edge hot" d="M825,440 V460 H365 V476" marker-end="url(#c17h)"/>
-<text class="lbl hot" x="595" y="455" text-anchor="middle">refs</text>
-<rect class="box" x="492" y="562" width="206" height="46" rx="8"/>
-<text class="t" x="595" y="582" text-anchor="middle">merge {spaces}</text>
-<text class="s" x="595" y="599" text-anchor="middle">rev N + 1, or 409</text>
-<path class="edge" d="M365,524 V544 H595 V560" marker-end="url(#c17a)"/>
-<text class="lbl" x="480" y="539" text-anchor="middle">write</text>
-<rect class="box" x="32" y="646" width="206" height="46" rx="8"/>
-<text class="t" x="135" y="674" text-anchor="middle">save state.json</text>
-<path class="edge" d="M595,608 V628 H135 V644" marker-end="url(#c17a)"/>
-<text class="lbl" x="365" y="623" text-anchor="middle">200</text>
+<path class="edge" d="M135,356 V376 H825 V392" marker-end="url(#c19a)"/>
+<text class="lbl" x="480" y="371" text-anchor="middle">fetch</text>
+<rect class="box" x="32" y="478" width="206" height="46" rx="8"/>
+<text class="t" x="135" y="498" text-anchor="middle">refs to record</text>
+<text class="s" x="135" y="515" text-anchor="middle">rev N + base</text>
+<path class="edge dash" d="M825,440 V460 H135 V476" marker-end="url(#c19a)"/>
+<text class="lbl" x="480" y="455" text-anchor="middle">yes</text>
+<rect class="box" x="262" y="562" width="206" height="46" rx="8"/>
+<text class="m" x="365" y="582" text-anchor="middle">PUT /me/spaces/S</text>
+<text class="s" x="365" y="599" text-anchor="middle">rev N + base</text>
+<path class="edge" d="M135,524 V544 H365 V560" marker-end="url(#c19a)"/>
+<text class="lbl" x="250" y="539" text-anchor="middle">refs</text>
+<rect class="box" x="492" y="646" width="206" height="46" rx="8"/>
+<text class="t" x="595" y="666" text-anchor="middle">verify, read user</text>
+<text class="s" x="595" y="683" text-anchor="middle">still rev N with base?</text>
+<path class="edge" d="M365,608 V628 H595 V644" marker-end="url(#c19a)"/>
+<text class="lbl" x="480" y="623" text-anchor="middle">verify</text>
+<rect class="box" x="262" y="730" width="206" height="46" rx="8"/>
+<text class="t" x="365" y="750" text-anchor="middle">rev N + 1</text>
+<text class="s" x="365" y="767" text-anchor="middle">else 409: run xo sync</text>
+<path class="edge dash" d="M595,692 V712 H365 V728" marker-end="url(#c19a)"/>
+<text class="lbl" x="480" y="707" text-anchor="middle">user</text>
+<rect class="box hot" x="492" y="814" width="206" height="46" rx="8"/>
+<text class="t" x="595" y="834" text-anchor="middle">merge {spaces}</text>
+<text class="s" x="595" y="851" text-anchor="middle">rev N + 1</text>
+<path class="edge hot" d="M365,776 V796 H595 V812" marker-end="url(#c19h)"/>
+<text class="lbl hot" x="480" y="791" text-anchor="middle">write</text>
+<rect class="box" x="262" y="898" width="206" height="46" rx="8"/>
+<text class="t" x="365" y="918" text-anchor="middle">read back</text>
+<text class="s" x="365" y="935" text-anchor="middle">after 0.3 s</text>
+<path class="edge dash" d="M595,860 V880 H365 V896" marker-end="url(#c19a)"/>
+<text class="lbl" x="480" y="875" text-anchor="middle">written</text>
+<rect class="box" x="32" y="982" width="206" height="46" rx="8"/>
+<text class="t" x="135" y="1010" text-anchor="middle">save state.json</text>
+<path class="edge dash" d="M365,944 V964 H135 V980" marker-end="url(#c19a)"/>
+<text class="lbl" x="250" y="959" text-anchor="middle">200</text>
 </svg>
 </div>
-<figcaption><strong>Push, then record, only if nobody moved the space.</strong> The server refuses with 409 "run xo sync" unless the space is still at rev N and still holds <code>base</code>, the refs you installed. With nothing changed, nothing is recorded.</figcaption>
+<figcaption><strong>Push, then record, only if nobody moved the space.</strong> The server refuses with 409 &quot;run xo sync&quot; unless the space is still at rev N and still holds <code>base</code>, the refs you installed. With nothing changed, nothing is recorded.</figcaption>
 </figure>
 <h4><code>xo update project:P</code></h4>
 <figure>
 <div class="canvas">
 <svg class="d" viewBox="0 0 960 374" role="img" aria-label="xo update project:P: A plain push, never forced.">
 <defs>
-<marker id="c18a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
-<marker id="c18h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
+<marker id="c20a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
+<marker id="c20h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
 </defs>
 <line class="life" x1="360" y1="40" x2="360" y2="368"/>
 <rect class="hdr" x="255" y="12" width="210" height="28" rx="7"/>
@@ -1228,38 +1515,39 @@ html { scroll-behavior: smooth; }
 <rect class="box" x="255" y="142" width="210" height="46" rx="8"/>
 <text class="t" x="360" y="162" text-anchor="middle">check upstream</text>
 <text class="s" x="360" y="179" text-anchor="middle">own, on a branch, clean</text>
-<line class="edge" x1="360" y1="104" x2="360" y2="140" marker-end="url(#c18a)"/>
+<line class="edge" x1="360" y1="104" x2="360" y2="140" marker-end="url(#c20a)"/>
 <rect class="box hot" x="495" y="226" width="210" height="46" rx="8"/>
 <text class="t" x="600" y="246" text-anchor="middle">push to upstream</text>
 <text class="s" x="600" y="263" text-anchor="middle">never forced</text>
-<path class="edge hot" d="M360,188 V208 H600 V224" marker-end="url(#c18h)"/>
+<path class="edge hot" d="M360,188 V208 H600 V224" marker-end="url(#c20h)"/>
 <text class="lbl hot" x="480" y="203" text-anchor="middle">push</text>
 <rect class="box" x="255" y="310" width="210" height="46" rx="8"/>
 <text class="t" x="360" y="330" text-anchor="middle">pushed</text>
 <text class="s" x="360" y="347" text-anchor="middle">remote ahead: xo sync</text>
-<path class="edge" d="M600,272 V292 H360 V308" marker-end="url(#c18a)"/>
+<path class="edge dash" d="M600,272 V292 H360 V308" marker-end="url(#c20a)"/>
+<text class="lbl" x="480" y="287" text-anchor="middle">done</text>
 </svg>
 </div>
-<figcaption><strong>A plain push, never forced.</strong> It goes to the branch's upstream remote, not a <code>pushRemote</code>, and needs a branch, not a detached HEAD.</figcaption>
+<figcaption><strong>A plain push, never forced.</strong> It goes to the branch&#x27;s upstream remote, not a <code>pushRemote</code>, and needs a branch, not a detached HEAD.</figcaption>
 </figure>
 <h4><code>xo sync space:S</code></h4>
 <figure>
 <div class="canvas">
-<svg class="d" viewBox="0 0 960 794" role="img" aria-label="xo sync space:S: A three-way merge of refs, per project.">
+<svg class="d" viewBox="0 0 960 1130" role="img" aria-label="xo sync space:S: A three-way merge of refs, per project.">
 <defs>
-<marker id="c19a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
-<marker id="c19h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
+<marker id="c21a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
+<marker id="c21h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
 </defs>
-<line class="life" x1="135" y1="40" x2="135" y2="788"/>
+<line class="life" x1="135" y1="40" x2="135" y2="1124"/>
 <rect class="hdr" x="32" y="12" width="206" height="28" rx="7"/>
 <text class="t" x="135" y="31" text-anchor="middle">You: xo CLI</text>
-<line class="life" x1="365" y1="40" x2="365" y2="788"/>
+<line class="life" x1="365" y1="40" x2="365" y2="1124"/>
 <rect class="hdr" x="262" y="12" width="206" height="28" rx="7"/>
 <text class="t" x="365" y="31" text-anchor="middle">xo server</text>
-<line class="life" x1="595" y1="40" x2="595" y2="788"/>
+<line class="life" x1="595" y1="40" x2="595" y2="1124"/>
 <rect class="hdr" x="492" y="12" width="206" height="28" rx="7"/>
 <text class="t" x="595" y="31" text-anchor="middle">Clerk</text>
-<line class="life" x1="825" y1="40" x2="825" y2="788"/>
+<line class="life" x1="825" y1="40" x2="825" y2="1124"/>
 <rect class="hdr" x="722" y="12" width="206" height="28" rx="7"/>
 <text class="t" x="825" y="31" text-anchor="middle">git · GitHub</text>
 <rect class="box" x="32" y="58" width="206" height="46" rx="8"/>
@@ -1268,49 +1556,68 @@ html { scroll-behavior: smooth; }
 <rect class="box" x="722" y="142" width="206" height="46" rx="8"/>
 <text class="m" x="825" y="162" text-anchor="middle">pull --rebase, push</text>
 <text class="s" x="825" y="179" text-anchor="middle">each tracked branch</text>
-<path class="edge" d="M135,104 V124 H825 V140" marker-end="url(#c19a)"/>
+<path class="edge" d="M135,104 V124 H825 V140" marker-end="url(#c21a)"/>
 <text class="lbl" x="480" y="119" text-anchor="middle">rebase</text>
-<rect class="box" x="262" y="226" width="206" height="46" rx="8"/>
-<text class="m" x="365" y="254" text-anchor="middle">GET /me/spaces</text>
-<path class="edge" d="M825,188 V208 H365 V224" marker-end="url(#c19a)"/>
-<text class="lbl" x="595" y="203" text-anchor="middle">read space</text>
-<rect class="box" x="492" y="310" width="206" height="46" rx="8"/>
-<text class="t" x="595" y="338" text-anchor="middle">read user</text>
-<path class="edge" d="M365,272 V292 H595 V308" marker-end="url(#c19a)"/>
-<text class="lbl" x="480" y="287" text-anchor="middle">read</text>
-<rect class="box hot" x="32" y="394" width="206" height="46" rx="8"/>
-<text class="t" x="135" y="414" text-anchor="middle">merge refs</text>
-<text class="s" x="135" y="431" text-anchor="middle">installed, yours, space</text>
-<path class="edge hot" d="M595,356 V376 H135 V392" marker-end="url(#c19h)"/>
-<text class="lbl hot" x="365" y="371" text-anchor="middle">space S</text>
-<rect class="box" x="722" y="478" width="206" height="46" rx="8"/>
-<text class="t" x="825" y="506" text-anchor="middle">checkout merged</text>
-<path class="edge" d="M135,440 V460 H825 V476" marker-end="url(#c19a)"/>
-<text class="lbl" x="480" y="455" text-anchor="middle">no clash</text>
-<rect class="box" x="262" y="562" width="206" height="46" rx="8"/>
-<text class="m" x="365" y="582" text-anchor="middle">PUT /me/spaces/S</text>
-<text class="s" x="365" y="599" text-anchor="middle">only if refs changed</text>
-<path class="edge" d="M825,524 V544 H365 V560" marker-end="url(#c19a)"/>
-<text class="lbl" x="595" y="539" text-anchor="middle">refs</text>
-<rect class="box" x="492" y="646" width="206" height="46" rx="8"/>
-<text class="t" x="595" y="674" text-anchor="middle">merge {spaces}</text>
-<path class="edge" d="M365,608 V628 H595 V644" marker-end="url(#c19a)"/>
-<text class="lbl" x="480" y="623" text-anchor="middle">write</text>
+<rect class="box" x="32" y="226" width="206" height="46" rx="8"/>
+<text class="t" x="135" y="254" text-anchor="middle">read refs here</text>
+<path class="edge dash" d="M825,188 V208 H135 V224" marker-end="url(#c21a)"/>
+<text class="lbl" x="480" y="203" text-anchor="middle">pushed</text>
+<rect class="box" x="262" y="310" width="206" height="46" rx="8"/>
+<text class="m" x="365" y="338" text-anchor="middle">GET /me/spaces</text>
+<path class="edge" d="M135,272 V292 H365 V308" marker-end="url(#c21a)"/>
+<text class="lbl" x="250" y="287" text-anchor="middle">read space</text>
+<rect class="box" x="492" y="394" width="206" height="46" rx="8"/>
+<text class="t" x="595" y="422" text-anchor="middle">verify, read user</text>
+<path class="edge" d="M365,356 V376 H595 V392" marker-end="url(#c21a)"/>
+<text class="lbl" x="480" y="371" text-anchor="middle">verify</text>
+<rect class="box" x="262" y="478" width="206" height="46" rx="8"/>
+<text class="t" x="365" y="506" text-anchor="middle">the space</text>
+<path class="edge dash" d="M595,440 V460 H365 V476" marker-end="url(#c21a)"/>
+<text class="lbl" x="480" y="455" text-anchor="middle">user</text>
+<rect class="box hot" x="32" y="562" width="206" height="46" rx="8"/>
+<text class="t" x="135" y="582" text-anchor="middle">merge refs</text>
+<text class="s" x="135" y="599" text-anchor="middle">installed, yours, space</text>
+<path class="edge hot dash" d="M365,524 V544 H135 V560" marker-end="url(#c21h)"/>
+<text class="lbl hot" x="250" y="539" text-anchor="middle">space S</text>
+<rect class="box" x="722" y="646" width="206" height="46" rx="8"/>
+<text class="t" x="825" y="666" text-anchor="middle">checkout merged</text>
+<text class="s" x="825" y="683" text-anchor="middle">where the space moved</text>
+<path class="edge" d="M135,608 V628 H825 V644" marker-end="url(#c21a)"/>
+<text class="lbl" x="480" y="623" text-anchor="middle">no clash</text>
 <rect class="box" x="32" y="730" width="206" height="46" rx="8"/>
-<text class="t" x="135" y="758" text-anchor="middle">save state.json</text>
-<path class="edge" d="M595,692 V712 H135 V728" marker-end="url(#c19a)"/>
-<text class="lbl" x="365" y="707" text-anchor="middle">200</text>
+<text class="t" x="135" y="750" text-anchor="middle">save state.json</text>
+<text class="s" x="135" y="767" text-anchor="middle">the space as read</text>
+<path class="edge dash" d="M825,692 V712 H135 V728" marker-end="url(#c21a)"/>
+<text class="lbl" x="480" y="707" text-anchor="middle">done</text>
+<rect class="box" x="262" y="814" width="206" height="46" rx="8"/>
+<text class="m" x="365" y="834" text-anchor="middle">PUT /me/spaces/S</text>
+<text class="s" x="365" y="851" text-anchor="middle">only if refs changed</text>
+<path class="edge" d="M135,776 V796 H365 V812" marker-end="url(#c21a)"/>
+<text class="lbl" x="250" y="791" text-anchor="middle">refs</text>
+<rect class="box" x="492" y="898" width="206" height="46" rx="8"/>
+<text class="t" x="595" y="918" text-anchor="middle">verify, read, merge</text>
+<text class="s" x="595" y="935" text-anchor="middle">{spaces}, then read back</text>
+<path class="edge" d="M365,860 V880 H595 V896" marker-end="url(#c21a)"/>
+<text class="lbl" x="480" y="875" text-anchor="middle">write</text>
+<rect class="box" x="262" y="982" width="206" height="46" rx="8"/>
+<text class="t" x="365" y="1010" text-anchor="middle">rev + 1</text>
+<path class="edge dash" d="M595,944 V964 H365 V980" marker-end="url(#c21a)"/>
+<text class="lbl" x="480" y="959" text-anchor="middle">written</text>
+<rect class="box" x="32" y="1066" width="206" height="46" rx="8"/>
+<text class="t" x="135" y="1094" text-anchor="middle">save state.json</text>
+<path class="edge dash" d="M365,1028 V1048 H135 V1064" marker-end="url(#c21a)"/>
+<text class="lbl" x="250" y="1043" text-anchor="middle">200</text>
 </svg>
 </div>
-<figcaption><strong>A three-way merge of refs, per project.</strong> If you and the space both changed one project, or the space's rev went back, it stops, names the projects and records nothing. A rebase that conflicts is undone and left for you.</figcaption>
+<figcaption><strong>A three-way merge of refs, per project.</strong> If you and the space both changed one project, or the space&#x27;s rev went back, it stops, names the projects and records nothing. A rebase that conflicts is undone and left for you.</figcaption>
 </figure>
 <h4><code>xo sync project:P</code></h4>
 <figure>
 <div class="canvas">
 <svg class="d" viewBox="0 0 960 374" role="img" aria-label="xo sync project:P: Rebase on the upstream, then push.">
 <defs>
-<marker id="c20a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
-<marker id="c20h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
+<marker id="c22a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
+<marker id="c22h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
 </defs>
 <line class="life" x1="360" y1="40" x2="360" y2="368"/>
 <rect class="hdr" x="255" y="12" width="210" height="28" rx="7"/>
@@ -1323,29 +1630,30 @@ html { scroll-behavior: smooth; }
 <rect class="box hot" x="495" y="142" width="210" height="46" rx="8"/>
 <text class="m" x="600" y="162" text-anchor="middle">pull --rebase</text>
 <text class="s" x="600" y="179" text-anchor="middle">undone on conflict</text>
-<path class="edge hot" d="M360,104 V124 H600 V140" marker-end="url(#c20h)"/>
+<path class="edge hot" d="M360,104 V124 H600 V140" marker-end="url(#c22h)"/>
 <text class="lbl hot" x="480" y="119" text-anchor="middle">rebase</text>
 <rect class="box" x="495" y="226" width="210" height="46" rx="8"/>
 <text class="t" x="600" y="246" text-anchor="middle">push</text>
 <text class="s" x="600" y="263" text-anchor="middle">never forced</text>
-<line class="edge" x1="600" y1="188" x2="600" y2="224" marker-end="url(#c20a)"/>
+<line class="edge" x1="600" y1="188" x2="600" y2="224" marker-end="url(#c22a)"/>
 <rect class="box" x="255" y="310" width="210" height="46" rx="8"/>
-<text class="t" x="360" y="338" text-anchor="middle">rebased, pushed</text>
-<path class="edge" d="M600,272 V292 H360 V308" marker-end="url(#c20a)"/>
+<text class="t" x="360" y="330" text-anchor="middle">print</text>
+<text class="s" x="360" y="347" text-anchor="middle">rebased, pushed</text>
+<path class="edge dash" d="M600,272 V292 H360 V308" marker-end="url(#c22a)"/>
 <text class="lbl" x="480" y="287" text-anchor="middle">done</text>
 </svg>
 </div>
 <figcaption><strong>Rebase on the upstream, then push.</strong> On a conflict xo runs <code>git rebase --abort</code>, so the checkout is as it was.</figcaption>
 </figure>
 <h3 id="cmd-lower-level">Lower level</h3>
-<p>For operations the generated commands don't cover, or to see what a command would send.</p>
+<p>For operations the generated commands don&#x27;t cover, or to see what a command would send.</p>
 <h4><code>xo ops [FILTER]</code></h4>
 <figure>
 <div class="canvas">
 <svg class="d" viewBox="0 0 960 290" role="img" aria-label="xo ops [FILTER]: Offline.">
 <defs>
-<marker id="c21a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
-<marker id="c21h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
+<marker id="c23a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
+<marker id="c23h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
 </defs>
 <line class="life" x1="480" y1="40" x2="480" y2="284"/>
 <rect class="hdr" x="375" y="12" width="210" height="28" rx="7"/>
@@ -1355,11 +1663,11 @@ html { scroll-behavior: smooth; }
 <rect class="box hot" x="375" y="142" width="210" height="46" rx="8"/>
 <text class="t" x="480" y="162" text-anchor="middle">read openapi.json</text>
 <text class="s" x="480" y="179" text-anchor="middle">or --spec, XO_SPEC</text>
-<line class="edge hot" x1="480" y1="104" x2="480" y2="140" marker-end="url(#c21h)"/>
+<line class="edge hot" x1="480" y1="104" x2="480" y2="140" marker-end="url(#c23h)"/>
 <rect class="box" x="375" y="226" width="210" height="46" rx="8"/>
 <text class="t" x="480" y="246" text-anchor="middle">print operations</text>
 <text class="s" x="480" y="263" text-anchor="middle">id, method, path</text>
-<line class="edge" x1="480" y1="188" x2="480" y2="224" marker-end="url(#c21a)"/>
+<line class="edge" x1="480" y1="188" x2="480" y2="224" marker-end="url(#c23a)"/>
 </svg>
 </div>
 <figcaption><strong>Offline.</strong> The spec is read from disk, never fetched, so <code>ops</code> and every <code>--help</code> work without a network.</figcaption>
@@ -1367,78 +1675,89 @@ html { scroll-behavior: smooth; }
 <h4><code>xo call OPERATION · xo api METHOD PATH</code></h4>
 <figure>
 <div class="canvas">
-<svg class="d" viewBox="0 0 960 374" role="img" aria-label="xo call OPERATION · xo api METHOD PATH: Anything else gets the server&#x27;s 404.">
+<svg class="d" viewBox="0 0 960 458" role="img" aria-label="xo call OPERATION · xo api METHOD PATH: Anything else gets the server&#x27;s 404.">
 <defs>
-<marker id="c22a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
-<marker id="c22h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
+<marker id="c24a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
+<marker id="c24h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
 </defs>
-<line class="life" x1="240" y1="40" x2="240" y2="368"/>
+<line class="life" x1="240" y1="40" x2="240" y2="452"/>
 <rect class="hdr" x="135" y="12" width="210" height="28" rx="7"/>
 <text class="t" x="240" y="31" text-anchor="middle">You: xo CLI</text>
-<line class="life" x1="480" y1="40" x2="480" y2="368"/>
+<line class="life" x1="480" y1="40" x2="480" y2="452"/>
 <rect class="hdr" x="375" y="12" width="210" height="28" rx="7"/>
 <text class="t" x="480" y="31" text-anchor="middle">xo server</text>
-<line class="life" x1="720" y1="40" x2="720" y2="368"/>
+<line class="life" x1="720" y1="40" x2="720" y2="452"/>
 <rect class="hdr" x="615" y="12" width="210" height="28" rx="7"/>
 <text class="t" x="720" y="31" text-anchor="middle">XO core API</text>
 <rect class="box" x="135" y="58" width="210" height="46" rx="8"/>
 <text class="m" x="240" y="78" text-anchor="middle">xo call create_codex</text>
 <text class="s" x="240" y="95" text-anchor="middle">--param, --data, --field</text>
-<rect class="box hot" x="375" y="142" width="210" height="46" rx="8"/>
+<rect class="box" x="375" y="142" width="210" height="46" rx="8"/>
 <text class="m" x="480" y="162" text-anchor="middle">/api/core/v1/...</text>
 <text class="s" x="480" y="179" text-anchor="middle">creates + space read only</text>
-<path class="edge hot" d="M240,104 V124 H480 V140" marker-end="url(#c22h)"/>
-<text class="lbl hot" x="360" y="119" text-anchor="middle">request + key</text>
-<rect class="box" x="615" y="226" width="210" height="46" rx="8"/>
+<path class="edge" d="M240,104 V124 H480 V140" marker-end="url(#c24a)"/>
+<text class="lbl" x="360" y="119" text-anchor="middle">request + key</text>
+<rect class="box hot" x="615" y="226" width="210" height="46" rx="8"/>
 <text class="t" x="720" y="254" text-anchor="middle">XO&#x27;s answer</text>
-<path class="edge" d="M480,188 V208 H720 V224" marker-end="url(#c22a)"/>
-<text class="lbl" x="600" y="203" text-anchor="middle">forwarded</text>
-<rect class="box" x="135" y="310" width="210" height="46" rx="8"/>
-<text class="t" x="240" y="330" text-anchor="middle">print JSON</text>
-<text class="s" x="240" y="347" text-anchor="middle">secrets redacted</text>
-<path class="edge" d="M720,272 V292 H240 V308" marker-end="url(#c22a)"/>
-<text class="lbl" x="480" y="287" text-anchor="middle">answer</text>
+<path class="edge hot" d="M480,188 V208 H720 V224" marker-end="url(#c24h)"/>
+<text class="lbl hot" x="600" y="203" text-anchor="middle">forwarded</text>
+<rect class="box" x="375" y="310" width="210" height="46" rx="8"/>
+<text class="t" x="480" y="330" text-anchor="middle">passes it back</text>
+<text class="s" x="480" y="347" text-anchor="middle">as XO sent it</text>
+<path class="edge dash" d="M720,272 V292 H480 V308" marker-end="url(#c24a)"/>
+<text class="lbl" x="600" y="287" text-anchor="middle">answer</text>
+<rect class="box" x="135" y="394" width="210" height="46" rx="8"/>
+<text class="t" x="240" y="414" text-anchor="middle">print JSON</text>
+<text class="s" x="240" y="431" text-anchor="middle">secrets redacted</text>
+<path class="edge dash" d="M480,356 V376 H240 V392" marker-end="url(#c24a)"/>
+<text class="lbl" x="360" y="371" text-anchor="middle">answer</text>
 </svg>
 </div>
-<figcaption><strong>Anything else gets the server's 404.</strong> To reach XO directly, add <code>--url https://dev.xo.builders</code> with <code>XO_API_KEY</code> or <code>--api-key -</code>. <code>--dry-run</code> sends nothing and hides provider keys.</figcaption>
+<figcaption><strong>Anything else gets the server&#x27;s 404.</strong> To reach XO directly, add <code>--url https://dev.xo.builders</code> with <code>XO_API_KEY</code> or <code>--api-key -</code>. <code>--dry-run</code> sends nothing and hides provider keys.</figcaption>
 </figure>
 <h3 id="cmd-coder-and-the-server">Coder and the server</h3>
 <p>Coder keeps its own login; xo checks where it points before every call.</p>
 <h4><code>xo coder github URL</code></h4>
 <figure>
 <div class="canvas">
-<svg class="d" viewBox="0 0 960 458" role="img" aria-label="xo coder github URL: The app on port 3000 is public.">
+<svg class="d" viewBox="0 0 960 542" role="img" aria-label="xo coder github URL: The app on port 3000 is public.">
 <defs>
-<marker id="c23a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
-<marker id="c23h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
+<marker id="c25a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
+<marker id="c25h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
 </defs>
-<line class="life" x1="360" y1="40" x2="360" y2="452"/>
+<line class="life" x1="360" y1="40" x2="360" y2="536"/>
 <rect class="hdr" x="255" y="12" width="210" height="28" rx="7"/>
 <text class="t" x="360" y="31" text-anchor="middle">You: xo CLI</text>
-<line class="life" x1="600" y1="40" x2="600" y2="452"/>
+<line class="life" x1="600" y1="40" x2="600" y2="536"/>
 <rect class="hdr" x="495" y="12" width="210" height="28" rx="7"/>
-<text class="t" x="600" y="31" text-anchor="middle">Coder</text>
+<text class="t" x="600" y="31" text-anchor="middle">coder · Coder</text>
 <rect class="box" x="255" y="58" width="210" height="46" rx="8"/>
 <text class="m" x="360" y="78" text-anchor="middle">xo coder github URL</text>
 <text class="s" x="360" y="95" text-anchor="middle">--name, --ref, --start-command</text>
 <rect class="box" x="495" y="142" width="210" height="46" rx="8"/>
-<text class="t" x="600" y="162" text-anchor="middle">where logged in?</text>
-<text class="s" x="600" y="179" text-anchor="middle">must be xo&#x27;s deployment</text>
-<path class="edge" d="M360,104 V124 H600 V140" marker-end="url(#c23a)"/>
+<text class="m" x="600" y="162" text-anchor="middle">coder whoami</text>
+<text class="s" x="600" y="179" text-anchor="middle">where is it logged in?</text>
+<path class="edge" d="M360,104 V124 H600 V140" marker-end="url(#c25a)"/>
 <text class="lbl" x="480" y="119" text-anchor="middle">check</text>
-<rect class="box hot" x="495" y="226" width="210" height="46" rx="8"/>
-<text class="t" x="600" y="246" text-anchor="middle">create workspace</text>
-<text class="s" x="600" y="263" text-anchor="middle">template xo-github</text>
-<line class="edge hot" x1="600" y1="188" x2="600" y2="224" marker-end="url(#c23h)"/>
-<rect class="box" x="495" y="310" width="210" height="46" rx="8"/>
-<text class="t" x="600" y="330" text-anchor="middle">wait for the build</text>
-<text class="s" x="600" y="347" text-anchor="middle">up to 600 s</text>
-<line class="edge" x1="600" y1="272" x2="600" y2="308" marker-end="url(#c23a)"/>
-<rect class="box" x="255" y="394" width="210" height="46" rx="8"/>
-<text class="t" x="360" y="414" text-anchor="middle">print URLs</text>
-<text class="s" x="360" y="431" text-anchor="middle">workspace + public app</text>
-<path class="edge" d="M600,356 V376 H360 V392" marker-end="url(#c23a)"/>
-<text class="lbl" x="480" y="371" text-anchor="middle">done</text>
+<rect class="box" x="255" y="226" width="210" height="46" rx="8"/>
+<text class="t" x="360" y="246" text-anchor="middle">xo&#x27;s deployment?</text>
+<text class="s" x="360" y="263" text-anchor="middle">else stop</text>
+<path class="edge dash" d="M600,188 V208 H360 V224" marker-end="url(#c25a)"/>
+<text class="lbl" x="480" y="203" text-anchor="middle">where</text>
+<rect class="box hot" x="495" y="310" width="210" height="46" rx="8"/>
+<text class="t" x="600" y="330" text-anchor="middle">create workspace</text>
+<text class="s" x="600" y="347" text-anchor="middle">template xo-github</text>
+<path class="edge hot" d="M360,272 V292 H600 V308" marker-end="url(#c25h)"/>
+<text class="lbl hot" x="480" y="287" text-anchor="middle">runs coder</text>
+<rect class="box" x="495" y="394" width="210" height="46" rx="8"/>
+<text class="t" x="600" y="414" text-anchor="middle">wait for the build</text>
+<text class="s" x="600" y="431" text-anchor="middle">up to 600 s</text>
+<line class="edge" x1="600" y1="356" x2="600" y2="392" marker-end="url(#c25a)"/>
+<rect class="box" x="255" y="478" width="210" height="46" rx="8"/>
+<text class="t" x="360" y="498" text-anchor="middle">print URLs</text>
+<text class="s" x="360" y="515" text-anchor="middle">workspace + public app</text>
+<path class="edge dash" d="M600,440 V460 H360 V476" marker-end="url(#c25a)"/>
+<text class="lbl" x="480" y="455" text-anchor="middle">done</text>
 </svg>
 </div>
 <figcaption><strong>The app on port 3000 is public.</strong> <code>--dry-run</code> prints the plan without Coder. Provisioner logs are never printed, since they can hold credentials.</figcaption>
@@ -1446,30 +1765,35 @@ html { scroll-behavior: smooth; }
 <h4><code>xo coder login | logout | list | ssh | ...</code></h4>
 <figure>
 <div class="canvas">
-<svg class="d" viewBox="0 0 960 290" role="img" aria-label="xo coder login | logout | list | ssh | ...: No Coder command runs against another deployment.">
+<svg class="d" viewBox="0 0 960 374" role="img" aria-label="xo coder login | logout | list | ssh | ...: No Coder command runs against another deployment.">
 <defs>
-<marker id="c24a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
-<marker id="c24h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
+<marker id="c26a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
+<marker id="c26h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
 </defs>
-<line class="life" x1="360" y1="40" x2="360" y2="284"/>
+<line class="life" x1="360" y1="40" x2="360" y2="368"/>
 <rect class="hdr" x="255" y="12" width="210" height="28" rx="7"/>
 <text class="t" x="360" y="31" text-anchor="middle">You: xo CLI</text>
-<line class="life" x1="600" y1="40" x2="600" y2="284"/>
+<line class="life" x1="600" y1="40" x2="600" y2="368"/>
 <rect class="hdr" x="495" y="12" width="210" height="28" rx="7"/>
-<text class="t" x="600" y="31" text-anchor="middle">Coder</text>
+<text class="t" x="600" y="31" text-anchor="middle">coder · Coder</text>
 <rect class="box" x="255" y="58" width="210" height="46" rx="8"/>
 <text class="m" x="360" y="78" text-anchor="middle">xo coder ssh my-app</text>
 <text class="s" x="360" y="95" text-anchor="middle">caught before argparse</text>
-<rect class="box hot" x="495" y="142" width="210" height="46" rx="8"/>
-<text class="t" x="600" y="162" text-anchor="middle">where logged in?</text>
+<rect class="box" x="495" y="142" width="210" height="46" rx="8"/>
+<text class="m" x="600" y="162" text-anchor="middle">coder whoami</text>
 <text class="s" x="600" y="179" text-anchor="middle">asked without a URL</text>
-<path class="edge hot" d="M360,104 V124 H600 V140" marker-end="url(#c24h)"/>
-<text class="lbl hot" x="480" y="119" text-anchor="middle">check</text>
-<rect class="box" x="495" y="226" width="210" height="46" rx="8"/>
-<text class="m" x="600" y="246" text-anchor="middle">coder --url DEP ssh</text>
-<text class="s" x="600" y="263" text-anchor="middle">in your terminal</text>
-<line class="edge" x1="600" y1="188" x2="600" y2="224" marker-end="url(#c24a)"/>
-<text class="lbl" x="608" y="211">only if xo&#x27;s</text>
+<path class="edge" d="M360,104 V124 H600 V140" marker-end="url(#c26a)"/>
+<text class="lbl" x="480" y="119" text-anchor="middle">check</text>
+<rect class="box" x="255" y="226" width="210" height="46" rx="8"/>
+<text class="t" x="360" y="246" text-anchor="middle">xo&#x27;s deployment?</text>
+<text class="s" x="360" y="263" text-anchor="middle">else stop</text>
+<path class="edge dash" d="M600,188 V208 H360 V224" marker-end="url(#c26a)"/>
+<text class="lbl" x="480" y="203" text-anchor="middle">where</text>
+<rect class="box hot" x="495" y="310" width="210" height="46" rx="8"/>
+<text class="m" x="600" y="330" text-anchor="middle">coder --url DEP ssh</text>
+<text class="s" x="600" y="347" text-anchor="middle">in your terminal</text>
+<path class="edge hot" d="M360,272 V292 H600 V308" marker-end="url(#c26h)"/>
+<text class="lbl hot" x="480" y="287" text-anchor="middle">runs</text>
 </svg>
 </div>
 <figcaption><strong>No Coder command runs against another deployment.</strong> Options that change the deployment, token or login store are refused anywhere after the verb. xo has no delete.</figcaption>
@@ -1479,8 +1803,8 @@ html { scroll-behavior: smooth; }
 <div class="canvas">
 <svg class="d" viewBox="0 0 960 206" role="img" aria-label="xo serve: The same App Vercel runs.">
 <defs>
-<marker id="c25a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
-<marker id="c25h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
+<marker id="c27a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
+<marker id="c27h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
 </defs>
 <line class="life" x1="360" y1="40" x2="360" y2="200"/>
 <rect class="hdr" x="255" y="12" width="210" height="28" rx="7"/>
@@ -1494,7 +1818,7 @@ html { scroll-behavior: smooth; }
 <rect class="box hot" x="495" y="142" width="210" height="46" rx="8"/>
 <text class="t" x="600" y="162" text-anchor="middle">ThreadingHTTPServer</text>
 <text class="s" x="600" y="179" text-anchor="middle">127.0.0.1:8787</text>
-<path class="edge hot" d="M360,104 V124 H600 V140" marker-end="url(#c25h)"/>
+<path class="edge hot" d="M360,104 V124 H600 V140" marker-end="url(#c27h)"/>
 <text class="lbl hot" x="480" y="119" text-anchor="middle">start</text>
 </svg>
 </div>
@@ -1502,13 +1826,12 @@ html { scroll-behavior: smooth; }
 </figure>
 </section>
 
-
 <section id="server">
 	<h2><span class="num">04</span>The server</h2>
 	<p>Two front doors share one <code>App</code>. Every answer uses the core API's envelope, <code>{"success", "data" | "error"}</code>, and every request is counted for the public status page.</p>
 	<figure>
 		<div class="canvas">
-			<svg class="d" viewBox="0 0 960 280" role="img" aria-label="Vercel's wsgi_app and the local ThreadingHTTPServer both call App.handle. Public routes need no key. /me and /user-metadata check the key with Clerk under per-key limits. /api/core/v1 routes are forwarded to XO's core API with the caller's key.">
+			<svg class="d" viewBox="0 0 960 280" role="img" aria-label="Vercel's wsgi_app and the local ThreadingHTTPServer both call App.handle. Public routes need no key. /me, its projects, spaces, share and shared routes, and /user-metadata check the key with Clerk under per-key limits. /api/core/v1 routes are forwarded to XO's core API with the caller's key.">
 				<defs>
 					<marker id="f5a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
 					<marker id="f5h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
@@ -1546,8 +1869,8 @@ html { scroll-behavior: smooth; }
 
 				<rect class="box" x="530" y="95" width="200" height="70" rx="8"/>
 				<text class="m" x="546" y="117">/me · /me/projects</text>
-				<text class="s" x="546" y="137">/me/spaces/** · /user-metadata</text>
-				<text class="s" x="546" y="155">limited per key</text>
+				<text class="s" x="546" y="137">/me/spaces/** · /me/share*</text>
+				<text class="s" x="546" y="155">/user-metadata · rate limited</text>
 
 				<line class="edge" x1="730" y1="130" x2="788" y2="130" marker-end="url(#f5a)"/>
 				<text class="lbl" x="759" y="122" text-anchor="middle">verify</text>
@@ -1572,11 +1895,11 @@ html { scroll-behavior: smooth; }
 </section>
 
 <section id="projects">
-	<h2><span class="num">05</span>Projects and spaces in your metadata</h2>
-	<p>Two lists in your own Clerk private metadata, <code>projects</code> and <code>spaces</code>, are the only things a normal key can change. The client never sends metadata: it sends a name, a kind, an id, or a project and ref, and the server builds the change. Every write goes through one engine, <code>App._change()</code>.</p>
+	<h2><span class="num">05</span>Projects, spaces and invites in your metadata</h2>
+	<p>A normal key changes three keys of Clerk private metadata. On its own user it writes <code>projects</code> and <code>spaces</code>, and <code>shared</code> when it accepts or rejects an invite; accept writes <code>shared</code>, <code>projects</code> and <code>spaces</code> in one merge. The one write to another user is a share: <code>POST /me/share</code> adds the caller's invite to the recipient's <code>shared</code>, and writes nothing else of theirs. The client never sends metadata: it sends a name, a kind, an id, a project and ref, an item and username, or an invite id, and the server builds the change. Every write goes through one engine, <code>App._change()</code> and <code>App._change_keys()</code>.</p>
 	<figure>
 		<div class="canvas">
-			<svg class="d" viewBox="0 0 960 240" role="img" aria-label="private_metadata.projects holds project names, GitHub OWNER/REPO or plain. private_metadata.spaces holds entries with name, kind, XO id, rev and a projects list of project to ref, whose keys must be in projects. With PR 32, ./S/.xo/state.json on your machine keeps the rev and refs as installed, and a PUT is refused unless that rev still matches.">
+			<svg class="d" viewBox="0 0 960 330" role="img" aria-label="private_metadata.projects holds project names, GitHub OWNER/REPO or plain. private_metadata.spaces holds entries with name, kind, XO id, rev and a projects list of project to ref, whose keys must be in projects. private_metadata.shared holds invites other users wrote: from, fromName, item, projects and at; accepting one adds it to spaces and projects. ./S/.xo/state.json on your machine keeps the rev and refs as installed, and a PUT is refused unless that rev still matches.">
 				<defs>
 					<marker id="f6a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
 					<marker id="f6h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
@@ -1613,14 +1936,25 @@ html { scroll-behavior: smooth; }
 
 				<path class="edge hot dash" d="M720,91 H690 V135 H662" marker-end="url(#f6h)"/>
 				<text class="lbl hot" x="694" y="124">PUT</text>
+
+				<rect class="box" x="20" y="170" width="250" height="144" rx="8"/>
+				<rect class="hdr" x="21" y="171" width="248" height="29" rx="7"/>
+				<text class="t" x="36" y="190">shared[ ]</text>
+				<text class="m" x="36" y="219">from · fromName</text><text class="tag" x="254" y="219" text-anchor="end">the sender</text>
+				<text class="m" x="36" y="241">item</text><text class="tag" x="254" y="241" text-anchor="end">space:S | project:O/R</text>
+				<text class="m" x="36" y="263">projects · at</text><text class="tag" x="254" y="263" text-anchor="end">[{project: ref}], when</text>
+				<text class="tag" x="36" y="296">at most 20, 5 per sender, 1.5KB</text>
+
+				<path class="edge dash" d="M270,250 H345 V200 H368" marker-end="url(#f6a)"/>
+				<text class="lbl" x="280" y="242">accept</text>
 			</svg>
 		</div>
-		<figcaption><strong>Both lists live in one Clerk bucket, so xo stops at 6KB.</strong> Clerk keeps 8KB of private metadata per user and XO's own keys share it. Each space's <code>rev</code> is the counter <code>xo update</code> uses to tell whether the space moved on since you installed it.</figcaption>
+		<figcaption><strong>All three live in one Clerk bucket, so xo stops at 6KB.</strong> Clerk keeps 8KB of private metadata per user and XO's own keys share it. The 6KB counts the whole private metadata, <code>shared</code> (the invites) included, and <code>shared</code> itself is capped at 1.5KB (one invite at 1KB), so others can take at most 1.5KB of anyone's room. Each space's <code>rev</code> is the counter <code>xo update</code> uses to tell whether the space moved on since you installed it.</figcaption>
 	</figure>
 
 	<figure>
 		<div class="canvas">
-			<svg class="d" viewBox="0 0 960 290" role="img" aria-label="A metadata write: the CLI posts only names or refs to a /me route. The server verifies the key, validates against names.py and the 6KB budget, takes a per-user lock, reads the user from Clerk, writes a merge naming one list, waits 0.3 seconds and reads it back. If a racing write dropped something it puts it back, up to 3 writes or 10 seconds, then answers 503; otherwise 200.">
+			<svg class="d" viewBox="0 0 960 290" role="img" aria-label="A metadata write: the CLI posts only names, refs or ids to a /me route. The server verifies the key, validates against names.py and the 6KB budget, takes a per-user lock, reads the user from Clerk, writes a merge naming only the keys it changes, waits 0.3 seconds and reads it back. If a racing write dropped something it puts it back, up to 3 writes or 10 seconds, then answers 503; otherwise 200.">
 				<defs>
 					<marker id="f7a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
 					<marker id="f7h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
@@ -1628,14 +1962,14 @@ html { scroll-behavior: smooth; }
 
 				<rect class="box" x="20" y="40" width="180" height="64" rx="8"/>
 				<text class="m" x="36" y="66">xo projects add</text>
-				<text class="s" x="36" y="88">create · connect · update</text>
+				<text class="s" x="36" y="88">update · share · accept</text>
 
 				<line class="edge" x1="200" y1="72" x2="248" y2="72" marker-end="url(#f7a)"/>
 				<text class="lbl" x="224" y="64" text-anchor="middle">names</text>
 
 				<rect class="box" x="250" y="40" width="200" height="64" rx="8"/>
 				<text class="m" x="266" y="66">/me/projects</text>
-				<text class="s" x="266" y="88">/me/spaces/**, verify key</text>
+				<text class="s" x="266" y="88">/me/spaces/**, /me/share*</text>
 
 				<line class="edge" x1="450" y1="72" x2="498" y2="72" marker-end="url(#f7a)"/>
 				<text class="lbl" x="474" y="64" text-anchor="middle">key ok</text>
@@ -1662,8 +1996,8 @@ html { scroll-behavior: smooth; }
 				<text class="lbl hot" x="726" y="170" text-anchor="middle">change</text>
 
 				<rect class="box hot" x="500" y="150" width="200" height="56" rx="8"/>
-				<text class="t" x="516" y="173">write one list only</text>
-				<text class="s" x="516" y="193">merge {projects} or {spaces}</text>
+				<text class="t" x="516" y="173">write only its keys</text>
+				<text class="s" x="516" y="193">the merge names nothing else</text>
 
 				<line class="edge" x1="500" y1="178" x2="452" y2="178" marker-end="url(#f7a)"/>
 				<text class="lbl" x="476" y="170" text-anchor="middle">0.3 s</text>
@@ -1697,6 +2031,10 @@ html { scroll-behavior: smooth; }
 				<tr><td>POST /me/spaces/{name}/projects</td><td>xo connect project:P space:S</td><td>Sets one project's ref (default <code>main</code>); P must be in your projects</td></tr>
 				<tr><td>PUT /me/spaces/{name}</td><td>xo update · xo sync</td><td>Replaces the space's projects and refs if it is still at <code>rev</code> holding <code>base</code>, else 409 "run xo sync"</td></tr>
 				<tr><td>GET /me/projects · /me/spaces</td><td>xo projects · xo list</td><td>Reads either list, masked as <code>/me</code> is (refs shown as stored)</td></tr>
+				<tr><td>POST /me/share</td><td>xo share</td><td><code>{item, to}</code>: the caller's invite into user <code>to</code>'s <code>shared</code>, and nothing else of theirs; anything about the recipient is the same 404</td></tr>
+				<tr><td>GET /me/shared</td><td>xo list shared · xo accept</td><td>The caller's invites, each with an id and its sender's username now</td></tr>
+				<tr><td>POST /me/shared/accept</td><td>xo accept</td><td><code>{id, as?}</code> or <code>{id, space, ref?}</code>: one write of <code>spaces</code>, <code>projects</code> and <code>shared</code> (the invite off)</td></tr>
+				<tr><td>POST /me/shared/reject</td><td>xo reject</td><td><code>{id}</code>: the invite off <code>shared</code>, nothing else</td></tr>
 			</tbody>
 		</table>
 	</div>
@@ -1766,7 +2104,7 @@ html { scroll-behavior: smooth; }
 		<li><strong>One network door per side.</strong> <code>client.py</code> is the only CLI code that talks to XO; <code>gitops.py</code> runs git and <code>github.py</code> runs gh. <code>Clerk</code> and <code>Core</code> in <code>server.py</code> are the only server code that talks out.</li>
 		<li><strong>Keys are never printed.</strong> The key is redacted from every response and error, in its URL, JSON and HTML escaped forms too. Plain <code>http://</code> is refused except to this machine.</li>
 		<li><strong>Your own metadata is readable.</strong> <code>/me</code> returns your email and both metadata buckets, with values under credential-like names (or that look like keys) masked to their last 4 characters or <code>(hidden)</code>. <code>XO_ME_PRIVATE_KEYS</code> can narrow which private keys it shows.</li>
-		<li><strong>Only two lists are writable by you.</strong> <code>projects</code> and <code>spaces</code>, each written alone, on the key's own user, with one audit line per change (a count, never a value).</li>
+		<li><strong>Three keys are writable by you, and one key of anyone else's.</strong> A normal key writes only <code>projects</code>, <code>spaces</code> and <code>shared</code> on its own user (accept writes all three in one merge), and on another user only its own invite in their <code>shared</code> (<code>xo share</code>). Every change is one audit line (a count, never a value; a share names the recipient only by a hash).</li>
 		<li><strong>Admin is two locks.</strong> A Clerk API key with the claim <code>xo_admin: true</code> <em>and</em> an id listed in <code>XO_ADMIN_KEY_IDS</code>. None is issued yet, so <code>/user-metadata</code> answers 403 to everyone.</li>
 		<li><strong>Coder is checked before each call.</strong> xo asks Coder where it is logged in and stops unless it is xo's deployment, so the Coder token goes nowhere else.</li>
 	</ul>
@@ -1786,19 +2124,20 @@ html { scroll-behavior: smooth; }
 
 <section id="state">
 	<h2><span class="num">08</span>Where state lives</h2>
-	<p>No database. Your lists live in Clerk; the CLI keeps two small config files and a state file per installed space; the server keeps everything else in process memory, so on Vercel each instance starts empty.</p>
+	<p>No database. Your lists and the invites waiting on you live in Clerk; the CLI keeps two small config files and a state file per installed space; the server keeps everything else in process memory, so on Vercel each instance starts empty.</p>
 	<div class="scroll">
 		<table class="tokens">
 			<thead><tr><th>State</th><th>Where</th><th>Holds</th></tr></thead>
 			<tbody>
 				<tr><td>credentials</td><td>CLI, <code>$XDG_CONFIG_HOME/xo/</code></td><td>The key and the server URL it belongs to; refused if others can read it or it is a symlink</td></tr>
 				<tr><td>services</td><td>CLI, next to credentials</td><td>The address last logged in to per service</td></tr>
-				<tr><td>projects · spaces</td><td>Clerk, your private metadata</td><td>Up to 30 projects and 10 spaces of 10 projects each, within 6KB; written only by the server</td></tr>
+				<tr><td>projects · spaces</td><td>Clerk, your private metadata</td><td>Up to 30 projects and 10 spaces of 10 projects each; written only by the server</td></tr>
+				<tr><td>shared</td><td>Clerk, your private metadata</td><td>Invites waiting on you: up to 20, 5 from one sender, 1.5KB in all; written by the server for their senders, and taken off when you accept or reject. With <code>projects</code>, <code>spaces</code> and XO's keys, the whole private metadata stays within 6KB</td></tr>
 				<tr><td>.xo/state.json</td><td>CLI, <code>./S/</code> per installed space</td><td>The space's rev and refs as installed or last recorded</td></tr>
 				<tr><td>services.json · openapi.json</td><td>Package</td><td>Service addresses (served at <code>/config</code>) and the core API spec</td></tr>
 				<tr><td>activity, counts</td><td>Server memory</td><td>Last 100 requests (time, method, route, status, ms) for the status page</td></tr>
 				<tr><td>limits, caches, locks</td><td>Server memory</td><td>Up to 10,000 recent keys; <code>/me</code> profiles for 60 s (cleared by a change); one change lock per user</td></tr>
-				<tr><td>audit log</td><td>Server stderr</td><td>One JSON line per <code>/user-metadata</code> request and per list change; ids and counts, never values</td></tr>
+				<tr><td>audit log</td><td>Server stderr</td><td>One JSON line per <code>/user-metadata</code> request and per metadata change (shares included, the recipient as a hash); ids and counts, never values</td></tr>
 			</tbody>
 		</table>
 	</div>
@@ -1806,12 +2145,12 @@ html { scroll-behavior: smooth; }
 
 <section id="folders">
 	<h2><span class="num">09</span>Folder map</h2>
-	<p>42 tracked files. Rows are tagged by which half of the package they serve.</p>
+	<p>44 tracked files. Rows are tagged by which half of the package they serve.</p>
 	<div class="tree">
 		<div class="key"><span class="chip agent">CLI</span><span class="chip org">server</span><span class="chip shared">shared</span></div>
 		<ol>
 			<li class="dir" style="--d:0"><span class="p">src/xo/</span><span class="chip shared">shared</span><span class="why">The one package, <code>quirq-xo</code></span></li>
-			<li style="--d:1"><span class="p">cli.py</span><span class="chip agent">CLI</span><span class="why">argparse; built-ins: login, status, projects, create (every space and project), connect, list, install, update, sync, coder</span></li>
+			<li style="--d:1"><span class="p">cli.py</span><span class="chip agent">CLI</span><span class="why">argparse; built-ins: login, status, projects, create (every space and project), connect, list, install, update, sync, share, accept, reject, coder</span></li>
 			<li style="--d:1"><span class="p">workspace.py</span><span class="chip agent">CLI</span><span class="why">install, update and sync for a project or a space</span></li>
 			<li style="--d:1"><span class="p">gitops.py</span><span class="chip agent">CLI</span><span class="why">The user's git, https only, no submodules, no xo tokens</span></li>
 			<li style="--d:1"><span class="p">client.py</span><span class="chip agent">CLI</span><span class="why">The only XO network code: Client, CoderClient, saved key, redaction</span></li>
@@ -1819,7 +2158,7 @@ html { scroll-behavior: smooth; }
 			<li style="--d:1"><span class="p">coder.py · github.py</span><span class="chip agent">CLI</span><span class="why"><code>xo-github</code> template inputs; gh login, status, logout</span></li>
 			<li style="--d:1"><span class="p">names.py</span><span class="chip shared">shared</span><span class="why">Project, space and ref rules and the space kinds; the only module both sides import</span></li>
 			<li style="--d:1"><span class="p">services.py · services.json · openapi.json</span><span class="chip shared">shared</span><span class="why">Services list and saved addresses; the bundled core API spec</span></li>
-			<li style="--d:1"><span class="p">server.py</span><span class="chip org">server</span><span class="why">App, Clerk, Core forward, <code>/me</code> masking, the list write engine, limits, servers</span></li>
+			<li style="--d:1"><span class="p">server.py</span><span class="chip org">server</span><span class="why">App, Clerk, Core forward, <code>/me</code> masking, the write engine, sharing, limits, servers</span></li>
 			<li style="--d:1"><span class="p">status_page.py</span><span class="chip org">server</span><span class="why">Self-contained status page, CSP pinned by hash</span></li>
 			<li style="--d:0"><span class="p">app.py · Dockerfile</span><span class="chip org">server</span><span class="why">Vercel entry (<code>app = wsgi_app()</code>); non-root image running <code>xo serve</code></span></li>
 			<li class="dir" style="--d:0"><span class="p">tests/</span><span class="chip shared">shared</span><span class="why">pytest on loopback only: fake XO, fake Clerk, local git remotes</span></li>
@@ -1833,7 +2172,7 @@ html { scroll-behavior: smooth; }
 	</div>
 </section>
 
-<footer>Generated from <code>quirq-ai/xo</code> main at <code>4027932</code> (through #33) plus the unified <code>xo create</code> change on <code>claude/unified-create</code>. Setup is in <code>docs/quickstart.md</code>; the server's settings in <code>docs/server.md</code>.</footer>
+<footer>Describes <code>quirq-ai/xo</code> main as of this change: through #37 (sharing) plus the unified <code>xo create</code>. Setup is in <code>docs/quickstart.md</code>; the server's settings in <code>docs/server.md</code>.</footer>
 </main>
 </body>
 </html>

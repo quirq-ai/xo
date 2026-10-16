@@ -242,6 +242,14 @@ process apply per function instance, so the per-address limit is a Vercel Firewa
   in place, through the same engine as an add, writing `projects` and nothing else. Refused without
   a write: P not in the list (404), P already a repo or the repo not `OWNER/REPO` (422), the repo
   already in the list (409), and P in any space (409), since the space would still name it P.
+  `spaces` is checked on every read, not only the first: if a racing `xo connect project:P space:S`
+  puts P in a space after the rename landed, the rename is put back (P listed again) and the answer
+  is 409. The repo is listed once whatever a racing add wrote.
+- **A rename can bring the old name back.** Every other write puts back names a racing write
+  dropped, and this is the one route that removes a name. A `xo projects add` or `xo create
+  project` on another instance that read the list before the rename can therefore put P back next
+  to `OWNER/REPO`. Nothing is lost, but P stays listed (xo has no delete); the window is the 0.3
+  second settle.
 
 ## Spaces
 

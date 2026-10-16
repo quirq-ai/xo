@@ -516,7 +516,7 @@ def _request(args: argparse.Namespace, *, server: bool = False, preset: dict | N
             raise XoError(f"{label}: --data must be a JSON object")
         for k, v in preset.items():
             if k in body and body[k] != v:
-                raise XoError(f"{label}: the body's {k} comes from the command line; leave it out of --data")
+                raise XoError(f"{label}: the body's {k} comes from the command line; leave it out of --data and --field")
             body[k] = v
     if body is None and op.body_required:
         if not op.required_fields:
@@ -740,8 +740,12 @@ def _create_space(args: argparse.Namespace) -> int:
     records it in your spaces as NAME."""
     if not names.xo_name_ok(args.space_name):
         raise XoError(names.XO_NAME_RULE)
-    client, op, _, _, _, body = _request(args, server=True, preset={"name": args.space_name})
-    wrapped = {"kind": op.path.strip("/"), "name": args.space_name, "body": body if body is not None else {}}
+    name = args.space_name.lower()
+    if name != args.space_name:
+        # XO keeps space names in lowercase; record the name XO will show.
+        print(f"xo: XO names spaces in lowercase, so this space is {name}", file=sys.stderr)
+    client, op, _, _, _, body = _request(args, server=True, preset={"name": name})
+    wrapped = {"kind": op.path.strip("/"), "name": name, "body": body if body is not None else {}}
     return _send(client, args, "POST", "/me/spaces", query={}, body=wrapped,
                  paths=[("body", *p) for p in op.secret_paths], copies=op.copies_key)
 
@@ -807,14 +811,20 @@ def _local_repo(dest: Path, repo: str) -> None:
     try:
         print(f"xo: ./{dest}: {gitops.set_origin(dest, repo)}", file=sys.stderr)
     except XoError as e:
-        print(f"xo: ./{dest} was left as it is: {e}", file=sys.stderr)
+        print(f"xo: ./{dest} was left as it is and not moved: {e}", file=sys.stderr)
         return
     target = Path(repo)
     if target.exists() or target.is_symlink():
         print(f"xo: ./{target} already exists, so ./{dest} was not moved there; move it yourself", file=sys.stderr)
         return
-    target.parent.mkdir(parents=True, exist_ok=True)
-    dest.rename(target)
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        dest.rename(target)
+    except OSError as e:
+        # The project is already renamed; only the folder stayed where it was.
+        print(f"xo: ./{dest} could not be moved to ./{target} ({e.strerror or type(e).__name__}); move it yourself",
+              file=sys.stderr)
+        return
     print(f"xo: ./{dest} moved to ./{target}", file=sys.stderr)
 
 

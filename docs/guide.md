@@ -73,8 +73,9 @@ xo create project https://github.com/OWNER/REPO  # named OWNER/REPO, added to yo
 xo create project OWNER/REPO https://github.com/OWNER/REPO   # the same: a name and a URL must match
 xo create project notes                          # a project with no GitHub remote: ./notes, git init
 xo connect project:notes --repo https://github.com/OWNER/REPO
-                                                 # give it its repo later: renamed OWNER/REPO, ./notes
-                                                 # gets that origin and moves to ./OWNER/REPO
+                                                 # give it its repo later: renamed OWNER/REPO; ./notes
+                                                 # gets that origin if it has none and moves to
+                                                 # ./OWNER/REPO (not moved if its origin is another repo)
 xo connect project:OWNER/REPO space:my-cc --ref main  # put a project in a space, at a branch, tag or sha
 xo connect space:dev                             # a new space entry in your metadata, no XO space
 xo connect space:old --id THE_ID                 # an entry for an XO space you already have, or
@@ -126,7 +127,11 @@ xo sync project:OWNER/REPO                       # git pull --rebase, then push
 - `xo claude-code`, `xo codex` and the other old create commands are gone; each says to use
   `xo create space NAME KIND`.
 - A project is named after its repo. `xo connect project:P --repo URL` is refused while P is in a
-  space, since the space would still name it P.
+  space, since the space would still name it P. It gives `./P` that origin only when it has none,
+  and leaves the folder where it is when its origin is another repository, so `xo update` never
+  pushes to the wrong place.
+- XO keeps space names in lowercase, so `xo create space MyDev codex` creates and records `mydev`,
+  and says so.
 - Add `--dry-run` to `xo create space` to see the request without sending it.
   `xo create project` and `xo connect` have no `--dry-run`.
 - `-` makes xo ask for a key or token without showing it. Only one `-` works per command; put any

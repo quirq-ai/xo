@@ -1712,6 +1712,19 @@ def test_create_space_refuses_a_bad_name_before_sending(core, capsys, name):
     assert _refused(capsys, "create", "space", name, "claude-code", "--volume-size", "1") and core.requests == []
 
 
+def test_create_space_records_the_lowercase_name_xo_uses(core, capsys):
+    core.route("POST", "/me/spaces", body={"success": True, "data": {"space": SPACE, "xo": {"id": "sp-1"}}})
+    code, _, err = run(capsys, "create", "space", "MyDev", "codex", "--volume-size", "20")
+    body = core.requests[0]["body"]
+    assert code == 0 and body["name"] == "mydev" and body["body"]["name"] == "mydev"
+    assert "lowercase, so this space is mydev" in err
+
+
+def test_create_space_says_a_name_field_comes_from_the_command_line(core, capsys):
+    code, _, err = run(capsys, "create", "space", "dev", "codex", "--volume-size", "20", "--field", "name=other")
+    assert code != 0 and "--field" in err and core.requests == []
+
+
 def test_connect_project_and_space(xs, capsys):
     xs.route("POST", "/me/spaces/dev/projects", body={"success": True, "data": {"space": SPACE}})
     xs.route("POST", "/me/spaces/connect", body={"success": True, "data": {"space": SPACE}})
@@ -1797,6 +1810,48 @@ def test_connect_repo_records_it_and_points_the_folder_at_github(xs, capsys, git
     from xo import gitops
     assert git("remote", "get-url", "origin", cwd="quirq-ai/notes") == f"{gitops.GITHUB}/quirq-ai/notes"
     assert "moved to ./quirq-ai/notes" in err
+
+
+def _connected(xs, capsys):
+    xs.route("POST", "/me/projects/connect", body={"success": True, "data": {"projects": ["quirq-ai/notes"]}})
+    code, _, err = run(capsys, "connect", "project:notes", "--repo", "https://github.com/quirq-ai/notes")
+    assert code == 0 and xs.requests[-1]["body"] == {"name": "notes", "repo": "quirq-ai/notes"}
+    return err
+
+
+def test_connect_repo_with_no_folder_here_says_install_clones_it(xs, capsys, github):
+    assert "xo install project:quirq-ai/notes clones it" in _connected(xs, capsys)
+
+
+def test_connect_repo_leaves_a_folder_that_is_not_a_checkout(xs, capsys, github):
+    Path("notes").mkdir()
+    assert "not moved" in _connected(xs, capsys) and Path("notes").is_dir()
+
+
+@pytest.mark.parametrize("origin, moved", [
+    ("https://github.com/quirq-ai/notes.git", True), ("git@github.com:Quirq-AI/notes", True),
+    ("https://github.com/someone-else/other", False), ("git@gitlab.com:quirq-ai/notes.git", False)])
+def test_connect_repo_moves_a_checkout_only_when_its_origin_is_that_repo(xs, capsys, github, origin, moved):
+    git("init", "-q", "notes")
+    git("remote", "add", "origin", origin, cwd="notes")
+    before = git("remote", "get-url", "origin", cwd="notes")  # as git reports it, after any insteadOf
+    err = _connected(xs, capsys)
+    assert Path("quirq-ai/notes/.git").is_dir() is moved and Path("notes").exists() is not moved
+    assert git("remote", "get-url", "origin", cwd="quirq-ai/notes" if moved else "notes") == before
+    assert ("another repository" in err) is not moved and before not in err
+
+
+def test_connect_repo_does_not_move_onto_an_existing_folder(xs, capsys, github):
+    git("init", "-q", "notes")
+    Path("quirq-ai/notes").mkdir(parents=True)
+    assert "already exists" in _connected(xs, capsys) and Path("notes/.git").is_dir()
+
+
+def test_connect_repo_exits_0_when_only_the_move_fails(xs, capsys, github):
+    git("init", "-q", "notes")
+    Path("quirq-ai").write_text("a file where the owner folder would go")
+    err = _connected(xs, capsys)
+    assert "could not be moved" in err and "move it yourself" in err and Path("notes/.git").is_dir()
 
 
 @pytest.mark.parametrize("argv", [
@@ -1914,3 +1969,12 @@ def test_accept_sends_nothing_unless_you_say_yes(xs, capsys, monkeypatch):
     ["reject", "0123abcd0123abcd", "--as", "x"], ["reject", "0123abcd0123abcd", "--yes"]])
 def test_share_and_invites_refuse_bad_input_before_sending(xs, capsys, argv):
     assert _refused(capsys, *argv) and xs.requests == []
+
+
+@pytest.mark.parametrize("url, same", [
+    ("https://github.com/o/r", True), ("https://github.com/O/R.git", True), ("git@github.com:o/r.git", True),
+    ("ssh://git@github.com/o/r/", True), ("https://github.com/o/r2", False), ("git@gitlab.com:o/r", False),
+    ("https://github.com/o/r/extra", False)])
+def test_an_origin_counts_as_the_repo_only_in_githubs_own_forms(url, same):
+    from xo import gitops
+    assert gitops._is_repo(url, "o/r") is same
