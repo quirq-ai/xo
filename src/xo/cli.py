@@ -621,25 +621,27 @@ def _logout(args: argparse.Namespace) -> int:
     services.forget_addresses()
     if os.environ.get(KEY_ENV, "").strip():
         print(f"xo: {KEY_ENV} is still set in this terminal; run unset {KEY_ENV} to clear it", file=sys.stderr)
+    failed = 0
     if shutil.which("coder"):
         try:
             coder_at = coder_url(args.coder_url, default=coder_default)
             print(f"xo: coder: {CoderClient(coder_at, timeout=args.timeout).logout(_ask)}", file=sys.stderr)
         except XoError as e:
             print(f"xo: coder: failed: {spec.clean(str(e))}", file=sys.stderr)
-            return 1
+            failed = 1
     if github.installed():
         try:
             print(f"xo: github: {spec.clean(github.GhClient(timeout=args.timeout).logout(_ask))}", file=sys.stderr)
         except XoError as e:
             print(f"xo: github: failed: {spec.clean(str(e))}", file=sys.stderr)
-            return 1
-    return 0
+            failed = 1
+    return failed
 
 
 def _status(args: argparse.Namespace) -> int:
-    """Each service, its address, and whether you are logged in. Never a key; only Coder's own CLI
-    is asked anything (where it is logged in), and without naming a deployment."""
+    """Each service, its address, and whether you are logged in. Never a key. Only the Coder and
+    GitHub CLIs are asked anything: Coder where it is logged in, without naming a deployment, and gh
+    who it is logged in as on github.com (up to two gh calls, one of them to GitHub)."""
     try:
         saved = saved_login()
         problem = None

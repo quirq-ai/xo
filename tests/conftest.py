@@ -31,6 +31,9 @@ def pytest_runtest_call(item):
     import urllib.request
     assert getattr(socket.getaddrinfo, "__name__", "") == "guard" and urllib.request.getproxies() == {}, (
         f"{item.nodeid}: the loopback guard is not active (is loopback_only overridden?)")
+    import subprocess
+    from xo import github
+    assert github.subprocess is not subprocess, f"{item.nodeid}: the real gh could run (is no_real_gh overridden?)"
 
 
 @pytest.fixture(autouse=True)
@@ -53,21 +56,24 @@ def loopback_only():
 
 
 @pytest.fixture(autouse=True)
-def no_real_gh(monkeypatch):
+def no_real_gh():
     """No test runs the real gh or sees a GitHub token from the machine: xo.github's subprocess
-    answers as if gh were not installed, unless a test puts a fake in its place."""
+    answers as if gh were not installed, unless a test puts a fake in its place. It has its own
+    MonkeyPatch, so a test's monkeypatch.undo() cannot remove it."""
     import subprocess
     import types
     from xo import github
 
     def run(*args, **kwargs):
         raise FileNotFoundError("gh")
-    monkeypatch.setattr(github, "installed", lambda: False)
-    monkeypatch.setattr(github, "subprocess", types.SimpleNamespace(
-        run=run, DEVNULL=subprocess.DEVNULL, TimeoutExpired=subprocess.TimeoutExpired,
-        CompletedProcess=subprocess.CompletedProcess))
-    for name in ("GH_TOKEN", "GITHUB_TOKEN", "GH_HOST"):
-        monkeypatch.delenv(name, raising=False)
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(github, "installed", lambda: False)
+        mp.setattr(github, "subprocess", types.SimpleNamespace(
+            run=run, DEVNULL=subprocess.DEVNULL, TimeoutExpired=subprocess.TimeoutExpired,
+            CompletedProcess=subprocess.CompletedProcess))
+        for name in ("GH_TOKEN", "GITHUB_TOKEN", "GH_HOST"):
+            mp.delenv(name, raising=False)
+        yield
 
 
 @pytest.fixture(autouse=True)

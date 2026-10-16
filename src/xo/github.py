@@ -17,8 +17,11 @@ HOST = "github.com"
 # gh reads these before its stored login; with one set, gh auth login refuses to run.
 TOKEN_ENVS = ("GH_TOKEN", "GITHUB_TOKEN")
 # Never handed to gh: it needs none of xo's secrets. GH_HOST is dropped too, so the host is always ours.
-_NOT_FOR_GH = re.compile(r"(XO_API_KEY|XO_CODER_URL|CODER_.*|CLERK_.*|ELEVENLABS_.*|GH_HOST|GH_ENTERPRISE_TOKEN"
-                         r"|GITHUB_ENTERPRISE_TOKEN)\Z")
+_NOT_FOR_GH = re.compile(r"(XO_.*|CODER_.*|CLERK_.*|ELEVENLABS_.*|GH_HOST|GH_ENTERPRISE_TOKEN|GITHUB_ENTERPRISE_TOKEN)\Z")
+# gh auth status wording, gh 2.27 and later: a login GitHub refused (or could not check), and no login
+# for github.com at all (also when gh is logged in only to another host).
+_REJECTED = ("authentication failed", "no longer valid", "failed to log in")
+_NO_LOGIN = ("not logged in", "not found among authenticated")
 _LOGIN = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})")
 INSTALL = "https://cli.github.com"
 
@@ -73,10 +76,10 @@ class GhClient:
             return login
         status = self._proc(["auth", "status", "--hostname", HOST])
         said = f"{status.stdout}\n{status.stderr}".lower()
-        if status.returncode and ("not logged in" in said or "gh auth login" in said) and "failed to log in" not in said:
+        if status.returncode and not any(s in said for s in _REJECTED) and any(s in said for s in _NO_LOGIN):
             return None
-        raise GhUnsure(f"gh is set up for {HOST} but GitHub did not accept it (gh api user failed, exit "
-                       f"{proc.returncode}); check gh auth status")
+        raise GhUnsure(f"gh is set up for {HOST} but GitHub did not accept it or could not be reached (gh api "
+                       f"user failed, exit {proc.returncode}); check gh auth status")
 
     def status(self) -> str:
         """One line for xo status."""
@@ -108,6 +111,9 @@ class GhClient:
             raise XoError(f"gh auth login needs a terminal; run xo login github in one (it logs in to {HOST})")
         if unsure and not ask(f"{unsure.split(';')[0]}; log gh in to {HOST} again, replacing that login?"):
             raise XoError(f"kept gh's login as it is; nothing changed ({unsure})")
+        print("xo: github: gh will ask \"Authenticate Git with your GitHub credentials?\". Yes (its default) "
+              "makes gh git's login for github.com, which changes ~/.gitconfig or the github.com login your "
+              "system keeps for git; answer n to leave git as it is.", file=sys.stderr, flush=True)
         try:
             code = subprocess.run(["gh", "auth", "login", "--hostname", HOST, "--git-protocol", "https", "--web"],
                                   env=self.env()).returncode
