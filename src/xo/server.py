@@ -14,6 +14,12 @@ verifies it with Clerk and answers:
     GET   /me/projects              any user key: the `projects` list in its own private metadata
     POST  /me/projects              any user key: add {"name": ...} to that list; the server builds
                                     the change and writes only `projects`, nothing else
+    GET   /me/spaces                any user key: the `spaces` list in its own private metadata
+    POST  /me/spaces                any user key: {"kind", "name", "body"}: create the space through
+                                    XO with the caller's key, then record it in `spaces`
+    POST  /me/spaces/connect        any user key: {"id", "name"}: record a space the key can read
+    POST  /me/spaces/{name}/projects  any user key: {"project", "ref"}: set one project's ref in a
+                                    space; the server writes only `spaces`, nothing else
     GET   /user-metadata/{userId}   admin keys only: public and private metadata
     PATCH /user-metadata/{userId}   admin keys only: deep-merge changes into allow-listed keys
     POST  /api/core/v1/{create}     passed on to XO's core API as sent, key included, and its
@@ -68,7 +74,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
-from xo import __version__, services, status_page
+from xo import __version__, names, services, status_page
 from xo.client import LOCAL_HOSTS, XoError, redact
 
 SECRET_ENV = "CLERK_SECRET_KEY"
@@ -100,11 +106,16 @@ BUCKETS = {"publicMetadata": "public_metadata", "privateMetadata": "private_meta
 MAX_BODY = 32 * 1024  # two 8KB buckets with room for JSON overhead
 # Requests per minute per key: /me, then /user-metadata. Clerk allows 1000 Backend API calls per
 # 10 seconds for the whole instance and 10 metadata writes per 10 seconds per user.
-LIMITS = {"me": 60, "projects": 30, "user-metadata": 20, "core": 30}
+LIMITS = {"me": 60, "projects": 30, "spaces": 30, "user-metadata": 20, "core": 30}
 # /me/projects: the one write a normal key can make. A name is letters, digits, spaces and _ . -,
 # starting with a letter or digit; the list stays well under Clerk's 8KB private metadata limit.
-PROJECT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9 _.-]{0,63}")
-MAX_PROJECTS = 50
+MAX_PROJECTS = 30
+MAX_SPACES = 10
+MAX_SPACE_PROJECTS = 10
+# The most a write may leave in a user's private metadata. Clerk keeps 8KB, shared with XO's own
+# keys, so xo's lists stop here and leave XO at least 2KB to grow into.
+PRIVATE_BUDGET = 6 * 1024
+DEFAULT_REF = "main"
 PROJECT_TRIES = 3  # writes tried when the list read back is not the one written
 PROJECT_SETTLE = 0.3  # seconds before the read that confirms a write
 MAX_TRACKED = 10_000  # tokens remembered for rate limiting; the least recently seen go first
@@ -116,7 +127,10 @@ ACTIVITY_KEPT = 100  # recent requests the status page lists, per process
 # amount of other traffic hides one, and each heals by itself once it is older than that.
 DEGRADED_SECONDS = 300
 DEGRADED_KEPT = 1000  # times remembered of each kind; enough to count five minutes of real traffic
-_CLERK_ROUTES = ("/me", "/me/projects", "/user-metadata/{userId}")
+_CLERK_ROUTES = ("/me", "/me/projects", "/me/spaces", "/me/spaces/connect", "/me/spaces/{name}/projects",
+                 "/user-metadata/{userId}")
+# The creates `xo create space KIND` may record: the core routes that make a space.
+SPACE_KINDS = ("claude-code", "codex", "antigravity", "hermes", "openclaw", "xo-cowork", "nebius-openclaw")
 _PROCESS_STARTED = time.time()  # when this process (on Vercel, this instance) loaded the server
 REQUEST_TIMEOUT = 10  # seconds a client may wait between bytes of its request
 # Seconds a connection to `xo serve` may stay open in all: a client that trickles one byte at a time
@@ -439,12 +453,27 @@ def _clerk_failure(e: ClerkError) -> _Reply:
     return _Reply(502, "Clerk did not answer", e.seen)
 
 
-def _project_failure(e: ClerkError) -> _Reply:
-    """/me/projects: Clerk allows a user 10 metadata writes per 10 seconds. Past that the caller is
-    told to slow down (429), which is about them, not a 503 that marks the whole server degraded."""
+def _project_failure(e: ClerkError, what: str = "projects") -> _Reply:
+    """/me/projects and /me/spaces: Clerk allows a user 10 metadata writes per 10 seconds. Past that
+    the caller is told to slow down (429), which is about them, not a 503 that marks the whole server
+    degraded."""
     if e.status == 429 and e.seen == 429:  # Clerk's own limit, not this server's budget
-        return _Reply(429, "Too many changes to your projects; try again in a few seconds", e.seen)
+        return _Reply(429, f"Too many changes to your {what}; try again in a few seconds", e.seen)
     return _clerk_failure(e)
+
+
+def _size(private: dict) -> int:
+    return len(json.dumps(private, separators=(",", ":"), ensure_ascii=False).encode())
+
+
+def _rev(entry: dict) -> int:
+    rev = entry.get("rev")
+    return rev if isinstance(rev, int) and not isinstance(rev, bool) else 0
+
+
+def _space_projects(entry: dict) -> list:
+    projects = entry.get("projects")
+    return projects if isinstance(projects, list) else []
 
 
 class App:
@@ -460,7 +489,7 @@ class App:
         self._lock = threading.Lock()
         self._hits: collections.OrderedDict[tuple[str, str], list[float]] = collections.OrderedDict()
         self._me_cache: dict[str, tuple[float, dict]] = {}
-        self._project_locks: dict[str, threading.Lock] = {}  # one add per user at a time, per instance
+        self._project_locks: dict[str, threading.Lock] = {}  # one change per user at a time, per instance
         # What the status page shows: counts and the last ACTIVITY_KEPT requests, each only its time,
         # method, route template, status and duration (never a key, user id, path or address).
         self.started = _PROCESS_STARTED
@@ -501,6 +530,10 @@ class App:
         return token
 
     def _key(self, headers: dict[str, str], group: str) -> dict:
+        return self._verified(headers, group)[0]
+
+    def _verified(self, headers: dict[str, str], group: str) -> tuple[dict, str]:
+        """The caller's Clerk API key, and the token itself for a request passed on to XO."""
         token = self._token(headers, group)
         try:
             key = self.clerk.verify_key(token)  # never cached: a revoked key stops at once
@@ -512,7 +545,7 @@ class App:
             raise _Reply(401, "Invalid API key")
         if not str(key.get("subject", "")).startswith("user_"):
             raise _Reply(401, "API key is not tied to a user")
-        return key
+        return key, token
 
     def _admin(self, key: dict) -> bool:
         claims = key.get("claims") if isinstance(key.get("claims"), dict) else {}
@@ -583,6 +616,20 @@ class App:
             if method == "POST":
                 return self._add_project(headers, body)
             raise _Reply(405, "Method not allowed")
+        if path == "/me/spaces":
+            if method == "GET":
+                return self._spaces(self._key(headers, "spaces"))
+            if method == "POST":
+                return self._create_space(headers, body)
+            raise _Reply(405, "Method not allowed")
+        if path == "/me/spaces/connect":
+            if method != "POST":
+                raise _Reply(405, "Method not allowed")
+            return self._connect_space(headers, body)
+        if path.startswith("/me/spaces/") and path.endswith("/projects") and path.count("/") == 4:
+            if method != "POST":
+                raise _Reply(405, "Method not allowed")
+            return self._connect_project(urllib.parse.unquote(path.split("/")[3]), headers, body)
         if path.startswith(CORE_PREFIX + "/"):
             return self._forward(method, path[len(CORE_PREFIX):], headers, body)
         if path.startswith("/user-metadata/"):
@@ -642,40 +689,47 @@ class App:
                 raise _Reply(404, "Account not found") from None
             raise _clerk_failure(e) from None
 
-    def _add_project(self, headers: dict[str, str], body: bytes | None) -> dict:
-        """Add one name to the key's own private metadata `projects`. The client sends only the
-        name; the server reads the list, appends, and sends Clerk a merge that names `projects` and
-        nothing else, so every other key is left as it was. Clerk has no compare-and-swap, so the
-        list is read back after the write and the add tried again if it is not there."""
+    def _caller(self, headers: dict[str, str], group: str, route: str) -> tuple[dict, str, dict]:
+        """The verified key, its token and the audit fields of a request that changes metadata;
+        a refused key is audited too."""
         try:
-            key = self._key(headers, "projects")
+            key, token = self._verified(headers, group)
         except _Reply as r:
-            self.audit(method="POST", route="/me/projects", keyId=None, caller=None, outcome=r.status,
+            self.audit(method="POST", route=route, keyId=None, caller=None, outcome=r.status,
                        **({"clerk": r.clerk} if r.clerk is not None else {}))
             raise
-        subject = key["subject"]
-        who = {"method": "POST", "route": "/me/projects", "keyId": key.get("id"), "caller": subject}
+        return key, token, {"method": "POST", "route": route, "keyId": key.get("id"), "caller": key["subject"]}
 
-        def refuse(status: int, error: str) -> _Reply:
-            self.audit(**who, outcome=status)
-            return _Reply(status, error)
+    def _refuse(self, who: dict, status: int, error: str) -> _Reply:
+        self.audit(**who, outcome=status)
+        return _Reply(status, error)
 
+    def _body(self, body: bytes | None, who: dict, fields: dict[str, bool]) -> dict:
+        """A JSON object holding the string fields named (True: required) and nothing else."""
         try:
             sent = json.loads(body or b"")
         except (json.JSONDecodeError, UnicodeDecodeError, RecursionError):
-            raise refuse(422, "Body is not JSON") from None
-        if not isinstance(sent, dict) or set(sent) != {"name"} or not isinstance(sent["name"], str):
-            raise refuse(422, 'Body must be {"name": "..."} and nothing else')
-        name = sent["name"].strip()
-        if not PROJECT_NAME.fullmatch(name):
-            raise refuse(422, "A project name is 1 to 64 letters, digits, spaces, _ . or -, "
-                              "starting with a letter or digit")
-        if _SECRET_VALUE.search(name):  # it would show masked in xo projects and xo me
-            raise refuse(422, "That name looks like a credential (sk-, ghp_, ak_ and the like); choose another")
+            raise self._refuse(who, 422, "Body is not JSON") from None
+        shape = "{" + ", ".join(f'"{k}": "..."' for k in fields) + "}"
+        if (not isinstance(sent, dict) or set(sent) - set(fields)
+                or any(need and k not in sent for k, need in fields.items())
+                or any(not isinstance(sent[k], str) for k in sent if k != "body")):
+            raise self._refuse(who, 422, f"Body must be {shape} and nothing else")
+        return {k: v.strip() if isinstance(v, str) else v for k, v in sent.items()}
+
+    def _change(self, subject: str, who: dict, field: str, step, what: str, busy: str) -> list:
+        """Change one list in the user's own private metadata, the way /me/projects does: read it,
+        let `step` say what it should be, and send Clerk a merge that names only `field`, so every
+        other key is left as it was. Clerk has no compare-and-swap, so after each write the list is
+        read again (after PROJECT_SETTLE) and `step` decides whether the change is there, whether a
+        racing write must be undone, or whether to give up.
+
+        step(current list, private metadata, wrote) answers ("done", list) or ("write", list), or
+        raises a refusal. The answer is the list, after the user's cached /me is dropped."""
         with self._lock:
             lock = self._project_locks.setdefault(subject, threading.Lock())
         with lock:
-            wrote, seen, first = False, [], None
+            wrote, first, outcome, value = False, None, None, []
             started = time.monotonic()
             for attempt in range(PROJECT_TRIES + 1):
                 if wrote:
@@ -683,53 +737,234 @@ class App:
                 try:
                     u = self.clerk.user(subject)
                 except ClerkError as e:
-                    reply = _Reply(404, "Account not found") if e.status == 404 else _project_failure(e)
+                    reply = _Reply(404, "Account not found") if e.status == 404 else _project_failure(e, what)
                     self.audit(**who, outcome=reply.status, clerk=e.seen)
                     raise reply from None
                 private = u.get("private_metadata")
                 private = {} if private is None else private
                 if not isinstance(private, dict):
-                    raise refuse(409, "Your private metadata is not an object; nothing was changed")
-                projects = private.get("projects", [])
-                if not isinstance(projects, list):
-                    raise refuse(409, "Your private metadata `projects` is not a list; nothing was changed")
+                    raise self._refuse(who, 409, "Your private metadata is not an object; nothing was changed")
+                current = private.get(field, [])
+                if not isinstance(current, list):
+                    raise self._refuse(who, 409, f"Your private metadata `{field}` is not a list; nothing was changed")
                 first = private if first is None else first
-                present = any(isinstance(p, str) and p.casefold() == name.casefold() for p in projects)
-                # No user route removes a project, so anything read earlier and gone now was dropped
-                # by a racing write that started from an older list: put it back.
-                missing = [p for p in seen if p not in projects and p != name]
-                if wrote and present and not missing:
-                    wanted = projects
+                outcome, value = step(current, private, wrote)
+                if outcome == "done":
                     break
-                if present and not wrote:
-                    raise refuse(409, f"{name} is already in your projects; nothing was changed")
-                wanted = [*projects, *missing, *([] if present else [name])]
-                if len(wanted) > MAX_PROJECTS:
-                    raise refuse(422, f"You have {MAX_PROJECTS} projects, the most there can be; nothing was changed")
                 # No retry write once a slow Clerk has used CLERK_TIMEOUT: the request would outlive the
                 # client's and the platform's deadlines. The caller gets the 503 below, never a false 200.
                 if attempt == PROJECT_TRIES or (wrote and time.monotonic() - started > CLERK_TIMEOUT):
                     break
-                seen += [p for p in [*projects, name] if p not in seen]
+                if _size({**private, field: value}) > PRIVATE_BUDGET:
+                    raise self._refuse(who, 422, f"That would take your private metadata past {PRIVATE_BUDGET // 1024}KB "
+                                                 "(Clerk keeps 8KB, and XO needs the rest); nothing was changed")
                 try:
-                    # A merge naming only `projects`: Clerk leaves every other key as it is.
-                    self.clerk.update_metadata(subject, {"privateMetadata": {"projects": wanted}})
+                    # A merge naming only `field`: Clerk leaves every other key as it is.
+                    self.clerk.update_metadata(subject, {"privateMetadata": {field: value}})
                 except ClerkError as e:
-                    reply = _project_failure(e) if e.status == 429 else self._clerk_reply(e)
+                    reply = _project_failure(e, what) if e.status == 429 else self._clerk_reply(e)
                     self.audit(**who, outcome=reply.status, clerk=e.seen)
                     raise reply from None
                 wrote = True
-            if not (wrote and present and not missing):
-                raise refuse(503, "Your projects changed while this add ran; run xo projects to see "
-                                  "whether it is there before trying again")
+            if outcome != "done":
+                raise self._refuse(who, 503, busy)
         with self._lock:
             self._me_cache.pop(subject, None)
         # Anything else that differs was changed by someone else meanwhile, not by this merge.
-        others = {k: v for k, v in first.items() if k != "projects"} != \
-            {k: v for k, v in private.items() if k != "projects"}
+        others = {k: v for k, v in first.items() if k != field} != {k: v for k, v in private.items() if k != field}
         extra = {"othersChanged": True} if others else {}
-        self.audit(**who, outcome=200, count=len(wanted), **extra)  # never the names or values
-        return {"projects": _mask_secrets(wanted)}
+        self.audit(**who, outcome=200, count=len(value), **extra)  # never the names or values
+        return value
+
+    def _add_project(self, headers: dict[str, str], body: bytes | None) -> dict:
+        """Add one name to the key's own private metadata `projects`. The client sends only the
+        name; the server reads the list, appends, and writes `projects` and nothing else."""
+        key, _, who = self._caller(headers, "projects", "/me/projects")
+        name = self._body(body, who, {"name": True})["name"]
+        self._project_name(name, who)
+        seen: list = []
+
+        def step(projects: list, private: dict, wrote: bool) -> tuple[str, list]:
+            present = any(isinstance(p, str) and p.casefold() == name.casefold() for p in projects)
+            # No user route removes a project, so anything read earlier and gone now was dropped
+            # by a racing write that started from an older list: put it back.
+            missing = [p for p in seen if p not in projects and p != name]
+            if wrote and present and not missing:
+                return "done", projects
+            if present and not wrote:
+                raise self._refuse(who, 409, f"{name} is already in your projects; nothing was changed")
+            wanted = [*projects, *missing, *([] if present else [name])]
+            if len(wanted) > MAX_PROJECTS:
+                raise self._refuse(who, 422, f"You have {MAX_PROJECTS} projects, the most there can be; "
+                                             "nothing was changed")
+            seen.extend(p for p in [*projects, name] if p not in seen)
+            return "write", wanted
+
+        projects = self._change(key["subject"], who, "projects", step, "projects",
+                                "Your projects changed while this add ran; run xo projects to see whether it is "
+                                "there before trying again")
+        return {"projects": _mask_secrets(projects)}
+
+    def _project_name(self, name: str, who: dict) -> None:
+        if not names.project_ok(name):
+            raise self._refuse(who, 422, names.PROJECT_RULE[0].upper() + names.PROJECT_RULE[1:])
+        if _SECRET_VALUE.search(name):  # it would show masked in xo projects and xo me
+            raise self._refuse(who, 422, "That name looks like a credential (sk-, ghp_, ak_ and the like); "
+                                         "choose another")
+
+    def _space_name(self, name: str, who: dict) -> None:
+        if not names.space_ok(name):
+            raise self._refuse(who, 422, names.SPACE_RULE[0].upper() + names.SPACE_RULE[1:])
+        if _SECRET_VALUE.search(name):
+            raise self._refuse(who, 422, "That name looks like a credential (sk-, ghp_, ak_ and the like); "
+                                         "choose another")
+
+    def _spaces(self, key: dict) -> dict:
+        """The `spaces` list in the key's own private metadata ([] when there is none)."""
+        u = self._user(key["subject"])
+        private = u.get("private_metadata")
+        spaces = private.get("spaces") if isinstance(private, dict) else None
+        return {"spaces": _mask_secrets([] if spaces is None else spaces)}
+
+    def _change_space(self, subject: str, who: dict, name: str, make) -> dict:
+        """Write one space, by name (ignoring case), and leave every other space as it was.
+
+        make(current entry or None, private metadata) answers the entry to write, or refuses; it is
+        called once, on the first read. Writing `spaces` replaces the whole list, so a write racing
+        this one can drop or revert a space: each other space is put back at the highest rev read,
+        and this one is written again if it is missing or back as first read. Anything else means
+        someone changed it meanwhile: 409. The answer is the entry written."""
+        target = name.casefold()
+        best: dict[str, dict] = {}
+        written: list[dict] = []
+        original: list = []  # the space as first read (None when it was not there)
+
+        def step(spaces: list, private: dict, wrote: bool) -> tuple[str, list]:
+            if any(not isinstance(e, dict) or not isinstance(e.get("name"), str) for e in spaces):
+                raise self._refuse(who, 409, "Your private metadata `spaces` holds an entry xo cannot read; "
+                                             "nothing was changed")
+            by: dict[str, dict] = {}
+            for e in spaces:
+                by.setdefault(e["name"].casefold(), e)
+            for k, e in by.items():
+                if k != target and (k not in best or _rev(e) >= _rev(best[k])):
+                    best[k] = e
+            if not written:
+                original.append(by.get(target))
+                written.append(make(by.get(target), private))
+            elif by.get(target) not in (None, original[0], written[0]):  # gone or as it was: ours was dropped
+                raise self._refuse(who, 409, f"Space {name} changed while this ran; run xo list spaces and try again")
+            if wrote and by.get(target) == written[0] and all(by.get(k) == e for k, e in best.items()):
+                return "done", spaces
+            out, placed = [], set()
+            for e in spaces:
+                k = e["name"].casefold()
+                if k not in placed:
+                    out.append(written[0] if k == target else best[k])
+                    placed.add(k)
+            out += [e for k, e in best.items() if k not in placed]
+            if target not in placed:
+                out.append(written[0])
+            if len(out) > MAX_SPACES:
+                raise self._refuse(who, 422, f"You have {MAX_SPACES} spaces, the most there can be; nothing was changed")
+            return "write", out
+
+        self._change(subject, who, "spaces", step, "spaces",
+                     f"Your spaces changed while this ran; run xo list spaces to see whether {name} is as you "
+                     "wanted before trying again")
+        return written[0]
+
+    def _create_space(self, headers: dict[str, str], body: bytes | None) -> dict:
+        """Create a space through XO with the caller's own key, then record it in `spaces`."""
+        key, token, who = self._caller(headers, "spaces", "/me/spaces")
+        sent = self._body(body, who, {"kind": True, "name": True, "body": False})
+        kind, name, create = sent["kind"], sent["name"], sent.get("body", {})
+        if kind not in SPACE_KINDS:
+            raise self._refuse(who, 422, "kind must be one of " + ", ".join(SPACE_KINDS))
+        self._space_name(name, who)
+        if not isinstance(create, dict):
+            raise self._refuse(who, 422, "body must be a JSON object: the create's own body")
+        spaces = self._user(key["subject"]).get("private_metadata") or {}
+        spaces = spaces.get("spaces") if isinstance(spaces, dict) else None
+        if isinstance(spaces, list):  # checked before XO creates anything; checked again when recording
+            if any(isinstance(e, dict) and str(e.get("name", "")).casefold() == name.casefold() for e in spaces):
+                raise self._refuse(who, 409, f"You already have a space named {name}; nothing was created")
+            if len(spaces) >= MAX_SPACES:
+                raise self._refuse(who, 422, f"You have {MAX_SPACES} spaces, the most there can be; nothing was created")
+        status, answer = self.core.forward("POST", f"/{kind}", token, json.dumps(create).encode())
+        if not 200 <= status < 300:
+            self.audit(**who, outcome=status, xo=status)
+            raise _Forwarded(status, answer)
+        made = answer.get("data") if isinstance(answer.get("data"), dict) else {}
+        space_id = made.get("id")
+        if not isinstance(space_id, str) or not names.SPACE_ID.fullmatch(space_id):
+            raise self._refuse(who, 502, "XO created the space but its answer had no id xo can use; nothing was "
+                                         "recorded")
+
+        def make(current: dict | None, private: dict) -> dict:
+            if current is not None:
+                raise self._refuse(who, 409, f"A space named {name} was recorded meanwhile")
+            return {"name": name, "kind": kind, "id": space_id, "rev": 1, "projects": []}
+
+        try:
+            entry = self._change_space(key["subject"], who, name, make)
+        except _Reply as r:
+            raise _Reply(r.status, f"XO created the space (id {space_id}) but xo could not record it: {r.error}. "
+                                   f"Run xo connect space:{space_id} --name {name} to record it", r.clerk) from None
+        return {"space": _mask_secrets(entry), "xo": _mask_secrets(made)}
+
+    def _connect_space(self, headers: dict[str, str], body: bytes | None) -> dict:
+        """Record a space the caller already has, once XO confirms the caller's key can read it."""
+        key, token, who = self._caller(headers, "spaces", "/me/spaces/connect")
+        sent = self._body(body, who, {"id": True, "name": True})
+        space_id, name = sent["id"], sent["name"]
+        if not names.SPACE_ID.fullmatch(space_id):
+            raise self._refuse(who, 422, "id must be an XO space id: letters, digits, _ or -")
+        self._space_name(name, who)
+        status, answer = self.core.forward("GET", f"/spaces/{space_id}", token, None)
+        if status in (403, 404):
+            raise self._refuse(who, 404, "XO has no space with that id that your key can read; nothing was recorded")
+        if not 200 <= status < 300:
+            self.audit(**who, outcome=status, xo=status)
+            raise _Forwarded(status, answer)
+
+        def make(current: dict | None, private: dict) -> dict:
+            if current is not None:
+                raise self._refuse(who, 409, f"You already have a space named {name}; nothing was changed")
+            spaces = private.get("spaces", [])
+            if any(isinstance(e, dict) and e.get("id") == space_id for e in spaces):
+                raise self._refuse(who, 409, "That space is already recorded under another name; nothing was changed")
+            return {"name": name, "id": space_id, "rev": 1, "projects": []}
+
+        return {"space": _mask_secrets(self._change_space(key["subject"], who, name, make))}
+
+    def _connect_project(self, name: str, headers: dict[str, str], body: bytes | None) -> dict:
+        """Set one project's ref in one of the caller's spaces: added, or replaced if it is there."""
+        key, _, who = self._caller(headers, "spaces", "/me/spaces/{name}/projects")
+        sent = self._body(body, who, {"project": True, "ref": False})
+        project, ref = sent["project"], sent.get("ref") or DEFAULT_REF
+        self._space_name(name, who)
+        self._project_name(project, who)
+        if not names.ref_ok(ref):
+            raise self._refuse(who, 422, names.REF_RULE[0].upper() + names.REF_RULE[1:])
+
+        def make(current: dict | None, private: dict) -> dict:
+            if current is None:
+                raise self._refuse(who, 404, f"You have no space named {name}")
+            projects = private.get("projects", [])
+            if not isinstance(projects, list) or project not in projects:
+                raise self._refuse(who, 404, f"{project} is not in your projects; add it with xo create project first")
+            entries = [p for p in _space_projects(current) if not (isinstance(p, dict) and project in p)]
+            if len(entries) >= MAX_SPACE_PROJECTS:
+                raise self._refuse(who, 422, f"Space {name} has {MAX_SPACE_PROJECTS} projects, the most there can be; "
+                                             "nothing was changed")
+            # One entry per project: connecting it again replaces its ref, in place.
+            at = next((i for i, p in enumerate(_space_projects(current)) if isinstance(p, dict) and project in p),
+                      len(entries))
+            entries.insert(at, {project: ref})
+            return {**current, "projects": entries, "rev": _rev(current) + 1}
+
+        return {"space": _mask_secrets(self._change_space(key["subject"], who, name, make))}
 
     def _shown_private(self, private: Any) -> Any:
         """The private metadata /me shows its user: all of it, or only $XO_ME_PRIVATE_KEYS."""
@@ -821,8 +1056,10 @@ def _route_name(path: str) -> str | None:
     path = urllib.parse.urlsplit(path).path.rstrip("/") or "/"
     if path in ("/", "/status"):
         return None
-    if path in ("/healthz", "/me", "/me/projects", "/config"):
+    if path in ("/healthz", "/me", "/me/projects", "/me/spaces", "/me/spaces/connect", "/config"):
         return path
+    if path.startswith("/me/spaces/") and path.endswith("/projects") and path.count("/") == 4:
+        return "/me/spaces/{name}/projects"
     if path.startswith("/user-metadata/"):
         return "/user-metadata/{userId}"
     if path.startswith(CORE_PREFIX + "/"):

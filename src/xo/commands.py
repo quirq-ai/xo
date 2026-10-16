@@ -19,7 +19,7 @@ from xo.spec import Operation, clean, known_params
 
 # Built-in command names, and names argparse or a reader would take for something else.
 RESERVED = {"ops", "call", "api", "serve", "login", "logout", "status", "coder", "projects", "help",
-            "version"}
+            "version", "create", "connect", "share", "install", "update", "sync", "list"}
 
 
 class Flag(NamedTuple):
@@ -110,6 +110,12 @@ def _about(op: Operation) -> str:
     if op.copies_key:
         text += f"\n\nNote: {COPIES_KEY}. Anything that can read the space's environment can use it."
     return _esc(text) if "%(prog)" in text else text
+
+
+def add_operation(p: argparse.ArgumentParser, op: Operation, add_send: Callable[[argparse.ArgumentParser], None],
+                  run: Callable[[argparse.Namespace], int]) -> None:
+    """One operation's flags on a parser of the caller's own, such as `xo create space KIND`."""
+    _operation(p, op, add_send, run)
 
 
 def _operation(p: argparse.ArgumentParser, op: Operation, add_send: Callable[[argparse.ArgumentParser], None],

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -1652,3 +1653,140 @@ def test_status_is_a_reserved_command():
     from xo import commands, spec
     op = spec.operations({"paths": {"/status": {"get": {"operationId": "syntheticOperation"}}}})[0]
     assert commands.command_of(op) == "status-api"
+
+
+# --- create, connect, list: projects and spaces through the xo server ---------------------------
+
+SPACE = {"name": "dev", "kind": "claude-code", "id": "sp-1", "rev": 1, "projects": []}
+
+
+def test_create_space_sends_the_kinds_body_to_the_xo_server(core, capsys):
+    core.route("POST", "/me/spaces", body={"success": True, "data": {"space": SPACE, "xo": {"id": "sp-1"}}})
+    secret = "sk-ant-provider-secret-never-printed"
+    code, out, err = run(capsys, "create", "space", "claude-code", "dev", "--name", "my-cc", "--volume-size", "20",
+                         "--providers-anthropic-api-key", secret)
+    assert code == 0 and json.loads(out)["data"]["space"] == SPACE
+    assert [(r["method"], r["path"]) for r in core.requests] == [("POST", "/me/spaces")]
+    body = core.requests[0]["body"]
+    assert (body["kind"], body["name"]) == ("claude-code", "dev")
+    assert body["body"]["name"] == "my-cc" and body["body"]["providers"]["anthropic"]["apiKey"] == secret
+    assert secret not in out and secret not in err and "copy of this API key" in err
+
+
+def test_create_space_dry_run_hides_provider_keys(core, capsys):
+    secret = "sk-ant-provider-secret-never-printed"
+    code, out, err = run(capsys, "create", "space", "claude-code", "dev", "--name", "my-cc", "--volume-size", "20",
+                         "--providers-anthropic-api-key", secret, "--dry-run")
+    assert code == 0 and core.requests == [] and secret not in out
+    assert json.loads(out)["body"]["body"]["providers"]["anthropic"]["apiKey"] == "<hidden>"
+
+
+@pytest.mark.parametrize("argv", [["create", "space", "claude-code", "-x"], ["create", "space", "claude-code", "a b"],
+                                  ["create", "space", "claude-code", "../x"]])
+def test_create_space_refuses_a_bad_name_before_sending(core, capsys, argv):
+    assert _refused(capsys, *argv, "--name", "n", "--volume-size", "1") and core.requests == []
+
+
+def test_connect_project_and_space(xs, capsys):
+    xs.route("POST", "/me/spaces/dev/projects", body={"success": True, "data": {"space": SPACE}})
+    xs.route("POST", "/me/spaces/connect", body={"success": True, "data": {"space": SPACE}})
+    assert run(capsys, "connect", "project:quirq-ai/xo", "space:dev", "--ref", "v1.2")[0] == 0
+    assert run(capsys, "connect", "project:notes", "space:dev")[0] == 0
+    assert run(capsys, "connect", "space:sp-1", "--name", "dev")[0] == 0
+    assert [(r["path"], r["body"]) for r in xs.requests] == [
+        ("/me/spaces/dev/projects", {"project": "quirq-ai/xo", "ref": "v1.2"}),
+        ("/me/spaces/dev/projects", {"project": "notes"}),
+        ("/me/spaces/connect", {"id": "sp-1", "name": "dev"})]
+
+
+@pytest.mark.parametrize("argv", [
+    ["connect", "project:notes", "space:dev", "--ref", "--upload-pack=touch x"],
+    ["connect", "project:notes", "space:dev", "--ref=a..b"],
+    ["connect", "project:../x", "space:dev"], ["connect", "project:notes"], ["connect", "project:notes", "dev"],
+    ["connect", "space:sp-1"], ["connect", "space:../x", "--name", "dev"], ["connect", "space:sp-1", "--name", "-d"],
+    ["connect", "notes", "space:dev"], ["connect", "project:notes", "space:dev", "--name", "x"]])
+def test_connect_refuses_bad_input_before_sending(xs, capsys, argv):
+    assert _refused(capsys, *argv) and xs.requests == []
+
+
+def _refused(capsys, *argv) -> bool:
+    """xo stopped with an error, its own (exit 1) or argparse's (exit 2)."""
+    try:
+        return run(capsys, *argv)[0] == 1
+    except SystemExit as e:
+        return e.code == 2
+
+
+def test_list_spaces_and_projects(xs, capsys):
+    xs.route("GET", "/me/spaces", body={"success": True, "data": {"spaces": [SPACE]}})
+    xs.route("GET", "/me/projects", body={"success": True, "data": {"projects": ["a"]}})
+    assert json.loads(run(capsys, "list", "spaces")[1]) == [SPACE]
+    assert json.loads(run(capsys, "list", "projects")[1]) == ["a"]
+
+
+def _git(*args, cwd=None):
+    import subprocess
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", *args], cwd=cwd, check=True,
+                   capture_output=True)
+
+
+@pytest.fixture
+def github(tmp_path, monkeypatch):
+    """A local stand-in for github.com: OWNER/REPO repositories under one folder, served over file://."""
+    from xo import gitops
+    root = tmp_path / "github"
+    monkeypatch.setattr(gitops, "GITHUB", f"file://{root}")
+    monkeypatch.setattr(gitops, "SAFE", [a.replace("protocol.allow=never", "protocol.file.allow=always")
+                                          for a in gitops.SAFE])
+    work = tmp_path / "here"
+    work.mkdir()
+    monkeypatch.chdir(work)
+
+    def repo(name: str) -> None:
+        path = root / name
+        path.mkdir(parents=True)
+        _git("init", "-q", "-b", "main", cwd=path)
+        (path / "README").write_text("hi\n")
+        _git("add", "README", cwd=path)
+        _git("commit", "-q", "-m", "first", cwd=path)
+    return repo
+
+
+def test_create_project_from_a_github_url_records_it_and_clones_it(xs, capsys, github):
+    github("quirq-ai/xo")
+    xs.route("POST", "/me/projects", body={"success": True, "data": {"projects": ["quirq-ai/xo"]}})
+    code, out, err = run(capsys, "create", "project", "https://github.com/quirq-ai/xo.git")
+    assert code == 0 and json.loads(out) == ["quirq-ai/xo"]
+    assert xs.requests[0]["body"] == {"name": "quirq-ai/xo"}
+    assert Path("quirq-ai/xo/README").read_text() == "hi\n"
+
+
+def test_create_project_with_a_plain_name_makes_an_empty_repository(xs, capsys, github):
+    xs.route("POST", "/me/projects", body={"success": True, "data": {"projects": ["notes"]}})
+    assert run(capsys, "create", "project", "notes")[0] == 0
+    assert Path("notes/.git").is_dir()
+
+
+def test_create_project_refuses_a_folder_that_exists_or_a_url_that_is_not_github(xs, capsys, github):
+    Path("notes").mkdir()
+    assert run(capsys, "create", "project", "notes")[0] == 1
+    for url in ("https://gitlab.com/a/b", "git@github.com:a/b.git", "https://github.com/a/b/tree/x",
+                "https://github.com/-a/b", "http://github.com/a/b"):
+        assert run(capsys, "create", "project", url)[0] == 1
+    assert xs.requests == []
+
+
+def test_create_project_says_when_the_folder_could_not_be_made(xs, capsys, github):
+    xs.route("POST", "/me/projects", body={"success": True, "data": {"projects": ["quirq-ai/none"]}})
+    code, _, err = run(capsys, "create", "project", "quirq-ai/none")
+    assert code == 1 and "quirq-ai/none is in your projects, but its folder was not made: git clone failed" in err
+
+
+def test_git_never_gets_xos_or_anyone_elses_tokens(monkeypatch):
+    from xo import gitops
+    for name in ("XO_API_KEY", "GH_TOKEN", "GITHUB_TOKEN", "CODER_SESSION_TOKEN", "CLERK_SECRET_KEY"):
+        monkeypatch.setenv(name, "secret")
+    monkeypatch.setenv("HOME", "/home/x")
+    env = gitops.environment()
+    assert "HOME" in env and not {"XO_API_KEY", "GH_TOKEN", "GITHUB_TOKEN", "CODER_SESSION_TOKEN",
+                                  "CLERK_SECRET_KEY"} & set(env)

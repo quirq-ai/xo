@@ -67,6 +67,13 @@ xo spaces --space-id THE_ID                      # a space you created, with its
 xo me                                            # your profile: name, image, email, public and private metadata
 xo projects                                      # the projects list in your private metadata
 xo projects add my-app                           # add one; the server writes only that list
+xo create project https://github.com/OWNER/REPO  # add it to your projects and clone it here
+xo create project notes                          # a project with no GitHub remote: ./notes, git init
+xo create space claude-code dev --name my-cc --volume-size 20 --providers-anthropic-api-key -
+                                                 # create it as `xo claude-code` does, record it as dev
+xo connect project:OWNER/REPO space:dev --ref main   # put a project in a space, at a branch, tag or sha
+xo connect space:THE_ID --name old               # record a space you already have
+xo list spaces                                   # your spaces, with their projects and refs
 ```
 
 - Add `--dry-run` to any create to see the request without sending it.
