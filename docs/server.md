@@ -250,8 +250,8 @@ spaces: [{"name": "dev", "kind": "claude-code", "id": "<XO space id>", "rev": 2,
   caller's key (`POST /api/core/v1/{kind}`, as `/api/core` does). An XO refusal is passed back and
   nothing is recorded. Once XO answers with the new space's id, the server records `{"name",
   "kind", "id", "rev": 1, "projects": []}`. If recording then fails, the answer says XO created the
-  space and gives its id. When the failure was a race or a busy Clerk (409, 429 or 503), it also
-  names the `xo connect space:NAME --id ID` that records it.
+  space and gives its id. When the failure was a race, or Clerk being busy, failing or out of
+  reach (409, 429, 502 or 503), it also names the `xo connect space:NAME --id ID` that records it.
 - **`POST /me/spaces/connect`** makes a new space entry, `{"name", "rev": 1, "projects": []}`,
   with nothing created on XO. With an `id` it stands for an XO space the caller already has: the
   server first asks XO for it with the caller's key (`GET /api/core/v1/spaces/{id}`); 403 or 404
@@ -267,7 +267,8 @@ spaces: [{"name": "dev", "kind": "claude-code", "id": "<XO space id>", "rev": 2,
   digit (it becomes a folder). A ref is a branch, tag or commit sha: letters, digits and `. _ / -`,
   starting with a letter or digit, never holding `..`, `//`, `/.` or `@{`, never ending in `/`, `.`
   or `.lock`. A ref or XO id that looks like a credential (`sk-`, `ghp_`, `ak_` and the like) is
-  refused. The CLI checks the same rules before sending, and again before git sees a value.
+  refused; for a ref that means such a prefix and a run of 16 or more letters and digits, so
+  branches like `npm_bump` or `sk-rewrite` are fine. The CLI checks the same rules before sending, and again before git sees a value.
 - **As atomic as Clerk allows.** As for projects: one change per user at a time on an instance, a
   0.3-second settle and a re-read after each write, at most 3 writes, the same 10-second stop, and
   the same 6KB limit. Writing `spaces` replaces the whole list, so a write racing this one can drop

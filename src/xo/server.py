@@ -338,15 +338,27 @@ def _mask_secrets(value: Any, depth: int = 0) -> Any:
     return value
 
 
+# A token's body: a long run of letters and digits. Branch names that only start like a token
+# prefix (npm_bump, sk-rewrite, hf_integration) have none, so they are refs, not credentials.
+_TOKEN_BODY = re.compile(r"[A-Za-z0-9]{16,}")
+
+
+def _secret_ref(ref: str) -> bool:
+    """A ref that looks like a credential: a token prefix and a token's body. A commit sha has the
+    body but never the prefix."""
+    return bool(_SECRET_VALUE.search(ref) and _TOKEN_BODY.search(ref))
+
+
 def _mask_values(value: Any, depth: int = 0) -> Any:
-    """Like _mask_secrets, but by value only: for maps whose keys are project names, not settings."""
+    """Like _mask_secrets, but by value only, for a space's {project: ref} list: its keys are
+    project names, not settings, and its values are refs."""
     if depth > 32:
         return "(hidden)"
     if isinstance(value, dict):
         return {k: _mask_values(v, depth + 1) for k, v in value.items()}
     if isinstance(value, list):
         return [_mask_values(v, depth + 1) for v in value]
-    if isinstance(value, str) and _SECRET_VALUE.search(value):
+    if isinstance(value, str) and _secret_ref(value):
         return _mask(value)
     return value
 
@@ -951,8 +963,9 @@ class App:
         try:
             entry = self._change_space(key["subject"], who, name, make)
         except _Reply as r:
-            # A race or a busy Clerk can pass; the refusals checked above cannot, so no hint for them.
-            hint = f". Run xo connect space:{name} --id {space_id} to record it" if r.status in (409, 429, 503) else ""
+            # A race, or a Clerk that is busy, failing or unreachable, can pass; the refusals checked
+            # above cannot, so no hint for them.
+            hint = f". Run xo connect space:{name} --id {space_id} to record it" if r.status in (409, 429, 502, 503) else ""
             raise _Reply(r.status, f"XO created the space (id {space_id}) but xo could not record it: {r.error}{hint}",
                          r.clerk) from None
         return {"space": _shown_space(entry), "xo": _mask_secrets(made)}
@@ -998,7 +1011,7 @@ class App:
         self._project_name(project, who)
         if not names.ref_ok(ref):
             raise self._refuse(who, 422, names.REF_RULE[0].upper() + names.REF_RULE[1:])
-        if _SECRET_VALUE.search(ref):
+        if _secret_ref(ref):
             raise self._refuse(who, 422, "That ref looks like a credential (sk-, ghp_, ak_ and the like); "
                                          "nothing was changed")
 
