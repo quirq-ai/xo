@@ -30,7 +30,7 @@
                                             app URLs as JSON. See `xo coder github --help`.
     xo coder login | logout                 log Coder in to the deployment in this terminal, or out
                                             of it (only if that is where it is logged in).
-    xo coder list | show | start | stop | ssh | delete | ... [ARGS]
+    xo coder list | show | start | stop | ssh | ... [ARGS]
                                             run that coder command on the deployment. Before any
                                             Coder command xo asks Coder, without naming a
                                             deployment, where it is logged in, and stops unless
@@ -541,7 +541,8 @@ def _coder_github(args: argparse.Namespace) -> int:
 
 
 # Coder commands passed straight to the coder CLI, on the deployment xo checked Coder is logged in to.
-CODER_PASS = ("list", "show", "start", "stop", "restart", "ssh", "delete", "open", "ping", "port-forward",
+# No delete: xo has no delete command; delete workspaces in the Coder dashboard.
+CODER_PASS = ("list", "show", "start", "stop", "restart", "ssh", "open", "ping", "port-forward",
               "update", "logs")
 
 

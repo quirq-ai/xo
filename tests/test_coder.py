@@ -436,3 +436,10 @@ def test_coder_logout_only_for_this_deployment(runner, capsys, monkeypatch):
     assert cli.main(["coder", "logout"]) == 0
     assert "logged out of https://dev-coder.xo.builders" in capsys.readouterr()[1]
     assert [c[0] for c in runner][1] == ["coder", "--url", DEFAULT_CODER_URL, "logout", "--yes"]
+
+
+def test_there_is_no_coder_delete(runner, capsys):
+    assert "delete" not in cli.CODER_PASS
+    with pytest.raises(SystemExit):
+        cli.main(["coder", "delete", "my-preview"])
+    assert runner == []

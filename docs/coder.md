@@ -52,8 +52,9 @@ Use `xo coder github --help` for options. Shared capacity, a small workspace and
 the defaults. `--start-command auto` detects Node apps; `--start-command manual` only clones.
 Pass `--ref BRANCH_OR_TAG` to select a Git ref. Custom startup commands must listen on port 3000.
 Use a new `--name` for a second deployment of the same repository; an existing workspace is never
-changed. Manage existing workspaces with the Coder dashboard or `xo coder list`, `start`, `stop`, `ssh` and
-`delete`, which run the coder command on the checked deployment.
+changed. Manage existing workspaces with the Coder dashboard or `xo coder list`, `start`, `stop` and `ssh`,
+which run the coder command on the checked deployment. xo has no delete command: delete a workspace
+in the Coder dashboard.
 
 `--timeout` sets the limit for each Coder account/app URL lookup (default 30 seconds).
 `--wait-timeout` sets the create/start limit (default 600 seconds). If a create fails, times out or

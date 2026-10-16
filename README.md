@@ -119,8 +119,8 @@ xo coder github https://github.com/OWNER/REPO --name my-preview --ref main \
 XO_CODER_URL=https://coder.example.com xo coder github https://github.com/OWNER/REPO
 xo --coder-url https://coder.example.com coder github https://github.com/OWNER/REPO
 
-# Any of list, show, start, stop, restart, ssh, delete, open, ping, port-forward, update, logs
-# runs as `coder --url DEPLOYMENT ...` in your terminal, after the same check.
+# Any of list, show, start, stop, restart, ssh, open, ping, port-forward, update, logs runs as
+# `coder --url DEPLOYMENT ...` in your terminal, after the same check. xo has no delete; use the dashboard.
 xo coder list
 xo coder ssh my-preview
 xo coder logout   # only if Coder is logged in to xo's deployment; asks first
