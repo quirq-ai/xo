@@ -324,7 +324,8 @@ spaces: [{"name": "dev", "kind": "claude-code", "id": "<XO space id>", "rev": 2,
     one Clerk call; `sharedAs` is the name they shared under when it differs, and `senderGone`
     marks an account that no longer exists. If that lookup fails, each shows the name it was
     shared under, marked `senderUnchecked`. `/me` shows `shared` by the names shared under, never
-    by user id. Should two invites ever share an id, accept refuses both (409) and reject takes
+    by user id, and does not look them up: `/me/shared` (`xo list shared`) is the one to trust
+    about who sent an invite. Should two invites ever share an id, accept refuses both (409) and reject takes
     both off.
   - `POST /me/shared/accept` takes `{"id", "as"?}` for a shared space and `{"id", "space",
     "ref"?}` for a shared project. It checks every refusal first (an id that matches one invite, a
@@ -341,7 +342,16 @@ spaces: [{"name": "dev", "kind": "claude-code", "id": "<XO space id>", "rev": 2,
   - **Races.** A share racing the recipient's own write is written again if it was lost. A share
     that read before a reject and writes after it can bring the invite back, once; the reject's
     own re-read then takes it off again, unless both re-reads land first (the same narrowed race as
-    `PUT /me/spaces/{name}`).
+    `PUT /me/spaces/{name}`). An accept whose new space, or project entry, is lost to a racing
+    write of `spaces` puts it back (the invite is already spent), and refuses only when that
+    cannot be done: the name was taken meanwhile, or the space is gone or full.
+  - **The 6KB check is per instance.** Writes on different instances can each pass it and
+    together go over by about one write (the same no compare-and-swap class as `projects`). A
+    share adds at most 1.5KB, so the whole stays under Clerk's 8KB. A 422 for 6KB names how much
+    the waiting invites take; `xo reject` always works and frees it.
+  - **Two Clerk answers to confirm once on a development instance:** `GET /v1/users?username=...`
+    and `GET /v1/users?user_id=...&limit=N` are expected to return a bare JSON list. If they do
+    not, every share answers 503 and `xo list shared` marks each sender `senderUnchecked`.
 - **Masked as `/me` is**, by setting name and by value, except each space's `projects`: its keys
   are project names (a repository called `auth-service` is not a secret), so its refs are shown as
   stored. The `xo` part of a `POST /me/spaces` answer, XO's own answer, is masked too, where

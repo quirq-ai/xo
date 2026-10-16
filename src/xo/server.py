@@ -591,6 +591,14 @@ def _size(private: dict) -> int:
     return len(json.dumps(private, separators=(",", ":"), ensure_ascii=False).encode())
 
 
+def _invites_note(private: dict) -> str:
+    """For a 6KB refusal: what the invites waiting take, which xo reject always frees."""
+    shared = private.get("shared")
+    if not isinstance(shared, list) or not shared:
+        return ""
+    return f". Invites waiting take {_size(shared)} bytes; xo reject ID frees them (a reject always works)"
+
+
 def _rev(entry: dict) -> int:
     rev = entry.get("rev")
     return rev if isinstance(rev, int) and not isinstance(rev, bool) else 0
@@ -911,7 +919,8 @@ class App:
                     break
                 if set(value) != {"shared"} and _size({**private, **value}) > PRIVATE_BUDGET:
                     raise self._refuse(who, 422, f"That would take your private metadata past {PRIVATE_BUDGET // 1024}KB "
-                                                 "(Clerk keeps 8KB, and XO needs the rest); nothing was changed")
+                                                 "(Clerk keeps 8KB, and XO needs the rest); nothing was changed"
+                                                 + _invites_note(private))
                 try:
                     # A merge naming only these keys: Clerk leaves every other key as it is.
                     self.clerk.update_metadata(subject, {"privateMetadata": value})
@@ -1062,7 +1071,7 @@ class App:
         if _size({**private, "spaces": [*spaces, widest]}) > PRIVATE_BUDGET:
             raise self._refuse(who, 422, f"Recording it would take your private metadata past "
                                          f"{PRIVATE_BUDGET // 1024}KB (Clerk keeps 8KB, and XO needs the rest); "
-                                         "nothing was created")
+                                         "nothing was created" + _invites_note(private))
         status, answer = self.core.forward("POST", f"/{kind}", token, json.dumps(create).encode())
         if not 200 <= status < 300:
             self.audit(**who, outcome=status, xo=status)
@@ -1476,8 +1485,19 @@ class App:
                 out_spaces, target = into_space(spaces, wrote)
                 in_place = out_spaces is None
                 placed[:] = [target]
-            if wrote and invite not in current and all(p in projects for p in wanted) and in_place:
-                return "done", {"shared": current, "projects": projects, "spaces": spaces}
+            if wrote and invite not in current and all(p in projects for p in wanted):
+                if in_place:
+                    return "done", {"shared": current, "projects": projects, "spaces": spaces}
+                # Our write landed and a write of `spaces` from another instance then replaced the
+                # list: the invite is spent, so put our space part back rather than lose it.
+                if new is not None and there is not None:
+                    raise self._refuse(who, 409, f"A space named {name} was made while this ran; the invite's "
+                                                 "projects are in your projects, so add them to a space with xo "
+                                                 "connect")
+                if new is not None and len(spaces) >= MAX_SPACES:
+                    raise self._refuse(who, 409, f"You reached {MAX_SPACES} spaces while this ran; the invite's "
+                                                 "projects are in your projects")
+                return "write", {"spaces": out_spaces}
             if invite not in current:
                 raise self._refuse(who, 409 if wrote else 404, f"Invite {handle} changed while this ran; run xo list "
                                                                "shared" if wrote else f"You have no invite {handle}")
