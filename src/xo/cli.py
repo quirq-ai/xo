@@ -40,7 +40,13 @@
     xo connect project:P space:S [--ref R]  set project P in space S at ref R (default main).
     xo connect space:S [--id ID]            a new space entry S in your metadata; --id ties it to an
                                             XO space you already have.
-    xo list projects | spaces               show your projects or your spaces.
+    xo list projects | spaces | shared      show your projects, your spaces, or the invites shared
+                                            with you.
+    xo share space:S|project:O/R USERNAME   invite that user to a copy of the space (its name and
+                                            projects) or the project.
+    xo accept space:S|project:P --from U [--as NAME]
+                                            add U's invite to your own spaces or projects.
+    xo reject space:S|project:P --from U    take U's invite off your shared list.
     xo install project:P | space:S          clone or fetch P here; for a space, each of its projects
                                             into ./S/ at its ref.
     xo update project:P | space:S           push P's branch (never forced); for a space, record the
@@ -746,8 +752,33 @@ def _workspace(args: argparse.Namespace) -> int:
     return 0
 
 
+def _share(args: argparse.Namespace) -> int:
+    """`xo share space:S|project:OWNER/REPO USERNAME`: an invite in that user's `shared`, which they
+    accept or reject. The xo server writes it; the invite holds the space's name and projects."""
+    kind, name = workspace.target(args.target)
+    if kind == "project" and not names.is_github(name):
+        raise XoError("only an OWNER/REPO project can be shared: nobody else could install a local one")
+    client = _client(args, server=True)
+    data = _post_server(client, "/me/share", {"item": f"{kind}:{name}", "to": args.username})
+    print(client.scrub(_json(_answer(data, "shared", "the invite"))))
+    return 0
+
+
+def _invite(args: argparse.Namespace) -> int:
+    """`xo accept | reject space:S|project:P --from USERNAME`: answer an invite in your `shared`."""
+    kind, name = workspace.target(args.target)
+    if getattr(args, "as_name", None) is not None and not (kind == "space" and names.space_ok(args.as_name)):
+        raise XoError("--as names the space you accept it as: " + names.SPACE_RULE)
+    client = _client(args, server=True)
+    body = {"item": f"{kind}:{name}", "from": args.sender,
+            **({"as": args.as_name} if getattr(args, "as_name", None) is not None else {})}
+    data = _post_server(client, f"/me/shared/{args.command}", body)
+    print(client.scrub(_json(_answer(data, "shared", "your invites"))))
+    return 0
+
+
 def _list(args: argparse.Namespace) -> int:
-    """`xo list projects | spaces`: that list in your private metadata."""
+    """`xo list projects | spaces | shared`: that list in your private metadata."""
     client = _client(args, server=True)
     found = _answer(client.request("GET", f"/me/{args.what}").data, args.what, f"a {args.what} list")
     print(client.scrub(_json(found)))
@@ -1132,8 +1163,23 @@ def main(argv: list[str] | None = None) -> int:
         w = sub.add_parser(verb, parents=[common], help=about)
         w.add_argument("target", metavar="project:NAME|space:NAME")
         w.set_defaults(run=_workspace)
-    ls = sub.add_parser("list", parents=[common], help="show your projects or your spaces")
-    ls.add_argument("what", choices=("projects", "spaces"))
+    sh = sub.add_parser("share", parents=[common],
+                        help="invite a user to a copy of one of your spaces or GitHub projects (it waits in "
+                             "their shared list until they accept or reject it)")
+    sh.add_argument("target", metavar="space:NAME|project:OWNER/REPO")
+    sh.add_argument("username", metavar="USERNAME", help="their XO username")
+    sh.set_defaults(run=_share)
+    for verb, about in (("accept", "add an invite from your shared list to your own spaces or projects"),
+                        ("reject", "take an invite off your shared list")):
+        iv = sub.add_parser(verb, parents=[common], help=about)
+        iv.add_argument("target", metavar="space:NAME|project:OWNER/REPO")
+        iv.add_argument("--from", dest="sender", required=True, metavar="USERNAME", help="who shared it")
+        if verb == "accept":
+            iv.add_argument("--as", dest="as_name", metavar="NAME",
+                            help="accept a space under another name (when you already have one called that)")
+        iv.set_defaults(run=_invite)
+    ls = sub.add_parser("list", parents=[common], help="show your projects, your spaces or the invites shared with you")
+    ls.add_argument("what", choices=("projects", "spaces", "shared"))
     ls.set_defaults(run=_list)
 
     cr = sub.add_parser("coder", parents=[common], help="launch workspaces using your Coder login")

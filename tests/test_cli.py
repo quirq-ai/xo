@@ -1789,3 +1789,31 @@ def test_git_refuses_a_file_remote_even_when_the_users_config_allows_it(monkeypa
     with pytest.raises(XoError):
         gitops.run("clone", "--end-of-options", f"file://{src}", str(tmp_path / "dest"))
     assert not (tmp_path / "dest").exists()
+
+
+def test_share_accept_and_reject_send_the_item_and_username(xs, capsys):
+    xs.route("POST", "/me/share", body={"success": True, "data": {"shared": {"to": "bob", "item": "space:dev"}}})
+    xs.route("POST", "/me/shared/accept", body={"success": True, "data": {"shared": []}})
+    xs.route("POST", "/me/shared/reject", body={"success": True, "data": {"shared": []}})
+    xs.route("GET", "/me/shared", body={"success": True, "data": {"shared": []}})
+    assert run(capsys, "share", "space:dev", "bob")[0] == 0
+    assert run(capsys, "share", "project:quirq-ai/xo", "bob")[0] == 0
+    assert run(capsys, "accept", "space:dev", "--from", "alice", "--as", "dev2")[0] == 0
+    assert run(capsys, "accept", "project:quirq-ai/xo", "--from", "alice")[0] == 0
+    assert run(capsys, "reject", "space:dev", "--from", "alice")[0] == 0
+    assert run(capsys, "list", "shared")[0] == 0
+    assert [(r["path"], r["body"]) for r in xs.requests] == [
+        ("/me/share", {"item": "space:dev", "to": "bob"}),
+        ("/me/share", {"item": "project:quirq-ai/xo", "to": "bob"}),
+        ("/me/shared/accept", {"item": "space:dev", "from": "alice", "as": "dev2"}),
+        ("/me/shared/accept", {"item": "project:quirq-ai/xo", "from": "alice"}),
+        ("/me/shared/reject", {"item": "space:dev", "from": "alice"}),
+        ("/me/shared", None)]
+
+
+@pytest.mark.parametrize("argv", [
+    ["share", "project:notes", "bob"], ["share", "space:../x", "bob"], ["share", "dev", "bob"],
+    ["accept", "space:dev"], ["accept", "space:dev", "--from", "alice", "--as", "../x"],
+    ["accept", "project:o/r", "--from", "alice", "--as", "x"], ["reject", "space:dev", "--from", "alice", "--as", "x"]])
+def test_share_and_invites_refuse_bad_input_before_sending(xs, capsys, argv):
+    assert _refused(capsys, *argv) and xs.requests == []

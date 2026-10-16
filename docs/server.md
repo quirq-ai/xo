@@ -294,6 +294,30 @@ spaces: [{"name": "dev", "kind": "claude-code", "id": "<XO space id>", "rev": 2,
   with a `name`, holds two names that differ only in case, or a project entry that is not one
   `{project: ref}`, is never overwritten (409). An admin removing a space through `/user-metadata`
   while a change runs can see it put back.
+- **Sharing** is the one write to another user's metadata. `POST /me/share` with `{"item":
+  "space:S"|"project:OWNER/REPO", "to": USERNAME}` adds one invite to that user's `shared` list:
+  `{"from": <sharer's user id>, "fromName": <sharer's username>, "item", "projects" (a space's
+  {project: ref} list), "at"}`. Never the space's id, kind or rev. The merge sent to Clerk names
+  `shared` only, with the same lock, settle, re-read and 6KB check as every other write; the
+  sharer's own earlier invite of the same item is replaced, every other invite is kept.
+  - The caller is told plainly about what is theirs: no username on their account (409), an item
+    they do not have (404), a local project (422). Everything about the recipient (no such
+    username, the caller's own username, 20 invites waiting, 5 from this caller, no room in 6KB,
+    a `shared` xo cannot read, their Clerk write limit) is the same 404 "Could not share ITEM with
+    USERNAME", and a Clerk failure is a 503. Every answer takes at least 1.5 seconds, so its
+    timing says nothing more. A 200 does confirm the username exists. Share is limited to 10 a
+    minute per key; the audit line names the recipient only by a hash.
+  - `GET /me/shared` lists the caller's invites, each sender by username, never by user id; `/me`
+    shows `shared` the same way.
+  - `POST /me/shared/accept` with `{"item", "from": USERNAME, "as"?}` writes only the caller's own
+    metadata, one key at a time: each project into `projects` (refused past 30), a space into
+    `spaces` as `{"name", "rev": 1, "projects"}` (409 when the name is taken: send `as`), then the
+    invite off `shared`. A step that fails leaves the invite there, and the same accept can be sent
+    again. Names and refs in the invite are checked again first, and an invite xo cannot use is
+    refused (409: reject it). `POST /me/shared/reject` with `{"item", "from"}` only takes it off.
+  - A share racing the recipient's own write is written again if it was lost. Their accept or
+    reject racing a share can drop the new invite; that share's re-read writes it again, unless both
+    re-reads land first (the same narrowed race as `PUT /me/spaces/{name}`).
 - **Masked as `/me` is**, by setting name and by value, except each space's `projects`: its keys
   are project names (a repository called `auth-service` is not a secret), so its refs are shown as
   stored. The `xo` part of a `POST /me/spaces` answer, XO's own answer, is masked too, where
