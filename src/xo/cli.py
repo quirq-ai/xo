@@ -22,7 +22,7 @@
                                             `xo user-metadata` with the Clerk credentials it holds,
                                             and passes the creates and GET /spaces/{id} on to XO's
                                             core API.
-    xo login [xo|coder] [--url URL]         log in to every service the xo server lists (or the one
+    xo login [xo|me|coder] [--url URL]      log in to every service the xo server lists (or the one
                                             named): me (the xo server) and xo take your API key,
                                             asked for without showing it unless a saved key still
                                             works; coder runs Coder's own login in this terminal.
@@ -489,10 +489,10 @@ def _login(args: argparse.Namespace) -> int:
     results: list[tuple[str, str | None, str]] = []  # (service, error or None, line)
     if args.service in (None, *KEY_SERVICES):
         try:
-            results.append(("xo", None, _login_xo(args, url, saved)))
+            results.append(("me", None, _login_xo(args, url, saved)))
             last["me"], last["xo"] = url, platform
         except XoError as e:
-            results.append(("xo", str(e), ""))
+            results.append(("me", str(e), ""))
     if args.service in (None, "coder"):
         try:
             line, where = _login_coder(args, coder_at, last)
@@ -597,7 +597,7 @@ def _logout(args: argparse.Namespace) -> int:
     """Delete the saved key and addresses; log Coder out only of the deployment xo logged it in to."""
     # The XO key goes first, whatever else is wrong (a bad XO_CODER_URL must not keep it saved).
     path = forget_login()
-    print(f"xo: xo: deleted {path}" if path else f"xo: xo: no saved key at {credentials_path()}",
+    print(f"xo: me: deleted {path}" if path else f"xo: me: no saved key at {credentials_path()}",
           file=sys.stderr)
     coder_default = services.coder_default()
     services.forget_addresses()

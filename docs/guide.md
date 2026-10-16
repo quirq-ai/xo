@@ -36,7 +36,7 @@ xo logout         # deletes your XO key; logs Coder out of xo's deployment (asks
   already logged in to xo's deployment, it says "already logged in". If Coder is logged in somewhere
   else, xo asks before replacing that login.
 
-The key and coder each end with one line (`xo: xo: ...` and `xo: coder: ...`): logged in, already
+The key and coder each end with one line (`xo: me: ...` and `xo: coder: ...`): logged in, already
 logged in, skipped (no Coder CLI), or failed and why. One failure does not stop the other.
 
 ## Create spaces (xo)
@@ -95,8 +95,8 @@ with `--api-key -`.
 Each step says what you should see. Nothing here creates anything until step 5.
 
 1. `xo --version` prints `xo 0.1.0`.
-2. `xo login` prints the three addresses, then `xo: logged in as ...` and
-   `coder: logged in to https://dev-coder.xo.builders as ...` (or `skipped` without the Coder CLI).
+2. `xo login` prints the three addresses, then `xo: me: logged in as ...` and
+   `xo: coder: logged in to https://dev-coder.xo.builders as ...` (or `skipped` without the Coder CLI).
 3. `xo status` shows three lines: me `key saved by xo login`, xo, coder
    `logged in as ...`.
 4. `xo spaces --space-id 00000000-0000-0000-0000-000000000000` ends with `HTTP 404: Space not found`:

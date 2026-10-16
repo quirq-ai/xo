@@ -10,6 +10,6 @@
   },
   "me": {
     "url": "https://xo.quirq.dev",
-    "about": "the xo server: xo me and xo user-metadata, and the one address your XO key is sent to"
+    "about": "the xo server: xo me and xo user-metadata, and the one address xo sends your XO key to (the server passes it on with each create)"
   }
 }

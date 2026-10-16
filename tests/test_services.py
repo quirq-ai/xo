@@ -105,6 +105,18 @@ def test_a_list_without_an_address_for_xo_keeps_coder_and_says_so(fake):
                      "sends creates"]
 
 
+
+def test_a_bad_me_address_is_skipped_and_the_rest_of_the_list_kept(fake):
+    # xo never uses a listed me, so it must not cost the server's xo and coder addresses.
+    fake.route("GET", "/config", body={"success": True, "data": {"schema": "xo-services/2", "xo": {
+        "url": "https://platform.example", "coder": {"url": "https://coder.example"}},
+        "me": {"url": "http://127.0.0.1:8787"}}})
+    found, notes = services.fetch(fake.base, 5)
+    assert found["xo"].url == "https://platform.example" and found["coder"].url == "https://coder.example"
+    assert found["me"] == services.builtin()["me"]
+    assert notes == ["the address for me in the list is not a plain https:// address; xo does not use it, "
+                     "so it is skipped"]
+
 def test_unreachable_server_uses_the_shipped_list():
     found, notes = services.fetch("http://127.0.0.1:9", 2)
     assert found == services.builtin() and "it could not be reached" in notes[0]
@@ -119,6 +131,9 @@ def test_saved_addresses_round_trip_and_ignore_junk(config_home):
     # A file from before xo-services/2 is read under the new names.
     services.save_addresses({"xo-server": "http://127.0.0.1:8080", "xo-platform": "https://p.example"})
     assert services.saved_addresses() == {"me": "http://127.0.0.1:8080", "xo": "https://p.example"}
+    # A file holding both names: the new one wins.
+    services.save_addresses({"xo-platform": "https://old.example", "xo": "https://new.example"})
+    assert services.saved_addresses()["xo"] == "https://new.example"
     assert stat.S_IMODE(os.stat(services.addresses_path()).st_mode) == 0o600
     services.addresses_path().write_text('{"coder": "http://evil.example", "xo": 3}')
     assert services.saved_addresses() == {}
