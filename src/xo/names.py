@@ -17,6 +17,13 @@ _REPO = re.compile(r"[A-Za-z0-9_.][A-Za-z0-9_.-]{0,99}")
 _SPACE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
 # A branch, tag or 40-character commit sha; git's ref rules, never starting with "-".
 _REF = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,199}")
+# The kinds of space XO's core API creates: `xo create space NAME KIND`, and the creates the server
+# passes on (server.CORE_ROUTES is built from it). One list, so the CLI's kinds and the server's routes
+# cannot drift apart.
+SPACE_KINDS = ("claude-code", "codex", "antigravity", "hermes", "openclaw", "xo-cowork", "nebius-openclaw")
+# XO's own space name: `xo create space NAME KIND` uses NAME as the space's name on XO too.
+_XO_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,31}")
+_XO_RESERVED = {"new", "create"}
 SPACE_ID_MAX = 64  # what the server forwards in GET /spaces/{id}
 SPACE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,%d}" % (SPACE_ID_MAX - 1))
 GITHUB_URL = re.compile(r"https://github\.com/([^/\s]+)/([^/\s]+?)(?:\.git)?/?")
@@ -24,6 +31,8 @@ GITHUB_URL = re.compile(r"https://github\.com/([^/\s]+)/([^/\s]+?)(?:\.git)?/?")
 PROJECT_RULE = ("a project name is 1 to 64 letters, digits, spaces, _ . or - starting with a letter or "
                 "digit, or a GitHub owner/repo")
 SPACE_RULE = "a space name is 1 to 64 letters, digits, _ . or -, starting with a letter or digit"
+XO_NAME_RULE = ("a new space's name is 1 to 32 letters, digits or hyphens, starting with a letter or digit, "
+                "and not new or create (it is also the space's name on XO)")
 REF_RULE = "a ref is a branch, tag or commit sha: letters, digits, . _ / -, starting with a letter or digit"
 
 
@@ -43,6 +52,12 @@ def project_ok(name: str) -> bool:
 
 def space_ok(name: str) -> bool:
     return isinstance(name, str) and bool(_SPACE.fullmatch(name))
+
+
+def xo_name_ok(name: str) -> bool:
+    """A name XO takes for a new space, which `xo create space` also records it under."""
+    return (isinstance(name, str) and bool(_XO_NAME.fullmatch(name)) and space_ok(name)
+            and name.lower() not in _XO_RESERVED)
 
 
 def ref_ok(ref: str) -> bool:

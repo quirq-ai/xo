@@ -3,7 +3,8 @@
     xo <endpoint> [ACTION] [--flag VALUE ...]
 
 The command is the endpoint's path, without a leading /api or /vN and without its {placeholders},
-joined with dashes: POST /claude-code is `xo claude-code`, GET /spaces/{spaceId} is `xo spaces`.
+joined with dashes: GET /spaces/{spaceId} is `xo spaces`, GET /me is `xo me`. (XO's space creates,
+POST /claude-code and the rest, are kinds of `xo create space` instead; see cli._is_create.)
 When several operations share a command (say GET and DELETE on /spaces/{spaceId}), each is an
 action named for its method: list, get, create, update, replace, delete. Path, query and header
 parameters and the fields of a JSON object body, nested ones too (--providers-anthropic-api-key),
@@ -114,13 +115,14 @@ def _about(op: Operation) -> str:
 
 
 def add_operation(p: argparse.ArgumentParser, op: Operation, add_send: Callable[[argparse.ArgumentParser], None],
-                  run: Callable[[argparse.Namespace], int]) -> None:
-    """One operation's flags on a parser of the caller's own, such as `xo create space KIND`."""
-    _operation(p, op, add_send, run)
+                  run: Callable[[argparse.Namespace], int], skip: set[str] = frozenset()) -> None:
+    """One operation's flags on a parser of the caller's own, such as `xo create space NAME KIND`;
+    skip names top-level body fields the command sets itself, which get no flag."""
+    _operation(p, op, add_send, run, skip)
 
 
 def _operation(p: argparse.ArgumentParser, op: Operation, add_send: Callable[[argparse.ArgumentParser], None],
-               run: Callable[[argparse.Namespace], int]) -> None:
+               run: Callable[[argparse.Namespace], int], skip: set[str] = frozenset()) -> None:
     flags: list[Flag] = []
     taken = {"data", "field", "dry-run", "show-secrets", "yes", "api-key", "url", "coder-url", "spec", "timeout",
              "help"}
@@ -132,6 +134,8 @@ def _operation(p: argparse.ArgumentParser, op: Operation, add_send: Callable[[ar
                        help=_esc(f"{prm.where} parameter {clean(prm.name)}{need}. {prm.description}".strip()))
         flags.append(Flag(dest, prm.where, prm.name, flag, ""))
     for bf in op.body_fields:
+        if len(bf.path) == 1 and bf.path[0] in skip:
+            continue
         flag = _unique(kebab("-".join(bf.path)), taken)
         dest = f"p_{len(flags)}"
         need = " (required)" if bf.required else ""

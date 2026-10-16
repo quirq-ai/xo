@@ -63,6 +63,33 @@ def clone(name: str, dest: Path) -> None:
     run("clone", "--no-recurse-submodules", "--end-of-options", f"{GITHUB}/{name}", str(dest))
 
 
+def _is_repo(url: str, name: str) -> bool:
+    """Whether a remote URL is GitHub's owner/repo, in the https, git@ or ssh:// form."""
+    url = url.strip().rstrip("/")
+    url = url[:-4] if url.endswith(".git") else url
+    forms = (f"{GITHUB}/{name}", f"https://github.com/{name}", f"git@github.com:{name}",
+             f"ssh://git@github.com/{name}")
+    return any(url.casefold() == f.casefold() for f in forms)
+
+
+def set_origin(dest: Path, name: str) -> str:
+    """Point a checkout with no origin at GitHub's owner/repo, and say what happened. One whose
+    origin is already that repo is left as it is; one whose origin is another repository is
+    refused, so nothing later pushes the project to the wrong place."""
+    if not (names.project_ok(name) and names.is_github(name)):
+        raise XoError(f"{name} is not a GitHub owner/repo")
+    own_checkout(dest)
+    url = f"{GITHUB}/{name}"
+    have = run("remote", "get-url", "origin", cwd=dest, check=False)
+    if have is None:
+        run("remote", "add", "origin", url, cwd=dest)
+        return f"its origin is now {url}"
+    if not _is_repo(have, name):
+        # Never echo the URL: it can carry a token.
+        raise XoError(f"its origin is another repository, not {name}; point it at {url} yourself")
+    return f"its origin is already {name}"
+
+
 def init(dest: Path) -> None:
     """An empty repository at dest, for a project with no GitHub remote yet."""
     run("init", "--quiet", "--end-of-options", str(dest))

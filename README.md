@@ -26,33 +26,37 @@ xo login                        # every service the xo server lists: your XO API
 xo status                       # each service, its address, and whether you are logged in
 
 xo --help                       # every command
-xo openclaw --help              # the flags one command takes
+xo create space --help          # the kinds of space
+xo create space NAME openclaw --help   # the flags one kind takes
 
-xo codex --name my-codex --volume-size 20
-xo claude-code --name my-cc --volume-size 20 --providers-anthropic-api-key ""
-xo openclaw --name my-claw --volume-size 20 \
+xo create space my-codex codex --volume-size 20
+xo create space my-cc claude-code --volume-size 20 --providers-anthropic-api-key ""
+xo create space my-claw openclaw --volume-size 20 \
   --providers-anthropic-api-key "$ANTHROPIC_API_KEY" \
   --notification-channels-telegram-bot-token "$TELEGRAM_BOT_TOKEN"
+xo create project notes                          # an empty repository at ./notes
+xo create project https://github.com/OWNER/REPO  # named OWNER/REPO and cloned
 xo spaces --space-id 6f1c2c1e-...   # connection URLs for a space you own
 ```
 
 | Command | Request | Body |
 |---|---|---|
-| `xo claude-code` | `POST /claude-code` | name, volume size; Anthropic provider |
-| `xo codex` | `POST /codex` | name, volume size |
-| `xo antigravity` | `POST /antigravity` | name, volume size |
-| `xo hermes` | `POST /hermes` | name, volume size; providers; Telegram or Slack |
-| `xo openclaw` | `POST /openclaw` | name, volume size; at least one provider and one channel |
-| `xo xo-cowork` | `POST /xo-cowork` | name, volume size; providers; channels |
-| `xo nebius-openclaw` | `POST /nebius-openclaw` | name, Token Factory key, Telegram token (feature flagged) |
-| `xo spaces` | `GET /spaces/{spaceId}` | none |
+| `xo create space NAME KIND` | `POST /me/spaces` on your xo server: it creates the space through XO (`POST /KIND`) with NAME as its name there, then records it in your `spaces` as NAME | the flags of KIND, below |
+| &nbsp;&nbsp;KIND `claude-code` | `POST /claude-code` | volume size; Anthropic provider |
+| &nbsp;&nbsp;KIND `codex` | `POST /codex` | volume size |
+| &nbsp;&nbsp;KIND `antigravity` | `POST /antigravity` | volume size |
+| &nbsp;&nbsp;KIND `hermes` | `POST /hermes` | volume size; providers; Telegram or Slack |
+| &nbsp;&nbsp;KIND `openclaw` | `POST /openclaw` | volume size; at least one provider and one channel |
+| &nbsp;&nbsp;KIND `xo-cowork` | `POST /xo-cowork` | volume size; providers; channels |
+| &nbsp;&nbsp;KIND `nebius-openclaw` | `POST /nebius-openclaw` | Token Factory key, Telegram token (feature flagged) |
+| `xo spaces --space-id ID` | `GET /spaces/{spaceId}` | none |
 | `xo login [xo\|coder]` / `logout` | every listed service (or the one named): checks the XO key with XO (a space that doesn't exist) and saves it with the address, and logs Coder in / deletes the key and logs Coder out of xo's deployment | none |
 | `xo status` | each service's address and whether you are logged in; never a key | none |
 | `xo me` | `GET /me` on your xo server; prints `{"xo": {username, imageUrl, ..., "public_data": {...}, "private_data": {...}}}` | none |
 | `xo projects` / `xo projects add NAME` | `GET` / `POST /me/projects` on your xo server: the `projects` list in your own private metadata; the server makes the change and writes only that list | the name only |
-| `xo create project NAME\|URL` | `POST /me/projects`, then clones `https://github.com/OWNER/REPO` here (or `git init ./NAME` for a plain name) with your own git | the name only |
-| `xo create space KIND NAME` | `POST /me/spaces` on your xo server: it creates the space through XO as `xo KIND` does, then records it in your `spaces` as NAME | the flags of `xo KIND` |
+| `xo create project NAME [URL]` | `POST /me/projects`, then clones `https://github.com/OWNER/REPO` here (or `git init ./NAME` for a plain name) with your own git. A project with a repo is named `OWNER/REPO`, so give a URL alone, or a NAME that matches it | the name only |
 | `xo connect project:P space:S` / `xo connect space:S` | `POST /me/spaces/S/projects` / `POST /me/spaces/connect`: a project's ref in a space, or a new space entry in your metadata | `--ref` (default main) / `--id` for an XO space you already have |
+| `xo connect project:P --repo URL` | `POST /me/projects/connect`: a project made with a name only gets its repo and is renamed `OWNER/REPO`; `./P` gets that origin if it has none and moves to `./OWNER/REPO` (left in place if its origin is another repository) | the name and `OWNER/REPO` |
 | `xo list projects\|spaces\|shared` | `GET /me/projects` / `GET /me/spaces` / `GET /me/shared` | none |
 | `xo share space:S\|project:O/R USERNAME` | `POST /me/share`: an invite in that user's `shared` list, holding the space's name and projects (never its id) | none |
 | `xo accept ID` / `xo reject ID` | `GET /me/shared` and a y/N, then `POST /me/shared/accept`: in one write, a shared space into your spaces or a shared project into the space you name, its projects into your projects, the invite off / `POST /me/shared/reject`: the invite off (the sender can share again) | `--as NAME` (accept a space under another name), `--space NAME` and `--ref REF` (where a shared project goes), `--yes` |
@@ -62,8 +66,10 @@ xo spaces --space-id 6f1c2c1e-...   # connection URLs for a space you own
 | `xo user-metadata get` / `update` | `GET` / `PATCH /user-metadata/{userId}` on your xo server | publicMetadata, privateMetadata as JSON objects (admin keys only); try `--dry-run` first: a wrong `--user-id` edits another user |
 | `xo coder github URL` | Coder CLI, using your Coder login | GitHub repository and `xo-github` template parameters; see below |
 
-Each XO core API create prints the new space, `data.id` included. Keep that id: the API has no
-list, delete, start or stop endpoint, and `xo spaces --space-id ID` is the only way back to a space.
+Every space is created with `xo create space NAME KIND`; the old `xo claude-code`, `xo codex`, ...
+commands are gone and say so. It prints the recorded space and XO's answer, `id` included, and
+`xo list spaces` shows it again later. The API has no list, delete, start or stop endpoint, so
+`xo spaces --space-id ID` is the only way to XO's own view of a space.
 `xo coder github` creates a Coder workspace separately; manage its lifecycle with Coder.
 
 The API is XO's platform, `https://dev.xo.builders/api/core/v1` (the `xo` service); xo
@@ -73,8 +79,10 @@ reaches it through the xo server (see Server mode and Services). Its spec is bun
 another spec, pass `--spec FILE` or set `XO_SPEC=FILE`.
 
 Things to know:
-- A name is 1 to 32 letters, digits or hyphens, starting with a letter or digit. The server
-  lowercases it and returns the stored name in `data.name`. A name you already use fails with 500.
+- A new space's NAME is 1 to 32 letters, digits or hyphens, starting with a letter or digit, and
+  not `new` or `create`. It is the space's name on XO and in your `spaces`, in lowercase as XO keeps it (xo says so when it
+  changes it).
+  A name you already use fails.
 - `--volume-size` is in GB, 20 to 100.
 - A provider or channel flag sends that object with `"enabled": true`, so
   `--providers-openai-api-key K` sends `{"openai": {"enabled": true, "apiKey": "K"}}`.
@@ -114,7 +122,7 @@ is a subcommand, and `me` for the xo server that answers `xo me`:
 | Service | Address | How you log in | Commands |
 |---|---|---|---|
 | `me` | the xo server: `--url`, `XO_URL`, the one `xo login` saved, else `https://xo.quirq.dev` (the `me` address in xo's own list) | your XO API key | `xo me`, `xo user-metadata` |
-| `xo` | `https://dev.xo.builders`, reached through the xo server | the same XO API key | `xo claude-code`, `xo codex`, `xo openclaw`, ... and `xo spaces` |
+| `xo` | `https://dev.xo.builders`, reached through the xo server | the same XO API key | `xo create space NAME KIND` and `xo spaces` |
 | `coder` | `https://dev-coder.xo.builders` | Coder's own login, in your terminal | `xo coder github`, `xo coder list`, `ssh`, ... |
 | `github` | `https://github.com` (not in the list; always github.com) | the GitHub CLI's own login (`gh auth login`), in your browser | `gh`, and git over https if you let gh set it up |
 

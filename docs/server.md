@@ -14,7 +14,7 @@ on to XO's core API, so the CLI needs one address.
 xo me ──────────────┐                      ┌── POST /v1/api_keys/verify
 xo user-metadata ───┤                      ├─ CLERK_SECRET_KEY ─► api.clerk.com
                     ├─ XO_API_KEY ─► xo serve └── GET /v1/users/{id}, PATCH /v1/users/{id}/metadata
-xo codex, ... ──────┘                      └── /api/core/v1/... ─ the caller's key ─► dev.xo.builders
+xo create space ────┘                      └── /api/core/v1/... ─ the caller's key ─► dev.xo.builders
 ```
 
 ## Routes
@@ -28,6 +28,7 @@ xo codex, ... ──────┘                      └── /api/core/v1/
 | GET | `/me` | any user key | `id`, `username`, `firstName`, `lastName`, `imageUrl`, `createdAt`, `email` (primary), `publicMetadata`, `privateMetadata`: the key's own user only, with secret-looking values masked |
 | GET | `/me/projects` | any user key | `projects`: the list in the key's own private metadata (`[]` when there is none) |
 | POST | `/me/projects` | any user key | adds `{"name": "..."}` to that list and answers the new list; see "Projects" below |
+| POST | `/me/projects/connect` | any user key | `{"name", "repo"}`: a project with no repo gets GitHub's `OWNER/REPO`, which replaces its name in that list; see "Projects" below |
 | GET | `/me/spaces` | any user key | `spaces`: the list in the key's own private metadata (`[]` when there is none) |
 | POST | `/me/spaces` | any user key | `{"kind", "name", "body"}`: creates the space through XO with the caller's key, then records it; see "Spaces" below |
 | POST | `/me/spaces/connect` | any user key | `{"name", "id"?}`: a new space entry with no projects; with an id, only for an XO space the caller's key can read |
@@ -235,6 +236,20 @@ process apply per function instance, so the per-address limit is a Vercel Firewa
   answer is 429. It clears that user's 60-second `/me` cache.
 - **Not narrowed by `XO_ME_PRIVATE_KEYS`.** `/me/projects` always shows the `projects` list, even
   when that variable leaves `projects` out of what `/me` shows.
+- **Giving a project its repo.** A project's name is its repo: `OWNER/REPO` for a GitHub project,
+  a plain name for one with no repo yet. `POST /me/projects/connect` (`xo connect project:P --repo
+  URL`) takes `{"name": "P", "repo": "OWNER/REPO"}` for a plain P and replaces P with `OWNER/REPO`
+  in place, through the same engine as an add, writing `projects` and nothing else. Refused without
+  a write: P not in the list (404), P already a repo or the repo not `OWNER/REPO` (422), the repo
+  already in the list (409), and P in any space (409), since the space would still name it P.
+  `spaces` is checked on every read, not only the first: if a racing `xo connect project:P space:S`
+  puts P in a space after the rename landed, the rename is put back (P listed again) and the answer
+  is 409. The repo is listed once whatever a racing add wrote.
+- **A rename can bring the old name back.** Every other write puts back names a racing write
+  dropped, and this is the one route that removes a name. A `xo projects add` or `xo create
+  project` on another instance that read the list before the rename can therefore put P back next
+  to `OWNER/REPO`. Nothing is lost, but P stays listed (xo has no delete); the window is the 0.3
+  second settle.
 
 ## Spaces
 
@@ -355,7 +370,7 @@ spaces: [{"name": "dev", "kind": "claude-code", "id": "<XO space id>", "rev": 2,
 - **Masked as `/me` is**, by setting name and by value, except each space's `projects`: its keys
   are project names (a repository called `auth-service` is not a secret), so its refs are shown as
   stored. The `xo` part of a `POST /me/spaces` answer, XO's own answer, is masked too, where
-  `xo KIND` shows XO's answer as it came.
+  `xo call` and `xo api` show XO's answer as it came.
 - **Audited and limited** like `/me/projects`: one JSON line per change with the key id, the caller,
   the outcome and the list's length (never a name, id, ref or other value), 30 requests a minute
   per key, under the Firewall rule's `/me` prefix.

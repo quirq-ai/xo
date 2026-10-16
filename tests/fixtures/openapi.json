@@ -93,10 +93,10 @@
         }
       }
     },
-    "/claude-code": {
+    "/agent-run": {
       "post": {
-        "operationId": "runClaudeCode",
-        "summary": "Run Claude Code",
+        "operationId": "runAgent",
+        "summary": "Run an agent",
         "requestBody": {
           "required": true,
           "content": {

@@ -55,23 +55,28 @@ failure does not stop the others.
 
 ```sh
 xo --help                                        # every command
-xo claude-code --help                            # the flags of one command
+xo create space --help                           # the kinds of space
+xo create space NAME claude-code --help          # the flags of one kind
 
-xo claude-code --name my-cc --volume-size 20 --providers-anthropic-api-key -
-xo codex --name my-codex --volume-size 20
-xo antigravity --name my-ag --volume-size 20
-xo openclaw --help                               # needs a provider key and a chat-channel token
-xo hermes --help
-xo xo-cowork --help
+xo create space my-cc claude-code --volume-size 20 --providers-anthropic-api-key -
+                                                 # my-cc on XO, recorded in your spaces as my-cc
+xo create space my-codex codex --volume-size 20
+xo create space my-ag antigravity --volume-size 20
+xo create space NAME openclaw --help             # needs a provider key and a chat-channel token
+xo create space NAME hermes --help
+xo create space NAME xo-cowork --help
 xo spaces --space-id THE_ID                      # a space you created, with its URLs
 xo me                                            # your profile: name, image, email, public and private metadata
 xo projects                                      # the projects list in your private metadata
 xo projects add my-app                           # add one; the server writes only that list
-xo create project https://github.com/OWNER/REPO  # add it to your projects and clone it here
+xo create project https://github.com/OWNER/REPO  # named OWNER/REPO, added to your projects, cloned here
+xo create project OWNER/REPO https://github.com/OWNER/REPO   # the same: a name and a URL must match
 xo create project notes                          # a project with no GitHub remote: ./notes, git init
-xo create space claude-code dev --name my-cc --volume-size 20 --providers-anthropic-api-key -
-                                                 # create it as `xo claude-code` does, record it as dev
-xo connect project:OWNER/REPO space:dev --ref main   # put a project in a space, at a branch, tag or sha
+xo connect project:notes --repo https://github.com/OWNER/REPO
+                                                 # give it its repo later: renamed OWNER/REPO; ./notes
+                                                 # gets that origin if it has none and moves to
+                                                 # ./OWNER/REPO (not moved if its origin is another repo)
+xo connect project:OWNER/REPO space:my-cc --ref main  # put a project in a space, at a branch, tag or sha
 xo connect space:dev                             # a new space entry in your metadata, no XO space
 xo connect space:old --id THE_ID                 # an entry for an XO space you already have, or
                                                  # the id for an entry made without one
@@ -119,17 +124,26 @@ xo sync project:OWNER/REPO                       # git pull --rebase, then push
   - Only GitHub (OWNER/REPO) projects can be shared, since nobody else could install a local one.
   - `xo list shared` shows each sender's username now. An invite sent again gets a new id, so
     `xo accept` never takes something other than what you saw.
-- Add `--dry-run` to `xo KIND` or `xo create space` to see the request without sending it.
+- `xo claude-code`, `xo codex` and the other old create commands are gone; each says to use
+  `xo create space NAME KIND`.
+- A project is named after its repo. `xo connect project:P --repo URL` is refused while P is in a
+  space, since the space would still name it P. It gives `./P` that origin only when it has none,
+  and leaves the folder where it is when its origin is another repository, so `xo update` never
+  pushes to the wrong place.
+- XO keeps space names in lowercase, so `xo create space MyDev codex` creates and records `mydev`,
+  and says so.
+- Add `--dry-run` to `xo create space` to see the request without sending it.
   `xo create project` and `xo connect` have no `--dry-run`.
 - `-` makes xo ask for a key or token without showing it. Only one `-` works per command; put any
   other secret in a JSON file and pass it with `--data @FILE`. The file holds part of the request
   body, and the flags you give are added to it. For example, `body.json` holding
   `{"providers": {"anthropic": {"enabled": true, "apiKey": "sk-ant-..."}}}` with
-  `xo claude-code --name my-cc --volume-size 20 --data @body.json`. Make the file readable only by
+  `xo create space my-cc claude-code --volume-size 20 --data @body.json` (leave `name` out of the
+  file: NAME sets it). Make the file readable only by
   you (`chmod 600 body.json`) and delete it afterwards.
 - Every create except `nebius-openclaw` copies your XO key into the new space, and xo says so as it
   sends.
-- There is no delete or list: keep the `data.id` a create prints.
+- XO has no delete or list: `xo list spaces` shows the spaces xo recorded, with their XO ids.
 
 ## Coder workspaces (coder)
 
@@ -173,7 +187,8 @@ Each step says what you should see. Nothing here creates anything until step 5.
    your key reaches the platform at dev.xo.builders, and its `/api/core/v1` is there (step 2 checks
    the same way). A 401 means the platform does not know the key. `HTTP 404: XO answered 404 without
    a JSON object` means the platform has no core API at that address; then `xo login` in step 2 fails the same way and saves nothing.
-5. `xo codex --name test-1 --volume-size 20 --dry-run`, then without `--dry-run` to really create.
+5. `xo create space test-1 codex --volume-size 20 --dry-run`, then without `--dry-run` to really
+   create; `xo list spaces` then shows test-1.
 6. `xo coder github https://github.com/OWNER/REPO --dry-run`, then without `--dry-run`; open the
    `appUrl` it prints.
 7. `xo coder list` shows the workspace from step 6.
