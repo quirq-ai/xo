@@ -41,12 +41,14 @@ Clerk instance: a key from another instance is refused as "Invalid API key".
    is hosted.
 3. Wait for **Valid Configuration** and the certificate.
 
-## 3. Add the rate limit rule (required)
+## 3. Add the rate limit rule (recommended, where your plan has it)
 
-The server limits calls to Clerk (`XO_CLERK_PER_SECOND`, default 20 a second) and requests per key,
-but on Vercel each function instance keeps its own counts, and Vercel can run many instances at
-once. So these limits slow a flood down; they do not stop it. The per-address limit has to be
-Vercel's:
+The server limits calls to Clerk (`XO_CLERK_PER_SECOND`, default 20 a second), requests passed on
+to XO (`XO_CORE_PER_SECOND`, default 10 a second) and requests per key, but on Vercel each function
+instance keeps its own counts, and Vercel can run many instances at once. So these limits slow a
+flood down; they do not stop it. A per-address limit can only be Vercel's. Add it if your plan
+offers rate limit rules under **Firewall**; without it the server's own limits are all there is,
+and the test script's last check fails:
 
 1. **Firewall → Rules → New rule**, named `xo per-IP limit`:
    - **If** Request Path **starts with** `/me`, **or** Request Path **starts with** `/user-metadata`,
