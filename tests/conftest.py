@@ -158,3 +158,13 @@ def fake(monkeypatch):
     monkeypatch.setenv("XO_SPEC", str(FIXTURES / "openapi.json"))
     yield state
     server.shutdown()
+
+
+@pytest.fixture(autouse=True)
+def no_real_github():
+    """No test clones from GitHub: xo's git points at a closed loopback port unless a test points it
+    at a local repository. Its own MonkeyPatch, so a test's monkeypatch.undo() cannot remove it."""
+    from xo import gitops
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(gitops, "GITHUB", "https://127.0.0.1:9/no-github-in-tests")
+        yield

@@ -1224,7 +1224,9 @@ def test_add_project_writes_only_projects_and_keeps_every_other_key(xo_server, c
     ({"projects": ["a"]}, 'Body must be {"name": "..."} and nothing else'),
     ({"name": ["a"]}, 'Body must be {"name": "..."} and nothing else'),
     (["alpha"], 'Body must be {"name": "..."} and nothing else'),
-    ({"name": ""}, None), ({"name": "-lead"}, None), ({"name": "a/b"}, None), ({"name": "x" * 65}, None),
+    ({"name": ""}, None), ({"name": "-lead"}, None), ({"name": "a/b/c"}, None), ({"name": "a/.."}, None),
+    ({"name": "-a/b"}, None), ({"name": "a/b.git"}, None), ({"name": "a/"}, None),
+    ({"name": "x" * 65}, None),
     ({"name": "café"}, None), ({"name": "a\nb"}, None),
     ({"name": "sk-learn-demo"}, "That name looks like a credential (sk-, ghp_, ak_ and the like); choose another"),
     ({"name": "ghp_tools"}, None), ({"name": "ak_app"}, None), ({"name": "AKIA tools"}, None),
@@ -1444,3 +1446,314 @@ def test_xo_projects_end_to_end(xo_server, clerk, alice, monkeypatch, capfd):
                                          "projects": ["my app"]}
     assert [c["body"] for c in clerk.calls if c["method"] == "PATCH"] == \
         [{"private_metadata": {"projects": ["my app"]}}]
+
+
+# --- /me/spaces: spaces recorded in the key's own private metadata ------------------------------
+
+class _Store:
+    """A Clerk that keeps one user and merges writes the way Clerk does (a list is replaced whole).
+    `after_write` runs after each write, to play another writer."""
+
+    def __init__(self, private: dict, after_write=None) -> None:
+        self.stored = {"id": "user_alice", "private_metadata": private}
+        self.after_write, self.patches = after_write, []
+
+    def verify_key(self, secret: str) -> dict:
+        return KEYS[secret]
+
+    def user(self, user_id: str) -> dict:
+        return json.loads(json.dumps(self.stored))
+
+    def update_metadata(self, user_id: str, changes: dict) -> dict:
+        self.patches.append(json.loads(json.dumps(changes)))
+        self.stored["private_metadata"].update(json.loads(json.dumps(changes["privateMetadata"])))
+        if self.after_write:
+            self.after_write(self.stored["private_metadata"])
+        return json.loads(json.dumps(self.stored))
+
+
+class _Core:
+    def __init__(self, status: int = 201, answer: dict | None = None) -> None:
+        self.status = status
+        self.answer = answer if answer is not None else {"success": True, "data": {"id": "sp-1", "type": "x"}}
+        self.calls: list[tuple] = []
+
+    def forward(self, method, path, token, body):
+        self.calls.append((method, path, token, json.loads(body) if body else None))
+        return self.status, self.answer
+
+
+def _app(store, core=None, lines=None):
+    return server.App(server.Config(), clerk=store, core=core or _Core(),
+                      audit=(lines.append if lines is not None else lambda line: None))
+
+
+def _post(app, path, body):
+    return app.handle("POST", path, {"authorization": f"Bearer {USER_KEY}"}, json.dumps(body).encode())
+
+
+def _space(name, rev=1, projects=(), **extra):
+    return {"name": name, "id": f"id-{name}", "rev": rev, "projects": list(projects), **extra}
+
+
+def test_create_space_creates_through_xo_with_the_callers_key_and_records_it(clerk):
+    store, core, lines = _Store({"stripeId": "cus_1", "projects": ["a"]}), _Core(), []
+    status, out = _post(_app(store, core, lines), "/me/spaces",
+                        {"kind": "claude-code", "name": "dev", "body": {"name": "my-cc"}})
+    assert status == 200
+    assert core.calls == [("POST", "/claude-code", USER_KEY, {"name": "my-cc"})]
+    entry = {"name": "dev", "kind": "claude-code", "id": "sp-1", "rev": 1, "projects": []}
+    assert out["data"] == {"space": entry, "xo": {"id": "sp-1", "type": "x"}}
+    assert store.patches == [{"privateMetadata": {"spaces": [entry]}}]
+    assert store.stored["private_metadata"] == {"stripeId": "cus_1", "projects": ["a"], "spaces": [entry]}
+    assert [json.loads(line)["outcome"] for line in lines] == [200]
+    assert not any("dev" in line or "sp-1" in line for line in lines)
+
+
+@pytest.mark.parametrize("body, status", [
+    ({"kind": "rm-rf", "name": "dev"}, 422), ({"kind": "codex", "name": "-dev"}, 422),
+    ({"kind": "codex", "name": "a b"}, 422), ({"kind": "codex", "name": "../x"}, 422),
+    ({"kind": "codex", "name": "dev", "body": []}, 422), ({"kind": "codex", "name": "dev", "extra": 1}, 422),
+    ({"kind": "codex", "name": "Dev"}, 409)])
+def test_create_space_refuses_before_xo_creates_anything(clerk, body, status):
+    store, core = _Store({"spaces": [_space("dev")]}), _Core()
+    assert _post(_app(store, core), "/me/spaces", body)[0] == status
+    assert core.calls == [] and store.patches == []
+
+
+def test_create_space_stops_at_the_cap_before_xo_creates_anything(clerk):
+    store, core = _Store({"spaces": [_space(f"s{i}") for i in range(server.MAX_SPACES)]}), _Core()
+    assert _post(_app(store, core), "/me/spaces", {"kind": "codex", "name": "one"})[0] == 422
+    assert core.calls == [] and store.patches == []
+
+
+def test_create_space_passes_xos_refusal_back_and_records_nothing(clerk):
+    store = _Store({})
+    core = _Core(422, {"success": False, "error": "name taken"})
+    assert _post(_app(store, core), "/me/spaces", {"kind": "codex", "name": "dev"}) == \
+        (422, {"success": False, "error": "name taken"})
+    assert store.patches == []
+
+
+def test_create_space_says_how_to_record_a_space_it_could_not_record(clerk):
+    store = _Store({})
+
+    def busy(*args):
+        raise server.ClerkError(429, "too_many_requests", seen=429)
+
+    store.update_metadata = busy
+    status, out = _post(_app(store), "/me/spaces", {"kind": "codex", "name": "dev"})
+    assert status == 429 and "XO created the space (id sp-1)" in out["error"]
+    assert "xo connect space:dev --id sp-1" in out["error"]
+
+
+def test_create_space_gives_no_recovery_hint_that_could_not_work(clerk):
+    store = _Store({})
+
+    def full(*args):
+        raise server.ClerkError(422, "form_param_value_invalid")
+
+    store.update_metadata = full
+    status, out = _post(_app(store), "/me/spaces", {"kind": "codex", "name": "dev"})
+    assert status == 422 and "XO created the space (id sp-1)" in out["error"]
+    assert "xo connect" not in out["error"]
+
+
+def test_create_space_checks_what_recording_needs_before_xo_creates_anything(clerk):
+    for private, status in (({"xo": "x" * 6080}, 422), ({"spaces": {}}, 409), ({"spaces": ["dev"]}, 409),
+                            ({"spaces": [{"name": "a"}, {"name": "A"}]}, 409), ("nope", 409)):
+        store, core = _Store(private), _Core(200, {"success": True, "data": {"id": "sp-1"}})
+        got, out = _post(_app(store, core), "/me/spaces", {"kind": "codex", "name": "dev"})
+        assert got == status and "nothing was created" in out["error"], (private, out)
+        assert core.calls == [] and store.patches == []
+
+
+def test_create_space_refuses_an_answer_without_a_usable_id(clerk):
+    store = _Store({})
+    status, _ = _post(_app(store, _Core(201, {"success": True, "data": {"id": "../x"}})), "/me/spaces",
+                      {"kind": "codex", "name": "dev"})
+    assert status == 502 and store.patches == []
+
+
+def test_connect_space_without_an_id_makes_an_entry_and_asks_xo_nothing(clerk):
+    store, core = _Store({"keep": 1}), _Core()
+    status, out = _post(_app(store, core), "/me/spaces/connect", {"name": "dev"})
+    assert status == 200 and core.calls == []
+    assert out["data"]["space"] == {"name": "dev", "rev": 1, "projects": []}
+    assert store.stored["private_metadata"] == {"keep": 1, "spaces": [{"name": "dev", "rev": 1, "projects": []}]}
+    assert _post(_app(store, core), "/me/spaces/connect", {"name": "DEV"})[0] == 409
+
+
+def test_connect_space_records_a_space_the_key_can_read(clerk):
+    store, core = _Store({}), _Core(200, {"success": True, "data": {"spaceName": "x"}})
+    status, out = _post(_app(store, core), "/me/spaces/connect", {"id": "sp-9", "name": "old"})
+    assert status == 200 and core.calls == [("GET", "/spaces/sp-9", USER_KEY, None)]
+    assert store.stored["private_metadata"]["spaces"] == [{"name": "old", "id": "sp-9", "rev": 1, "projects": []}]
+
+
+@pytest.mark.parametrize("xo_status", [403, 404])
+def test_connect_space_refuses_a_space_the_key_cannot_read(clerk, xo_status):
+    store = _Store({})
+    assert _post(_app(store, _Core(xo_status, {"success": False})), "/me/spaces/connect",
+                 {"id": "sp-9", "name": "old"})[0] == 404
+    assert store.patches == []
+
+
+def test_connect_space_refuses_one_already_recorded(clerk):
+    store = _Store({"spaces": [{**_space("dev"), "id": "sp-9"}]})
+    assert _post(_app(store, _Core(200, {})), "/me/spaces/connect", {"id": "sp-9", "name": "other"})[0] == 409
+    assert _post(_app(store, _Core(200, {})), "/me/spaces/connect", {"id": "sp-8", "name": "DEV"})[0] == 409
+    assert _post(_app(store, _Core(200, {})), "/me/spaces/connect", {"id": "../x", "name": "z"})[0] == 422
+    assert store.patches == []
+
+
+def test_connect_project_sets_a_ref_once_per_project_and_counts_the_rev(clerk):
+    store = _Store({"projects": ["quirq-ai/xo", "notes"], "spaces": [_space("dev"), _space("ops", rev=4)]})
+    app = _app(store)
+    assert _post(app, "/me/spaces/dev/projects", {"project": "quirq-ai/xo"})[1]["data"]["space"] == \
+        _space("dev", rev=2, projects=[{"quirq-ai/xo": "main"}])
+    _post(app, "/me/spaces/dev/projects", {"project": "notes", "ref": "v1.2"})
+    _post(app, "/me/spaces/DEV/projects", {"project": "quirq-ai/xo", "ref": "feature/x"})
+    spaces = store.stored["private_metadata"]["spaces"]
+    assert spaces == [_space("dev", rev=4, projects=[{"quirq-ai/xo": "feature/x"}, {"notes": "v1.2"}]),
+                      _space("ops", rev=4)]
+    assert all(set(p["privateMetadata"]) == {"spaces"} for p in store.patches)
+
+
+@pytest.mark.parametrize("path, body, status", [
+    ("/me/spaces/nope/projects", {"project": "notes"}, 404),
+    ("/me/spaces/dev/projects", {"project": "other"}, 404),
+    ("/me/spaces/dev/projects", {"project": "notes", "ref": "--upload-pack=x"}, 422),
+    ("/me/spaces/dev/projects", {"project": "notes", "ref": "a..b"}, 422),
+    ("/me/spaces/dev/projects", {"project": "notes", "ref": "x.lock"}, 422),
+    ("/me/spaces/dev/projects", {"project": "../notes"}, 422),
+    ("/me/spaces/dev/projects", {"project": "notes", "rev": 9}, 422),
+    ("/me/spaces/a%2Fb/projects", {"project": "notes"}, 422)])
+def test_connect_project_refuses_and_writes_nothing(clerk, path, body, status):
+    store = _Store({"projects": ["notes"], "spaces": [_space("dev")]})
+    assert _post(_app(store), path, body)[0] == status
+    assert store.patches == []
+
+
+def test_connect_project_stops_at_the_cap(clerk):
+    full = [{f"p{i}": "main"} for i in range(server.MAX_SPACE_PROJECTS)]
+    store = _Store({"projects": ["notes", "p0"], "spaces": [_space("dev", projects=full)]})
+    assert _post(_app(store), "/me/spaces/dev/projects", {"project": "notes"})[0] == 422
+    assert _post(_app(store), "/me/spaces/dev/projects", {"project": "p0", "ref": "v2"})[0] == 200  # a replace
+
+
+def test_a_write_past_the_size_budget_is_refused(clerk):
+    store = _Store({"blob": "x" * (server.PRIVATE_BUDGET - 20)})
+    status, out = _post(_app(store), "/me/projects", {"name": "alpha"})
+    assert status == 422 and "past 6KB" in out["error"] and store.patches == []
+
+
+def test_a_racing_write_that_reverts_another_space_is_undone(clerk):
+    before = _space("ops", rev=5, projects=[{"notes": "v2"}])
+
+    def other_writer(private):  # an older list, written by another instance just after ours
+        if len(store.patches) == 1:
+            private["spaces"] = [_space("dev"), _space("ops", rev=4)]
+
+    store = _Store({"projects": ["notes"], "spaces": [_space("dev"), before]}, other_writer)
+    status, out = _post(_app(store), "/me/spaces/dev/projects", {"project": "notes"})
+    assert status == 200 and len(store.patches) == 2
+    assert store.stored["private_metadata"]["spaces"] == [_space("dev", rev=2, projects=[{"notes": "main"}]), before]
+
+
+def test_a_space_changed_meanwhile_is_a_409_not_an_overwrite(clerk):
+    def other_writer(private):
+        private["spaces"] = [_space("dev", rev=9)]
+
+    store = _Store({"projects": ["notes"], "spaces": [_space("dev")]}, other_writer)
+    status, out = _post(_app(store), "/me/spaces/dev/projects", {"project": "notes"})
+    assert status == 409 and "changed while this ran" in out["error"] and len(store.patches) == 1
+
+
+def test_a_space_dropped_by_a_racing_write_is_written_again(clerk):
+    def other_writer(private):
+        if len(store.patches) == 1:
+            private["spaces"] = []
+
+    store = _Store({}, other_writer)
+    assert _post(_app(store), "/me/spaces", {"kind": "codex", "name": "dev"})[0] == 200
+    assert [s["name"] for s in store.stored["private_metadata"]["spaces"]] == ["dev"] and len(store.patches) == 2
+
+
+def test_spaces_that_are_not_a_list_of_entries_are_never_overwritten(clerk):
+    for value in ({"dev": 1}, ["dev"], [{"id": "x"}]):
+        store = _Store({"projects": ["notes"], "spaces": value})
+        assert _post(_app(store), "/me/spaces/connect", {"id": "sp-1", "name": "a"})[0] == 409
+        assert store.patches == []
+
+
+def test_spaces_with_a_case_duplicate_or_a_project_entry_xo_did_not_write_are_never_overwritten(clerk):
+    store = _Store({"projects": ["notes"], "spaces": [_space("dev"), _space("Dev")]})
+    assert _post(_app(store), "/me/spaces/connect", {"name": "a"})[0] == 409
+    store = _Store({"projects": ["notes", "p2"], "spaces": [_space("dev", projects=[{"p2": "main", "notes": "v1"}])]})
+    assert _post(_app(store), "/me/spaces/dev/projects", {"project": "notes"})[0] == 409
+    assert store.patches == []
+
+
+def test_refs_and_ids_that_look_like_credentials_are_refused(clerk):
+    store = _Store({"projects": ["notes"], "spaces": [_space("dev")]})
+    assert _post(_app(store), "/me/spaces/dev/projects", {"project": "notes", "ref": "ghp_" + "a" * 36})[0] == 422
+    assert _post(_app(store, _Core(200, {})), "/me/spaces/connect", {"name": "b", "id": "sk-abc"})[0] == 422
+    store2, core = _Store({}), _Core(200, {"success": True, "data": {"id": "ak_" + "b" * 20}})
+    assert _post(_app(store2, core), "/me/spaces", {"kind": "codex", "name": "dev"})[0] == 502
+    assert store.patches == [] and store2.patches == []
+
+
+def test_project_refs_are_shown_as_stored_whatever_the_project_is_called(clerk):
+    sha = "0123456789abcdef0123456789abcdef01234567"
+    projects = [{"huggingface/tokenizers": "main"}, {"acme/auth-service": sha}, {"next-auth": "v4"}]
+    store = _Store({"projects": ["huggingface/tokenizers", "acme/auth-service", "next-auth"],
+                    "spaces": [_space("dev", projects=projects, apiToken="tok-12345678901234")]})
+    app = _app(store)
+    status, out = app.handle("GET", "/me/spaces", {"authorization": f"Bearer {USER_KEY}"}, None)
+    shown = out["data"]["spaces"][0]
+    assert status == 200 and shown["projects"] == projects and shown["apiToken"] == "\u20261234"
+    status, out = app.handle("GET", "/me", {"authorization": f"Bearer {USER_KEY}"}, None)
+    assert out["data"]["privateMetadata"]["spaces"][0]["projects"] == projects
+    status, out = _post(app, "/me/spaces/dev/projects", {"project": "next-auth", "ref": "v5"})
+    assert out["data"]["space"]["projects"][1] == {"acme/auth-service": sha}
+
+
+def test_connect_space_with_an_id_gives_an_entry_made_without_one_its_id(clerk):
+    store, core = _Store({"spaces": [{"name": "dev", "rev": 1, "projects": [{"a": "main"}]}]}), _Core(200, {})
+    status, out = _post(_app(store, core), "/me/spaces/connect", {"name": "DEV", "id": "sp-9"})
+    assert status == 200 and core.calls == [("GET", "/spaces/sp-9", USER_KEY, None)]
+    assert store.stored["private_metadata"]["spaces"] == [
+        {"name": "dev", "rev": 2, "projects": [{"a": "main"}], "id": "sp-9"}]
+    assert _post(_app(store, core), "/me/spaces/connect", {"name": "dev", "id": "sp-8"})[0] == 409  # once only
+    assert _post(_app(store, core), "/me/spaces/connect", {"name": "dev"})[0] == 409
+
+
+def test_spaces_lists_and_routes_show_on_the_status_page(xo_server, alice):
+    alice["private_metadata"]["spaces"] = [_space("dev")]
+    assert call(xo_server, "GET", "/me/spaces", USER_KEY)[1]["data"] == {"spaces": [_space("dev")]}
+    assert call(xo_server, "PUT", "/me/spaces", USER_KEY, {})[0] == 405
+    assert call(xo_server, "GET", "/me/spaces/connect", USER_KEY)[0] == 405
+    call(xo_server, "POST", "/me/spaces/dev/projects", USER_KEY, {"project": "x"})
+    routes = [a["route"] for a in call(xo_server, "GET", "/status")[1]["data"]["activity"]]
+    assert routes[:2] == ["/me/spaces/{name}/projects", "/me/spaces/connect"]
+    assert not any("dev" in line for line in xo_server.audit)
+
+
+def test_xo_create_connect_and_list_spaces_end_to_end(xo_server, clerk, alice, monkeypatch, capfd):
+    monkeypatch.setenv("XO_URL", xo_server.url)
+    monkeypatch.setenv("XO_API_KEY", USER_KEY)
+    monkeypatch.delenv("XO_SPEC", raising=False)
+    alice["private_metadata"]["projects"] = ["notes"]
+    assert cli.main(["create", "space", "claude-code", "dev", "--name", "my-cc", "--volume-size", "20"]) == 0
+    assert [(c["method"], c["path"]) for c in clerk.core] == [("POST", "/core/claude-code")]
+    assert json.loads(clerk.core[0]["body"]) == {"name": "my-cc", "volumeSize": 20}
+    assert cli.main(["connect", "project:notes", "space:dev", "--ref", "v1"]) == 0
+    capfd.readouterr()
+    assert cli.main(["list", "spaces"]) == 0
+    out, err = capfd.readouterr()
+    _no_secret(out, err)
+    assert json.loads(out) == [{"name": "dev", "kind": "claude-code", "id": "space_1", "rev": 2,
+                                "projects": [{"notes": "v1"}]}]
+    assert {k: v for k, v in alice["private_metadata"].items() if k != "spaces"} == \
+        {"stripeId": "cus_1", "notes": {"a": [1, 2]}, "flag": True, "projects": ["notes"]}

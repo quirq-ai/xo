@@ -33,6 +33,14 @@
     xo projects [add NAME]                  show the projects list in your private metadata, or add
                                             NAME to it. The xo server makes the change and writes only
                                             that list; xo sends just the name.
+    xo create project NAME|GITHUB-URL       add a project and make its folder here: a GitHub URL (or
+                                            OWNER/REPO) is cloned, any other name gets `git init`.
+    xo create space KIND NAME [flags]       create a space as `xo KIND` does (claude-code, codex, ...)
+                                            and record it in your spaces as NAME.
+    xo connect project:P space:S [--ref R]  set project P in space S at ref R (default main).
+    xo connect space:S [--id ID]            a new space entry S in your metadata; --id ties it to an
+                                            XO space you already have.
+    xo list projects | spaces               show your projects or your spaces.
     (the xo key step:)                      ask for your API key without showing it, check it with
                                             XO through the xo server, and save it with the URL.
     xo logout                               delete the saved key, URL and addresses, and log Coder
@@ -81,7 +89,7 @@ from pathlib import Path
 from typing import Any, NoReturn
 from urllib.parse import quote
 
-from xo import __version__, coder, commands, github, services, spec
+from xo import __version__, coder, commands, github, gitops, names, services, spec
 from xo.client import (CODER_URL_ENV, CORE_PATH, DEFAULT_TIMEOUT, KEY_ENV, MAYBE_RECEIVED, MIN_SECRET, Client,
                        CoderClient, Login, XoError, api_key, check_key, coder_url, credentials_path,
                        forget_login, read_key, redact, save_login, saved_login, xo_url)
@@ -306,16 +314,17 @@ def _masked(body: Any, paths: list[tuple[str, ...]]) -> Any:
 
 
 def _send(client: Client, args: argparse.Namespace, method: str, path: str, *, query: dict,
-          body: Any, headers: dict | None = None, op: spec.Operation | None = None) -> int:
+          body: Any, headers: dict | None = None, op: spec.Operation | None = None,
+          paths: list[tuple[str, ...]] | None = None, copies: bool = False) -> int:
     method = method.upper()
-    paths = op.secret_paths if op else []
+    paths = op.secret_paths if op else (paths or [])
     args.secret_values = _secret_values(body, paths)
     show = args.dry_run and getattr(args, "show_secrets", False)
     if not show:
         client.hide(args.secret_values)  # never in a response or an error either
     # TODO(suraj): ask XO for a key scoped to one space, or a way to create a space without
     # storing the caller's key in it; until then xo can only say that it happens.
-    copies = op is not None and op.copies_key and method != "GET"
+    copies = (copies or (op is not None and op.copies_key)) and method != "GET"
     if args.dry_run:
         shown = body if show or body is None else _masked(body, paths)
         plan = {"method": method, "url": client.url(path, query), "headers": headers or {}, "body": shown}
@@ -455,10 +464,16 @@ def _objects(args: argparse.Namespace, body: dict) -> None:
 
 
 def _endpoint(args: argparse.Namespace) -> int:
+    client, op, path, query, headers, body = _request(args)
+    return _send(client, args, op.method, path, query=query, body=body, headers=headers, op=op)
+
+
+def _request(args: argparse.Namespace, *, server: bool = False) -> tuple:
+    """The client, operation, path, query, headers and body an endpoint command's flags make."""
     op = args.op
-    label = " ".join([args.command, *([args.action] if getattr(args, "action", None) else [])])
+    label = " ".join([args.command, *(getattr(args, k) for k in ("what", "kind", "action") if getattr(args, k, None))])
     params, args.fields = commands.values(args)
-    client = _client(args, need_key=not args.dry_run, op=op)
+    client = _client(args, need_key=not args.dry_run, op=op, server=server)
     path, query, headers = spec.build(op, params, lambda n: commands.flag_for(args, n), label=label)
     body = _body(args)
     if isinstance(body, dict):
@@ -482,7 +497,7 @@ def _endpoint(args: argparse.Namespace) -> int:
         if missing:
             raise XoError(f"{label} needs " + ", ".join(commands.flag_for(args, n, body=True) for n in missing))
         _objects(args, body)
-    return _send(client, args, op.method, path, query=query, body=body, headers=headers, op=op)
+    return client, op, path, query, headers, body
 
 
 # A space id no space has: XO answers 404 "Space not found" to a working key and 401 to a bad one,
@@ -634,6 +649,93 @@ def _projects(args: argparse.Namespace) -> int:
     if projects is None:
         raise XoError("the xo server did not answer with a projects list (is it older than xo projects?)")
     print(client.scrub(_json(projects)))
+    return 0
+
+
+def _answer(data: Any, field: str, what: str) -> Any:
+    found = data.get("data", {}).get(field) if isinstance(data, dict) and isinstance(data.get("data"), dict) else None
+    if found is None:
+        raise XoError(f"the xo server did not answer with {what} (is it older than this command?)")
+    return found
+
+
+def _post_server(client: Client, path: str, body: dict) -> Any:
+    print(f"xo: POST {spec.clean(client.scrub(client.url(path)))}", file=sys.stderr)
+    return client.request("POST", path, body=body).data
+
+
+def _create_project(args: argparse.Namespace) -> int:
+    """`xo create project NAME|URL`: the server adds the name to your projects, then the folder is
+    made here: a GitHub project is cloned, any other gets an empty repository."""
+    text = args.target.strip()
+    name = names.from_github_url(text) if text.startswith(("https:", "http:", "git@", "ssh:")) else text
+    if name is None:
+        raise XoError("a project URL must be https://github.com/OWNER/REPO")
+    if not names.project_ok(name):
+        raise XoError(names.PROJECT_RULE)
+    dest = Path(name)
+    if dest.exists() or dest.is_symlink():
+        raise XoError(f"./{name} already exists here; nothing was changed")
+    client = _client(args, server=True)
+    projects = _answer(_post_server(client, "/me/projects", {"name": name}), "projects", "a projects list")
+    try:
+        gitops.clone(name, dest) if names.is_github(name) else gitops.init(dest)
+    except XoError as e:
+        raise XoError(f"{name} is in your projects, but its folder was not made: {e}") from None
+    how = f"cloned {gitops.GITHUB}/{name}" if names.is_github(name) else "an empty git repository"
+    print(f"xo: ./{name}: {how}", file=sys.stderr)
+    print(client.scrub(_json(projects)))
+    return 0
+
+
+def _create_space(args: argparse.Namespace) -> int:
+    """`xo create space KIND NAME [flags]`: the body `xo KIND` would send, sent to the xo server,
+    which creates the space through XO with your key and records it in your spaces as NAME."""
+    if not names.space_ok(args.space_name):
+        raise XoError(names.SPACE_RULE)
+    client, op, _, _, _, body = _request(args, server=True)
+    wrapped = {"kind": op.path.strip("/"), "name": args.space_name, "body": body if body is not None else {}}
+    return _send(client, args, "POST", "/me/spaces", query={}, body=wrapped,
+                 paths=[("body", *p) for p in op.secret_paths], copies=op.copies_key)
+
+
+def _connect(args: argparse.Namespace) -> int:
+    """`xo connect project:P space:S [--ref R]` or `xo connect space:S [--id ID]`."""
+    kind, _, value = args.first.partition(":")
+    if kind == "project":
+        where, _, space = (args.second or "").partition(":")
+        if where != "space" or not space or args.id is not None:
+            raise XoError("connect a project with: xo connect project:NAME space:NAME [--ref REF]")
+        if not names.project_ok(value):
+            raise XoError(names.PROJECT_RULE)
+        if not names.space_ok(space):
+            raise XoError(names.SPACE_RULE)
+        if args.ref is not None and not names.ref_ok(args.ref):
+            raise XoError(names.REF_RULE)
+        client = _client(args, server=True)
+        body = {"project": value, **({"ref": args.ref} if args.ref is not None else {})}
+        data = _post_server(client, f"/me/spaces/{quote(space, safe='')}/projects", body)
+    elif kind == "space":
+        if args.second is not None or args.ref is not None:
+            raise XoError("make a space entry with: xo connect space:NAME [--id XO_SPACE_ID]")
+        if not names.space_ok(value):
+            raise XoError(names.SPACE_RULE)
+        if args.id is not None and not names.SPACE_ID.fullmatch(args.id):
+            raise XoError("a space id is letters, digits, _ or -")
+        client = _client(args, server=True)
+        data = _post_server(client, "/me/spaces/connect",
+                            {"name": value, **({"id": args.id} if args.id is not None else {})})
+    else:
+        raise XoError("connect what? project:NAME space:NAME, or space:NAME [--id ID]")
+    print(client.scrub(_json(_answer(data, "space", "a space"))))
+    return 0
+
+
+def _list(args: argparse.Namespace) -> int:
+    """`xo list projects | spaces`: that list in your private metadata."""
+    client = _client(args, server=True)
+    found = _answer(client.request("GET", f"/me/{args.what}").data, args.what, f"a {args.what} list")
+    print(client.scrub(_json(found)))
     return 0
 
 
@@ -885,7 +987,8 @@ def _command_word(argv: list[str]) -> str | None:
     return None
 
 
-def _endpoints(sub: argparse._SubParsersAction, common: argparse.ArgumentParser, argv: list[str]) -> None:
+def _endpoints(sub: argparse._SubParsersAction, common: argparse.ArgumentParser, argv: list[str],
+               space_kinds: argparse._SubParsersAction | None = None) -> None:
     """One command per endpoint, from a local spec (never the network, so --help stays offline).
 
     A spec that cannot be used leaves the built-in commands working; any other command stops with
@@ -898,7 +1001,13 @@ def _endpoints(sub: argparse._SubParsersAction, common: argparse.ArgumentParser,
     try:
         local = spec.load_local(known.spec)
         if local is not None:
-            commands.register(sub, spec.operations(local), [common], _add_send, _endpoint)
+            ops = spec.operations(local)
+            commands.register(sub, ops, [common], _add_send, _endpoint)
+            for op in ops if space_kinds is not None else []:
+                if op.method == "POST" and not op.server and op.path.count("/") == 1:
+                    p = space_kinds.add_parser(op.path.strip("/"), parents=[common], help=commands._line(op))
+                    p.add_argument("space_name", metavar="NAME", help=names.SPACE_RULE)
+                    commands.add_operation(p, op, _add_send, _create_space)
     except (XoError, ValueError, TypeError, RecursionError, argparse.ArgumentError) as e:
         command = _command_word(argv)
         if command in ("ops", "call", "api", "serve", "login", "logout", "status", "coder"):
@@ -980,6 +1089,29 @@ def main(argv: list[str] | None = None) -> int:
     pa.add_argument("name", metavar="NAME", help="1 to 64 letters, digits, spaces, _ . or -")
     pj.set_defaults(run=_projects, action=None)
 
+    mk = sub.add_parser("create", parents=[common], help="create a project or a space and record it in your "
+                                                         "private metadata (the xo server makes the change)")
+    mksub = mk.add_subparsers(dest="what", required=True, metavar="WHAT")
+    mp = mksub.add_parser("project", parents=[common],
+                          help="add a project and make its folder here: a GitHub URL or OWNER/REPO is cloned, "
+                               "any other name gets an empty git repository")
+    mp.add_argument("target", metavar="NAME|URL", help=names.PROJECT_RULE + ", or https://github.com/OWNER/REPO")
+    mp.set_defaults(run=_create_project)
+    ms = mksub.add_parser("space", parents=[common],
+                          help="create a space as `xo KIND` does, and record it in your spaces")
+    space_kinds = ms.add_subparsers(dest="kind", required=True, metavar="KIND")
+    cn = sub.add_parser("connect", parents=[common],
+                        help="set a project's ref in one of your spaces, or make a new space entry")
+    cn.add_argument("first", metavar="project:NAME|space:NAME")
+    cn.add_argument("second", nargs="?", metavar="space:NAME", help="the space a project goes in")
+    cn.add_argument("--ref", help="a branch, tag or commit sha for the project (default main)")
+    cn.add_argument("--id", help="with space:NAME, an XO space you already have (XO must confirm your key "
+                                 "can read it)")
+    cn.set_defaults(run=_connect)
+    ls = sub.add_parser("list", parents=[common], help="show your projects or your spaces")
+    ls.add_argument("what", choices=("projects", "spaces"))
+    ls.set_defaults(run=_list)
+
     cr = sub.add_parser("coder", parents=[common], help="launch workspaces using your Coder login")
     crsub = cr.add_subparsers(dest="action", required=True, metavar="ACTION")
     gh = crsub.add_parser("github", parents=[common], help="deploy a GitHub repository with xo-github")
@@ -1006,7 +1138,7 @@ def main(argv: list[str] | None = None) -> int:
         crsub.add_parser(verb, help=f"coder {verb} ARGS..., on the deployment, after checking Coder's login"
                          ).set_defaults(run=_coder_pass_misplaced)
 
-    _endpoints(sub, common, argv)
+    _endpoints(sub, common, argv, space_kinds)
 
     args = parser.parse_args(argv)
     for name, default in GLOBAL_DEFAULTS.items():
