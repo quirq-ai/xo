@@ -2015,7 +2015,8 @@ def test_invites_count_toward_the_recipients_6kb_and_answering_gives_it_back(no_
     assert _as(app, USER_KEY, "/me/share", {"item": "space:dev", "to": "bob"})[0] == 200
     bob = users.users["user_bob"]["private_metadata"]
     bob["filler"] += "x" * (server.PRIVATE_BUDGET - 2 - server._size(bob))  # 2 bytes of room left
-    assert _as(app, BOB_KEY, "/me/projects", {"name": "mine"})[0] == 422
+    status, out = _as(app, BOB_KEY, "/me/projects", {"name": "mine"})
+    assert status == 422 and "Invites waiting take" in out["error"] and "xo reject" in out["error"]
     (handle,) = _ids(app).values()
     assert _as(app, BOB_KEY, "/me/shared/reject", {"id": handle})[0] == 200
     assert _as(app, BOB_KEY, "/me/projects", {"name": "mine"})[0] == 200
@@ -2119,6 +2120,42 @@ def test_a_share_racing_the_recipients_own_write_is_written_again(no_floor):
     assert _as(_app(users), USER_KEY, "/me/share", {"item": "space:dev", "to": "bob"})[0] == 200
     assert [e["item"] for e in _invites(users)] == ["space:dev"]
     assert len(users.patches) == 2
+
+
+def _spaces_racer(spaces):
+    """Plays bob writing `spaces` from another instance, from a read older than accept's write."""
+    def racer(user_id, private):
+        if user_id == "user_bob" and "shared" in private and private["shared"] == [] and racer.once:
+            racer.once = False
+            private["spaces"] = json.loads(json.dumps(spaces))
+    racer.once = True
+    return racer
+
+
+@pytest.mark.parametrize("item, body, want", [
+    ("space:dev", {}, [_space("work"), {"name": "dev", "rev": 1, "projects": [{"o/a": "main"}]}]),
+    ("project:o/a", {"space": "work"}, [_space("work", rev=2, projects=[{"o/a": "main"}])])])
+def test_an_accept_that_loses_its_space_to_a_racing_write_puts_it_back(no_floor, item, body, want):
+    users = _two(bob={"spaces": [_space("work")]}, after_write=_spaces_racer([_space("work")]))
+    app = _app(users)
+    _as(app, USER_KEY, "/me/share", {"item": item, "to": "bob"})
+    (handle,) = _ids(app).values()
+    status, out = _as(app, BOB_KEY, "/me/shared/accept", {"id": handle, **body})
+    assert status == 200 and out["data"]["accepted"]["projectsAdded"] == ["o/a"]
+    bob = users.users["user_bob"]["private_metadata"]
+    assert bob["spaces"] == want and bob["projects"] == ["o/a"] and bob["shared"] == []
+    assert set(users.patches[-1][1]["privateMetadata"]) == {"spaces"}
+
+
+def test_an_accept_whose_space_name_was_taken_meanwhile_says_so(no_floor):
+    taken = [_space("dev")]
+    users = _two(after_write=_spaces_racer(taken))
+    app = _app(users)
+    _as(app, USER_KEY, "/me/share", {"item": "space:dev", "to": "bob"})
+    (handle,) = _ids(app).values()
+    status, out = _as(app, BOB_KEY, "/me/shared/accept", {"id": handle})
+    assert status == 409 and "xo connect" in out["error"]
+    assert users.users["user_bob"]["private_metadata"]["spaces"] == taken
 
 
 def test_shared_lists_each_invite_with_an_id_and_the_senders_username_now(no_floor):
