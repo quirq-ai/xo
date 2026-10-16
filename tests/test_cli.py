@@ -469,14 +469,15 @@ def test_undeclared_placeholders_and_clashing_names_get_working_flags(fake, caps
     assert fake.requests[0]["body"] == {"data": "true"}
 
 
-def test_a_spec_field_named_url_does_not_clash_with_url(fake, capsys, monkeypatch, tmp_path):
+@pytest.mark.parametrize("name, flag", [("url", "url"), ("showSecrets", "show-secrets"), ("coderUrl", "coder-url")])
+def test_a_spec_field_named_like_a_global_flag_does_not_clash(fake, capsys, monkeypatch, tmp_path, name, flag):
     monkeypatch.setenv("XO_SPEC", _spec(tmp_path, {"/links": {"post": {
-        "parameters": [{"name": "url", "in": "query"}],
+        "parameters": [{"name": name, "in": "query"}],
         "requestBody": {"content": {"application/json": {"schema": {
-            "type": "object", "properties": {"url": {"type": "string"}}}}}}}}}))
+            "type": "object", "properties": {name: {"type": "string"}}}}}}}}}))
     fake.route("POST", "/links", body={})
-    assert run(capsys, "links", "--url-param", "q", "--url-param-param", "b")[0] == 0
-    assert fake.requests[0]["query"] == "url=q" and fake.requests[0]["body"] == {"url": "b"}
+    assert run(capsys, "links", f"--{flag}-param", "q", f"--{flag}-param-param", "b")[0] == 0
+    assert fake.requests[0]["query"] == f"{name}=q" and fake.requests[0]["body"] == {name: "b"}
 
 
 def test_own_headers_get_no_flag_and_cannot_be_passed(fake, capsys, monkeypatch, tmp_path):

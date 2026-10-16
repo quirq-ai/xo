@@ -7,6 +7,7 @@ import re
 from xo.client import XoError
 
 SIZES = ("xo.mini", "xo.small", "xo.medium", "xo.large")
+RESERVED_NAMES = {"new", "create"}  # Coder refuses these as workspace names
 
 
 def github_parameters(url: str, *, name: str | None, ref: str, start_command: str,
@@ -20,9 +21,13 @@ def github_parameters(url: str, *, name: str | None, ref: str, start_command: st
     if not repo:
         raise XoError("github needs a repository name")
     if name is None:
-        name = re.sub(r"[^a-z0-9-]+", "-", repo.lower()).strip("-")[:32].rstrip("-") or "github"
-    if not re.fullmatch(r"[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,30}[a-zA-Z0-9])?", name):
-        raise XoError("--name must be 1 to 32 letters, digits or hyphens, starting and ending with a letter or digit")
+        name = re.sub(r"[^a-z0-9]+", "-", repo.lower()).strip("-")[:32].rstrip("-") or "github"
+        if name in RESERVED_NAMES:
+            name += "-app"
+    # Coder's own rule (codersdk/name.go): words of letters and digits joined by single hyphens.
+    if len(name) > 32 or not re.fullmatch(r"[a-zA-Z0-9]+(?:-[a-zA-Z0-9]+)*", name) or name in RESERVED_NAMES:
+        raise XoError("--name must be 1 to 32 letters or digits, with single hyphens between them, "
+                      "and not new or create")
     if not 1 <= home_disk_size <= 100:
         raise XoError("--home-disk-size must be from 1 to 100 GB")
     if not math.isfinite(wait_timeout) or wait_timeout <= 0:

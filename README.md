@@ -95,15 +95,19 @@ need it. See
 
 ## Deploy a GitHub repository with Coder
 
-Install the [Coder CLI](https://coder.com/docs/install/cli) separately and log in to the deployment
-that has the `xo-github` template. This command uses Coder's existing login/keyring (or
-`CODER_SESSION_TOKEN`); it needs no `XO_API_KEY` and does not copy that key into a workspace.
-Tested with Coder 2.36.4.
-`xo login` and `--url`/`XO_URL` configure XO API calls; Coder uses its own login and
-`--coder-url`/`XO_CODER_URL`/`CODER_URL` independently.
+Install the [Coder CLI](https://coder.com/docs/install/cli) separately, then run `xo login coder`
+(`xo coder login` is the same): it logs Coder in to the deployment that has the `xo-github`
+template, in your terminal. Coder keeps its own login (or `CODER_SESSION_TOKEN`); xo needs no
+`XO_API_KEY` for it and never hands that key to Coder. Tested with Coder 2.36.4.
+`xo login` and `--url`/`XO_URL` configure XO API calls; Coder uses `--coder-url`/`XO_CODER_URL`.
+Coder's own `CODER_URL` is not read.
+
+On Linux, Coder keeps one login for whichever deployment you last logged in to, and sends it to any
+deployment it is told to use. So before every Coder command, xo asks Coder (without naming a
+deployment) where it is logged in, and stops with nothing sent unless it is xo's deployment.
 
 ```sh
-coder login https://dev-coder.xo.builders
+xo coder login
 xo coder github https://github.com/OWNER/REPO --dry-run
 xo coder github https://github.com/OWNER/REPO
 
@@ -114,6 +118,12 @@ xo coder github https://github.com/OWNER/REPO --name my-preview --ref main \
 # Another deployment with the same template; flags also work before `coder` or `github`.
 XO_CODER_URL=https://coder.example.com xo coder github https://github.com/OWNER/REPO
 xo --coder-url https://coder.example.com coder github https://github.com/OWNER/REPO
+
+# Any of list, show, start, stop, restart, ssh, delete, open, ping, port-forward, update, logs
+# runs as `coder --url DEPLOYMENT ...` in your terminal, after the same check.
+xo coder list
+xo coder ssh my-preview
+xo coder logout   # only if Coder is logged in to xo's deployment; asks first
 ```
 
 The default workspace name is the repository name without `.git`, lowercased, with punctuation
@@ -188,7 +198,7 @@ Responses print as JSON on stdout. Any problem exits 1 with one line on stderr.
 |---|---|---|---|
 | API key | `XO_API_KEY` | `--api-key -` (asks without echo on a terminal, else reads one line from stdin) | the key `xo login` saved in `$XDG_CONFIG_HOME/xo/credentials` (`~/.config/xo/credentials`); required for XO API calls except a dry run; Coder uses its own login |
 | Address | `XO_URL` | `--url` | the one `xo login` saved, then `https://xo.quirq.dev`; the core API is under its `/api/core/v1`. The flag wins over the variable. `XO_BASE_URL` and `XO_SERVER_URL` are no longer read: xo stops with a line saying so while either is set, unless `--url` or `XO_URL` is given |
-| Coder deployment | `XO_CODER_URL`, then `CODER_URL` | `--coder-url` | `https://dev-coder.xo.builders`; used only by `xo coder` |
+| Coder deployment | `XO_CODER_URL` | `--coder-url` | `https://dev-coder.xo.builders`; used only by `xo coder` |
 | Spec | `XO_SPEC` | `--spec` | the copy bundled with xo |
 
 `--api-key KEY` also works, but the key then lands in your shell history and in the process list

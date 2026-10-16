@@ -10,7 +10,7 @@ import sys
 import pytest
 
 from xo import cli
-from xo.client import DEFAULT_CODER_URL, coder_url
+from xo.client import DEFAULT_CODER_URL, CoderClient, coder_url
 
 REPO = "https://github.com/example/my-repo"
 APP = "https://generated-preview.example/"
@@ -23,17 +23,40 @@ def record(calls, argv, options):
     calls.append((argv, {**options, "env": {"CODER": env["CODER"]} if "CODER" in env else {}}))
 
 
+def cmd(argv):
+    """The coder subcommand: whoami runs without --url, everything else with it."""
+    return argv[3] if argv[1] == "--url" else argv[1]
+
+
+def whoami(runner, argv):
+    """Coder's answer to `coder whoami --output json`: logged in where xo expects, unless told."""
+    assert argv[1:] == ["whoami", "--output", "json"], "whoami must not name a deployment"
+    at = runner.at if runner.at is not None else runner.base
+    return subprocess.CompletedProcess(argv, 0, json.dumps([{"username": "alice", "url": at}]), "")
+
+
+class Calls(list):
+    at = None  # where the fake Coder is logged in; None: wherever xo is about to use
+    base = None
+
+
 @pytest.fixture
 def runner(monkeypatch):
-    calls = []
+    calls = Calls()
+    real_init = CoderClient.__init__
+
+    def init(self, base, timeout=30.0):
+        real_init(self, base, timeout)
+        calls.base = base
 
     def run(argv, **kwargs):
         record(calls, argv, kwargs)
-        command = argv[3]
-        output = {"whoami": '[{"username": "alice"}]', "create": "provisioner output",
-                  "open": APP + "\n"}[command]
+        if cmd(argv) == "whoami":
+            return whoami(calls, argv)
+        output = {"create": "provisioner output", "open": APP + "\n"}.get(cmd(argv), "")
         return subprocess.CompletedProcess(argv, 0, output, "")
 
+    monkeypatch.setattr(CoderClient, "__init__", init)
     monkeypatch.setattr("xo.client.subprocess.run", run)
     monkeypatch.delenv("XO_CODER_URL", raising=False)
     monkeypatch.delenv("CODER_URL", raising=False)
@@ -60,7 +83,8 @@ def test_launch_uses_native_login_safe_defaults_and_actual_app_url(runner, capsy
     assert json.loads(out) == {"name": "my-repo", "repoUrl": REPO,
                                "workspaceUrl": DEFAULT_CODER_URL + "/@alice/my-repo", "appUrl": APP}
     assert "port 3000 app is public" in err
-    assert [c[0][3] for c in runner] == ["whoami", "create", "open"]
+    assert [cmd(c[0]) for c in runner] == ["whoami", "create", "open"]
+    assert runner[0][0] == ["coder", "whoami", "--output", "json"]
     argv, options = runner[1]
     assert argv[4:7] == ["my-repo", "--template", "xo-github"]
     assert "--yes" in argv and "--no-wait=false" in argv and "--use-parameter-defaults" in argv
@@ -82,14 +106,14 @@ def test_url_flag_wins_at_each_level(runner, capsys, monkeypatch, where):
     assert cli.main(argv) == 0
     out, _ = capsys.readouterr()
     assert json.loads(out)["repoUrl"] == REPO  # the global --url must not replace the positional URL
-    assert all(c[0][1:3] == ["--url", "https://flag.example"] for c in runner)
+    assert all(c[0][1:3] == ["--url", "https://flag.example"] for c in runner[1:])
 
 
 def test_url_environment_order_and_core_independence(runner, capsys, monkeypatch):
     monkeypatch.setenv("XO_URL", "invalid")
-    monkeypatch.setenv("CODER_URL", "https://native.example")
+    monkeypatch.setenv("CODER_URL", "https://native.example")  # Coder's own setting is not read
     assert invoke(capsys)[0] == 0
-    assert runner[-1][0][2] == "https://native.example"
+    assert runner[-1][0][2] == DEFAULT_CODER_URL
     monkeypatch.setenv("XO_CODER_URL", "https://xo-setting.example")
     assert invoke(capsys)[0] == 0
     assert runner[-1][0][2] == "https://xo-setting.example"
@@ -118,7 +142,7 @@ def test_core_calls_ignore_coder_settings(fake, capsys, monkeypatch):
 def test_coder_url_environment_whitespace_matches_xo_convention(runner, monkeypatch):
     monkeypatch.setenv("XO_CODER_URL", "  ")
     monkeypatch.setenv("CODER_URL", " https://native.example/ ")
-    assert coder_url() == "https://native.example"
+    assert coder_url() == DEFAULT_CODER_URL
     monkeypatch.setenv("XO_CODER_URL", " https://xo-setting.example/ ")
     assert coder_url() == "https://xo-setting.example"
 
@@ -195,8 +219,8 @@ def test_missing_coder_is_actionable(runner, capsys, monkeypatch):
 def test_failure_does_not_echo_native_logs_or_retry(runner, capsys, monkeypatch):
     def fail(argv, **kwargs):
         record(runner, argv, kwargs)
-        if argv[3] == "whoami":
-            return subprocess.CompletedProcess(argv, 0, '[{"username":"alice"}]', "")
+        if cmd(argv) == "whoami":
+            return whoami(runner, argv)
         return subprocess.CompletedProcess(argv, 1, "unrecognized private log", TOKEN)
     monkeypatch.setattr("xo.client.subprocess.run", fail)
     code, out, err = invoke(capsys)
@@ -207,8 +231,8 @@ def test_failure_does_not_echo_native_logs_or_retry(runner, capsys, monkeypatch)
 def test_timeout_and_interrupt_warn_create_may_have_happened(runner, capsys, monkeypatch):
     for failure in [subprocess.TimeoutExpired("coder", 1), KeyboardInterrupt()]:
         def fail(argv, **kwargs):
-            if argv[3] == "whoami":
-                return subprocess.CompletedProcess(argv, 0, '[{"username":"alice"}]', "")
+            if cmd(argv) == "whoami":
+                return whoami(runner, argv)
             raise failure
         monkeypatch.setattr("xo.client.subprocess.run", fail)
         code, out, err = invoke(capsys)
@@ -220,7 +244,9 @@ def test_timeout_and_interrupt_warn_create_may_have_happened(runner, capsys, mon
 def test_bad_app_link_reports_created_without_echo_or_retry(runner, capsys, monkeypatch, output):
     def run(argv, **kwargs):
         runner.append(argv)
-        data = {"whoami": '[{"username":"alice"}]', "create": "", "open": output}[argv[3]]
+        if cmd(argv) == "whoami":
+            return whoami(runner, argv)
+        data = {"create": "", "open": output}[cmd(argv)]
         return subprocess.CompletedProcess(argv, 0, data, "")
     monkeypatch.setattr("xo.client.subprocess.run", run)
     code, out, err = invoke(capsys)
@@ -257,10 +283,13 @@ def test_real_subprocess_boundary_with_fake_coder(capsys, monkeypatch, tmp_path)
     binary = tmp_path / "coder"
     binary.write_text(f"#!{sys.executable}\n" + '''import csv, io, json, os, sys
 args = sys.argv[1:]
+assert "XO_API_KEY" not in os.environ and "CLERK_SECRET_KEY" not in os.environ and "CODER_URL" not in os.environ
+if args[0] == "whoami":
+    assert args == ["whoami", "--output", "json"]
+    print('[{"username":"alice","url":"https://coder.example/"}]')
+    sys.exit(0)
 assert args[:2] == ["--url", "https://coder.example"]
-if args[2] == "whoami":
-    print('[{"username":"alice"}]')
-elif args[2] == "create":
+if args[2] == "create":
     params = dict(next(csv.reader(io.StringIO(v)))[0].split("=", 1)
                   for i, v in enumerate(args) if i and args[i-1] == "--parameter")
     assert params["capacity"] == "spot"
@@ -273,7 +302,137 @@ else:
 ''')
     binary.chmod(0o700)
     monkeypatch.setenv("PATH", str(tmp_path))
+    monkeypatch.setenv("XO_API_KEY", "ak_never_for_coder")
+    monkeypatch.setenv("CLERK_SECRET_KEY", "sk_test_never_for_coder")
+    monkeypatch.setenv("CODER_URL", "https://elsewhere.example")
     code, out, err = invoke(capsys, "--coder-url", "https://coder.example",
                             "--start-command", 'printf "a,b"; npm run dev')
     assert code == 0 and json.loads(out)["appUrl"] == "https://native-generated.example/"
     assert "private provisioner log" not in out + err
+
+
+def test_a_login_to_another_deployment_stops_before_anything_is_sent(runner, capsys):
+    runner.at = "https://coder.theircompany.example"
+    code, out, err = invoke(capsys)
+    assert code == 1 and not out
+    assert "Coder is logged in to https://coder.theircompany.example, not https://dev-coder.xo.builders" in err
+    assert "nothing was sent" in err
+    assert [c[0] for c in runner] == [["coder", "whoami", "--output", "json"]]  # no --url call at all
+
+
+def test_not_logged_in_says_how(runner, capsys, monkeypatch):
+    def run(argv, **kwargs):
+        record(runner, argv, kwargs)
+        return subprocess.CompletedProcess(argv, 1, "", "You are not logged in")
+    monkeypatch.setattr("xo.client.subprocess.run", run)
+    code, _, err = invoke(capsys)
+    assert code == 1 and "Coder is not logged in; run xo login coder" in err and len(runner) == 1
+
+
+@pytest.mark.parametrize("answer", ['[]', '{"username": "alice"}', '[{"username": "alice"}]',
+                                    '[{"username": "a b", "url": "https://dev-coder.xo.builders"}]',
+                                    '[{"username": "alice", "url": "https://x\'$(id).example"}]'])
+def test_an_odd_whoami_answer_stops(runner, capsys, monkeypatch, answer):
+    def run(argv, **kwargs):
+        record(runner, argv, kwargs)
+        return subprocess.CompletedProcess(argv, 0, answer, "")
+    monkeypatch.setattr("xo.client.subprocess.run", run)
+    code, _, err = invoke(capsys)
+    assert code == 1 and "unexpected answer" in err and len(runner) == 1
+
+
+def test_the_coder_process_gets_no_xo_or_clerk_secrets(runner, monkeypatch):
+    seen = []
+
+    def run(argv, **kwargs):
+        seen.append(kwargs["env"])
+        return whoami(runner, argv) if cmd(argv) == "whoami" else subprocess.CompletedProcess(argv, 0, APP, "")
+    monkeypatch.setattr("xo.client.subprocess.run", run)
+    for name in ("XO_API_KEY", "XO_CODER_URL", "CODER_URL", "CLERK_SECRET_KEY", "ELEVENLABS_API_KEY"):
+        monkeypatch.setenv(name, "https://x.example" if "URL" in name else "secret-value")
+    monkeypatch.setenv("CODER_CONFIG_DIR", "/kept")
+    assert cli.main(["coder", "github", REPO]) == 0
+    for env in seen:
+        assert not {"XO_API_KEY", "XO_CODER_URL", "CODER_URL", "CLERK_SECRET_KEY", "ELEVENLABS_API_KEY"} & set(env)
+        assert env["CODER_CONFIG_DIR"] == "/kept"
+
+
+@pytest.mark.parametrize("name", ["my--repo", "new", "create", "-a", "a-", "a" * 33, "a_b"])
+def test_names_coder_would_refuse_are_refused_first(runner, capsys, name):
+    code, _, err = invoke(capsys, f"--name={name}")
+    assert code == 1 and "--name must be" in err and runner == []
+
+
+@pytest.mark.parametrize("repo, expected", [("my--repo", "my-repo"), ("new", "new-app"), ("Create", "create-app"),
+                                            ("a__b..c", "a-b-c")])
+def test_default_names_follow_coders_rule(runner, capsys, repo, expected):
+    assert cli.main(["coder", "github", f"https://github.com/o/{repo}", "--dry-run"]) == 0
+    assert json.loads(capsys.readouterr()[0])["name"] == expected
+
+
+@pytest.mark.parametrize("argv", [["coder", "list", "--all"], ["--coder-url", "https://c.example", "coder", "list", "--all"],
+                                  ["coder", "--coder-url=https://c.example", "list", "--all"]])
+def test_coder_verbs_pass_through_after_the_check(runner, argv):
+    assert cli.main(argv) == 0
+    base = runner.base
+    assert [c[0] for c in runner] == [["coder", "whoami", "--output", "json"],
+                                      ["coder", "--url", base, "list", "--all"]]
+    assert "stdin" not in runner[1][1] and "capture_output" not in runner[1][1]  # the terminal, as is
+
+
+def test_a_pass_through_to_another_login_sends_nothing(runner, capsys):
+    runner.at = "https://elsewhere.example"
+    assert cli.main(["coder", "ssh", "my-preview"]) == 1
+    assert "nothing was sent" in capsys.readouterr()[1] and len(runner) == 1
+
+
+def test_coder_login_when_already_there(runner, capsys):
+    assert cli.main(["coder", "login"]) == 0
+    assert "already logged in to https://dev-coder.xo.builders as alice" in capsys.readouterr()[1]
+    assert len(runner) == 1
+
+
+def test_coder_login_without_a_terminal_or_with_a_token(runner, capsys, monkeypatch):
+    runner.at = "https://elsewhere.example"
+    assert cli.main(["coder", "login"]) == 1
+    assert "coder login needs a terminal" in capsys.readouterr()[1]
+    monkeypatch.setenv("CODER_SESSION_TOKEN", TOKEN)
+    assert cli.main(["coder", "login"]) == 1
+    assert "CODER_SESSION_TOKEN is set" in capsys.readouterr()[1]
+
+
+def test_coder_login_replaces_another_login_only_when_asked(runner, capsys, monkeypatch):
+    runner.at = "https://elsewhere.example"
+    monkeypatch.setattr("xo.client.sys.stdin.isatty", lambda: True, raising=False)
+    monkeypatch.setattr("xo.client.sys.stdout.isatty", lambda: True, raising=False)
+    monkeypatch.setattr(cli, "_ask", lambda q: False)
+    assert cli.main(["coder", "login"]) == 1
+    assert "kept the Coder login to https://elsewhere.example" in capsys.readouterr()[1]
+    assert len(runner) == 1
+    runner.clear()
+    monkeypatch.setattr(cli, "_ask", lambda q: True)
+    real = runner.at
+
+    def run(argv, **kwargs):
+        record(runner, argv, kwargs)
+        if argv[1] == "login":
+            runner.at = None  # now logged in where xo asked
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        return whoami(runner, argv)
+    monkeypatch.setattr("xo.client.subprocess.run", run)
+    assert real and cli.main(["coder", "login"]) == 0
+    assert "logged in to https://dev-coder.xo.builders as alice" in capsys.readouterr()[1]
+    assert [c[0] for c in runner][1] == ["coder", "login", DEFAULT_CODER_URL]
+
+
+def test_coder_logout_only_for_this_deployment(runner, capsys, monkeypatch):
+    runner.at = "https://elsewhere.example"
+    assert cli.main(["coder", "logout"]) == 0
+    assert "left alone: Coder is logged in to https://elsewhere.example" in capsys.readouterr()[1]
+    assert len(runner) == 1
+    runner.at = None
+    runner.clear()
+    monkeypatch.setattr(cli, "_ask", lambda q: True)
+    assert cli.main(["coder", "logout"]) == 0
+    assert "logged out of https://dev-coder.xo.builders" in capsys.readouterr()[1]
+    assert [c[0] for c in runner][1] == ["coder", "--url", DEFAULT_CODER_URL, "logout", "--yes"]

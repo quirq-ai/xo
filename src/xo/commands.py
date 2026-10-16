@@ -114,7 +114,8 @@ def _about(op: Operation) -> str:
 def _operation(p: argparse.ArgumentParser, op: Operation, add_send: Callable[[argparse.ArgumentParser], None],
                run: Callable[[argparse.Namespace], int]) -> None:
     flags: list[Flag] = []
-    taken = {"data", "field", "dry-run", "yes", "api-key", "url", "spec", "timeout", "help"}
+    taken = {"data", "field", "dry-run", "show-secrets", "yes", "api-key", "url", "coder-url", "spec", "timeout",
+             "help"}
     for prm in known_params(op).values():
         flag = _unique(kebab(prm.name), taken)
         dest = f"p_{len(flags)}"

@@ -94,16 +94,16 @@ def xo_url(flag: str | None = None, saved: str | None = None) -> str:
     return url
 
 
-def coder_url(flag: str | None = None) -> str:
-    """A Coder deployment, with the same flag/environment/default order as the other URLs."""
+def coder_url(flag: str | None = None, default: str = DEFAULT_CODER_URL, source: str | None = None) -> str:
+    """A Coder deployment: --coder-url, else $XO_CODER_URL, else `default`. Coder's own $CODER_URL
+    is not read: it may name a deployment other than the one xo is meant to use. https://, or
+    http:// to this machine; the host is letters, digits, dots and hyphens only."""
     if flag:
-        source, url = "--coder-url", flag
+        source, url = source or "--coder-url", flag
     elif os.environ.get(CODER_URL_ENV, "").strip():
         source, url = CODER_URL_ENV, os.environ[CODER_URL_ENV].strip()
-    elif os.environ.get("CODER_URL", "").strip():
-        source, url = "CODER_URL", os.environ["CODER_URL"].strip()
     else:
-        source, url = "the default Coder URL", DEFAULT_CODER_URL
+        source, url = source or "the default Coder URL", default
     url = url.rstrip("/")
     try:
         parts = urllib.parse.urlsplit(url)
@@ -111,10 +111,13 @@ def coder_url(flag: str | None = None) -> str:
         if (parts.username is not None or parts.password is not None or parts.query or parts.fragment
                 or any(c.isspace() or ord(c) < 32 for c in url) or port == 0):
             raise ValueError
+        if parts.hostname not in LOCAL_HOSTS and not re.fullmatch(r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?",
+                                                                  parts.hostname or ""):
+            raise ValueError
         return xo_url(url)
     except (XoError, ValueError):
-        raise XoError(f"{source} must be https:// (or http:// to localhost), without credentials, "
-                      "a query or a fragment") from None
+        raise XoError(f"{source} must be https:// (or http:// to localhost), with a plain host name and "
+                      "without credentials, a query or a fragment") from None
 
 
 def api_key(flag: str | None = None, url: str | None = None, saved: "Login | None" = None) -> str:
@@ -409,8 +412,16 @@ class Client:
         return f"{label}: HTTP {e.code}{hint}" + (f": {detail}" if detail else "")
 
 
+# Never handed to the coder process: it needs none of these, and least privilege costs nothing.
+_NOT_FOR_CODER = re.compile(r"(XO_API_KEY|XO_CODER_URL|CODER_URL|CLERK_.*|ELEVENLABS_.*)\Z")
+
+
 class CoderClient(Client):
     """The Coder network door: delegate to its CLI so login/keyring and app routing stay native.
+
+    Coder keeps one session token on Linux (and whenever its keyring is off) and sends it to any
+    --url it is given. So before anything is sent with --url, `check()` asks Coder, without --url,
+    which deployment it is logged in to, and stops unless it is this one.
 
     Raw provisioner output can contain credentials; it never reaches xo's output. Coder resolves
     the actual app URL, including the deployment's configured wildcard hostname and app subdomain.
@@ -419,38 +430,114 @@ class CoderClient(Client):
     def __init__(self, base: str, timeout: float = DEFAULT_TIMEOUT):
         super().__init__(base, None, timeout)
         self.hide([os.environ.get(KEY_ENV, ""), os.environ.get("CODER_SESSION_TOKEN", "")])
+        self.checked = False
 
-    def _command(self, args: list[str], *, timeout: float | None = None,
-                 print_url: bool = False) -> str:
-        env = dict(os.environ)
+    @staticmethod
+    def env() -> dict[str, str]:
+        return {k: v for k, v in os.environ.items() if not _NOT_FOR_CODER.match(k)}
+
+    def _command(self, args: list[str], *, timeout: float | None = None, print_url: bool = False,
+                 hint: str = "check coder login for this deployment", url: bool = True) -> str:
+        if url and not self.checked:
+            raise XoError("internal error: Coder was not checked before a call with --url")
+        env = self.env()
         if print_url:
             # Coder's supported in-workspace behavior prints the URL instead of opening a browser.
             env["CODER"] = "true"
+        argv = ["coder", *(["--url", self.base] if url else []), *args]
         try:
-            proc = subprocess.run(["coder", "--url", self.base, *args], stdin=subprocess.DEVNULL,
-                                  capture_output=True, text=True, env=env,
+            proc = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, env=env,
                                   timeout=timeout if timeout is not None else self.timeout)
         except FileNotFoundError:
-            raise XoError("Coder CLI not found: install coder, then run coder login for this deployment") from None
+            raise XoError("Coder CLI not found: install coder (https://coder.com/docs/install/cli), "
+                          "then run xo login coder") from None
         except subprocess.TimeoutExpired:
             raise XoError(f"coder {args[0]} timed out"
                           + (f"; {MAYBE_RECEIVED}" if self.in_flight else "")) from None
         except OSError:
             raise XoError("could not run the Coder CLI; check that coder is installed and executable") from None
         if proc.returncode:
-            raise XoError(f"coder {args[0]} failed (exit {proc.returncode}); check coder login "
-                          "for this deployment and inspect the workspace in Coder before retrying")
+            raise XoError(f"coder {args[0]} failed (exit {proc.returncode}); {hint}")
         return proc.stdout
 
-    def owner(self) -> str:
+    def logged_in_to(self) -> tuple[str, str] | None:
+        """(deployment, username) Coder is logged in to, asked without --url so its token goes only
+        where it was issued; None when it is not logged in."""
         try:
-            data = json.loads(self._command(["whoami", "--output", "json"]))
-            owner = data[0]["username"]
+            out = self._command(["whoami", "--output", "json"], url=False, hint="")
+        except XoError as e:
+            if "not found" in str(e) or "could not run" in str(e):
+                raise
+            return None  # not logged in, or the saved deployment does not answer
+        try:
+            data = json.loads(out)[0]
+            owner, where = data["username"], data["url"]
             if not isinstance(owner, str) or not re.fullmatch(r"[A-Za-z0-9_.-]+", owner):
                 raise ValueError
-            return owner
-        except (ValueError, KeyError, IndexError, TypeError):
-            raise XoError("coder whoami returned an invalid account; check your Coder login") from None
+            return coder_url(where, source="the deployment Coder is logged in to"), owner
+        except (ValueError, KeyError, IndexError, TypeError, XoError):
+            raise XoError("coder whoami returned an unexpected answer; check your Coder login") from None
+
+    def check(self) -> str:
+        """The username, once Coder is known to be logged in to this deployment; else stop."""
+        found = self.logged_in_to()
+        if found is None:
+            raise XoError(f"Coder is not logged in; run xo login coder (it logs in to {self.base})")
+        where, owner = found
+        if where != self.base:
+            raise XoError(f"Coder is logged in to {where}, not {self.base}; nothing was sent. "
+                          "Run xo login coder to log in to this one")
+        self.checked = True
+        return owner
+
+    def owner(self) -> str:
+        return self.check()
+
+    def run(self, args: list[str]) -> int:
+        """Run one coder command on this deployment in the terminal, after the check."""
+        self.check()
+        try:
+            return subprocess.run(["coder", "--url", self.base, *args], env=self.env()).returncode
+        except FileNotFoundError:
+            raise XoError("Coder CLI not found: install coder, then run xo login coder") from None
+        except OSError:
+            raise XoError("could not run the Coder CLI; check that coder is installed and executable") from None
+
+    def login(self, ask) -> str:
+        """Log Coder in to this deployment in the terminal; `ask(question)` confirms replacing
+        another login. Returns a one-line result."""
+        if os.environ.get("CODER_SESSION_TOKEN", "").strip():
+            raise XoError("CODER_SESSION_TOKEN is set, and coder login refuses to run with it; unset it first")
+        found = self.logged_in_to()
+        if found and found[0] == self.base:
+            self.checked = True
+            return f"already logged in to {self.base} as {found[1]}"
+        if not (sys.stdin.isatty() and sys.stdout.isatty()):
+            raise XoError(f"coder login needs a terminal; run xo login coder in one (it logs in to {self.base})")
+        if found and not ask(f"Coder is logged in to {found[0]}; replace that login with {self.base}?"):
+            raise XoError(f"kept the Coder login to {found[0]}; nothing changed")
+        # coder login itself sends no stored token: it asks the deployment with no session.
+        try:
+            code = subprocess.run(["coder", "login", self.base], env=self.env()).returncode
+        except FileNotFoundError:
+            raise XoError("Coder CLI not found: install coder (https://coder.com/docs/install/cli), "
+                          "then run xo login coder") from None
+        if code:
+            raise XoError(f"coder login failed (exit {code})")
+        return f"logged in to {self.base} as {self.check()}"
+
+    def logout(self, ask) -> str:
+        """End Coder's login only when it is to this deployment."""
+        found = self.logged_in_to()
+        if not found:
+            return "not logged in"
+        if found[0] != self.base:
+            return f"left alone: Coder is logged in to {found[0]}, not {self.base}"
+        if not ask(f"Log Coder out of {self.base}?"):
+            return "left logged in"
+        self.checked = True
+        self._command(["logout", "--yes"], hint="log out with coder logout")
+        return f"logged out of {self.base}"
 
     def create_github(self, name: str, parameters: dict[str, str], *, org: str | None,
                       wait_timeout: float) -> str:
@@ -468,10 +555,11 @@ class CoderClient(Client):
             csv.writer(cell, lineterminator="\n").writerow([f"{key}={value}"])
             command += ["--parameter", cell.getvalue()[:-1]]
         self.in_flight = "coder create"
-        self._command(command, timeout=wait_timeout)
+        self._command(command, timeout=wait_timeout,
+                      hint="inspect the workspace in Coder before retrying, since it may exist")
         self.in_flight = None
         try:
-            app_url = self._command(["open", "app", name, "xo-cowork"], print_url=True).strip()
+            app_url = self._command(["open", "app", name, "xo-cowork"], print_url=True, hint="").strip()
             # A public share link must never carry credentials, tokens or terminal control text.
             if not app_url:
                 raise XoError("Coder returned no app URL")

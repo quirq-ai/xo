@@ -25,9 +25,16 @@
     xo login [--url URL]                    ask for your API key without showing it, check it with
                                             XO through the xo server, and save it with the URL.
     xo logout                               delete the saved key and URL.
-    xo coder github URL [--name NAME]      create an xo-github workspace for a GitHub repository;
+    xo coder github URL [--name NAME]       create an xo-github workspace for a GitHub repository;
                                             uses your Coder login, then prints workspace and public
                                             app URLs as JSON. See `xo coder github --help`.
+    xo coder login | logout                 log Coder in to the deployment in this terminal, or out
+                                            of it (only if that is where it is logged in).
+    xo coder list | show | start | stop | ssh | delete | ... [ARGS]
+                                            run that coder command on the deployment. Before any
+                                            Coder command xo asks Coder, without naming a
+                                            deployment, where it is logged in, and stops unless
+                                            it is this one, so Coder's token goes nowhere else.
 
 A request that is not a GET changes things on XO, so it prints one line on stderr first; a create
 that stores your API key in the new space says so on a second line. --dry-run prints the request
@@ -36,7 +43,7 @@ given. A DELETE also needs --yes.
 
 XO API commands go to one URL: --url, else $XO_URL, else the one xo login saved, else
 https://xo.quirq.dev. The core API is under its /api/core/v1. Coder commands use
---coder-url, $XO_CODER_URL, or $CODER_URL separately and authenticate with Coder.
+--coder-url, else $XO_CODER_URL, else https://dev-coder.xo.builders, and Coder's own login.
 
 The API key comes from --api-key - (one line on stdin), $XO_API_KEY, or the key xo login saved,
 in that order; the saved key is only ever sent to the URL it was saved with. --api-key KEY also
@@ -533,6 +540,72 @@ def _coder_github(args: argparse.Namespace) -> int:
     return 0
 
 
+# Coder commands passed straight to the coder CLI, on the deployment xo checked Coder is logged in to.
+CODER_PASS = ("list", "show", "start", "stop", "restart", "ssh", "delete", "open", "ping", "port-forward",
+              "update", "logs")
+
+
+def _ask(question: str) -> bool:
+    """Yes only when someone at a terminal types y; without a terminal the answer is no."""
+    if not (sys.stdin.isatty() and sys.stderr.isatty()):
+        return False
+    print(f"xo: {question} [y/N] ", end="", file=sys.stderr, flush=True)
+    try:
+        return sys.stdin.readline().strip().lower() in ("y", "yes")
+    except (EOFError, KeyboardInterrupt):
+        return False
+
+
+def _coder_login(args: argparse.Namespace) -> int:
+    client = CoderClient(coder_url(args.coder_url), timeout=args.timeout)
+    print(f"xo: coder: {client.login(_ask)}", file=sys.stderr)
+    return 0
+
+
+def _coder_logout(args: argparse.Namespace) -> int:
+    client = CoderClient(coder_url(args.coder_url), timeout=args.timeout)
+    print(f"xo: coder: {client.logout(_ask)}", file=sys.stderr)
+    return 0
+
+
+def _coder_pass(argv: list[str]) -> int | None:
+    """`xo [--coder-url URL] coder [--coder-url URL] VERB ARGS...` for a VERB in CODER_PASS: run
+    `coder --url URL VERB ARGS...` in this terminal once Coder is known to be logged in to URL.
+    None when argv is something else."""
+    flag, timeout, i = None, DEFAULT_TIMEOUT, 0
+    seen_coder = False
+    while i < len(argv):
+        arg = argv[i]
+        if arg in ("--coder-url", "--timeout") and i + 1 < len(argv):
+            if arg == "--coder-url":
+                flag = argv[i + 1]
+            else:
+                try:
+                    timeout = float(argv[i + 1])
+                except ValueError:
+                    return None
+            i += 2
+        elif arg.startswith(("--coder-url=", "--timeout=")):
+            name, _, value = arg.partition("=")
+            if name == "--coder-url":
+                flag = value
+            else:
+                try:
+                    timeout = float(value)
+                except ValueError:
+                    return None
+            i += 1
+        elif not seen_coder and arg == "coder":
+            seen_coder = True
+            i += 1
+        elif seen_coder and arg in CODER_PASS:
+            client = CoderClient(coder_url(flag), timeout=timeout)
+            return client.run([arg, *argv[i + 1:]])
+        else:
+            return None
+    return None
+
+
 def _serve(args: argparse.Namespace) -> int:
     from xo import server  # imported only here: the CLI never loads server code
 
@@ -561,7 +634,7 @@ def _common(key: bool = True) -> argparse.ArgumentParser:
                    help="the server XO API commands go to (default $XO_URL, then the one xo login saved, "
                         "then https://xo.quirq.dev)")
     c.add_argument("--coder-url", default=argparse.SUPPRESS,
-                   help="a Coder deployment, for `xo coder` (default $XO_CODER_URL, then $CODER_URL, "
+                   help="a Coder deployment, for `xo coder` (default $XO_CODER_URL, "
                         "then https://dev-coder.xo.builders)")
     c.add_argument("--spec", default=argparse.SUPPRESS, metavar="FILE",
                    help="an OpenAPI JSON file (default $XO_SPEC, then the one bundled with xo)")
@@ -619,6 +692,15 @@ def _endpoints(sub: argparse._SubParsersAction, common: argparse.ArgumentParser,
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    try:
+        passed = _coder_pass(argv)
+    except XoError as e:
+        print(f"xo: {spec.clean(_redacted(str(e), argv))}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        return 130
+    if passed is not None:
+        return passed
     _Parser.argv = argv
     _Parser.flags = set()
     common = _common()
@@ -680,6 +762,13 @@ def main(argv: list[str] | None = None) -> int:
                     help="maximum wait for Coder to create/start the workspace (default: 600)")
     gh.add_argument("--dry-run", action="store_true", help="print the deployment plan; no Coder CLI or login needed")
     gh.set_defaults(run=_coder_github)
+    li = crsub.add_parser("login", parents=[common], help="log Coder in to the deployment, in this terminal")
+    li.set_defaults(run=_coder_login)
+    lo = crsub.add_parser("logout", parents=[common],
+                          help="log Coder out, only if it is logged in to the deployment")
+    lo.set_defaults(run=_coder_logout)
+    for verb in CODER_PASS:
+        crsub.add_parser(verb, help=f"coder {verb} ARGS..., on the deployment, after checking Coder's login")
 
     _endpoints(sub, common, argv)
 
