@@ -65,19 +65,26 @@ flowchart LR
 
 | Command | Goes to | What it does |
 |---|---|---|
-| `xo claude-code`, `codex`, `antigravity`, `hermes`, `openclaw`, `xo-cowork`, `nebius-openclaw` | server, then XO | `POST` a new space |
+| `xo claude-code --name N --volume-size GB` | server, then XO | `POST /claude-code`: volume 20 to 100 GB; add `--providers-anthropic-api-key -` for the Anthropic provider |
+| `xo codex --name N --volume-size GB` | server, then XO | `POST /codex` |
+| `xo antigravity --name N --volume-size GB` | server, then XO | `POST /antigravity` |
+| `xo hermes --name N --volume-size GB` | server, then XO | `POST /hermes`: plus a provider key and a Telegram or Slack bot token |
+| `xo openclaw --name N --volume-size GB` | server, then XO | `POST /openclaw`: plus at least one provider key and one channel (Telegram, WhatsApp or Slack) |
+| `xo xo-cowork --name N --volume-size GB` | server, then XO | `POST /xo-cowork`: providers and channels optional |
+| `xo nebius-openclaw --name N --token-factory-api-key K --telegram-bot-token T` | server, then XO | `POST /nebius-openclaw`: feature flagged, 404 when off |
 | `xo spaces --space-id ID` | server, then XO | `GET /spaces/{spaceId}`: connection URLs with a session token |
 | `xo me` | server only | your profile, primary email and both metadata buckets, as `{"xo": {..., "public_data", "private_data"}}`; credential-looking values masked |
 | `xo projects [add NAME]` | server only | read or append to the `projects` list in your private metadata |
 | `xo create project NAME\|URL` | server, then git | add the project, then clone `OWNER/REPO` here or `git init` a plain name |
-| `xo create space KIND NAME` | server, then XO | create the space as `xo KIND` would, then record it in `spaces` as NAME |
+| `xo create space KIND NAME --name N --volume-size GB` | server, then XO | create the space as `xo KIND` would, then record it in `spaces` as NAME |
 | `xo connect project:P space:S [--ref R]` | server only | set P in space S at R (default `main`) |
 | `xo connect space:S [--id ID]` | server, then XO | record a space entry; `--id` ties it to an XO space your key can read |
 | `xo list projects\|spaces` | server only | show either list |
 | `xo install project:P\|space:S` | server, git | clone, or fetch and fast-forward, P; for a space, each project into `./S/` at its ref |
 | `xo update project:P\|space:S` | git, server | push P (never forced); for a space, push each branch, then record the refs under `./S/` |
 | `xo sync project:P\|space:S` | git, server | `pull --rebase` and push P; for a space, rebase and push each branch, merge refs, record |
-| `xo user-metadata get` / `update` | server only | admin keys only |
+| `xo user-metadata get --user-id ID` | server only | admin keys only: both metadata buckets |
+| `xo user-metadata update --user-id ID --private-metadata JSON` | server only | admin keys only; deep merges into allow-listed keys (also `--public-metadata`) |
 | `xo login [xo\|me\|coder\|github]` | server, Coder, gh | reads `/config`, checks and saves the key, runs Coder's and gh's logins |
 | `xo logout`, `xo status` | local, Coder, gh | delete saved login; show each service |
 | `xo ops`, `xo call`, `xo api` | local / server | list operations; run one by id; send any request |
