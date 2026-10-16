@@ -22,15 +22,19 @@
                                             `xo user-metadata` with the Clerk credentials it holds,
                                             and passes the creates and GET /spaces/{id} on to XO's
                                             core API.
-    xo login [xo|me|coder] [--url URL]      log in to every service the xo server lists (or the one
+    xo login [xo|me|coder|github] [--url URL]
+                                            log in to every service the xo server lists (or the one
                                             named): me (the xo server) and xo take your API key,
                                             asked for without showing it unless a saved key still
-                                            works; coder runs Coder's own login in this terminal.
+                                            works; coder runs Coder's own login in this terminal;
+                                            github runs gh auth login for github.com, unless gh is
+                                            already connected.
     xo status                               each service, its address, and whether you are logged in.
     (the xo key step:)                      ask for your API key without showing it, check it with
                                             XO through the xo server, and save it with the URL.
     xo logout                               delete the saved key, URL and addresses, and log Coder
-                                            out if it is logged in to xo's deployment.
+                                            out if it is logged in to xo's deployment; asks before
+                                            logging gh out of github.com.
     xo coder github URL [--name NAME]       create an xo-github workspace for a GitHub repository;
                                             uses your Coder login, then prints workspace and public
                                             app URLs as JSON. See `xo coder github --help`.
@@ -74,7 +78,7 @@ from pathlib import Path
 from typing import Any, NoReturn
 from urllib.parse import quote
 
-from xo import __version__, coder, commands, services, spec
+from xo import __version__, coder, commands, github, services, spec
 from xo.client import (CODER_URL_ENV, CORE_PATH, DEFAULT_TIMEOUT, KEY_ENV, MAYBE_RECEIVED, MIN_SECRET, Client,
                        CoderClient, Login, XoError, api_key, check_key, coder_url, credentials_path,
                        forget_login, read_key, redact, save_login, saved_login, xo_url)
@@ -482,35 +486,47 @@ def _login(args: argparse.Namespace) -> int:
     print(f"xo:   xo     {platform} (creates and xo spaces; your key reaches it through the xo server)",
           file=sys.stderr)
     print(f"xo:   coder  {coder_at}", file=sys.stderr)
+    print(f"xo:   github https://{github.HOST} (gh's own login; xo never sees the token)", file=sys.stderr)
     for note in notes:
         print(f"xo: {spec.clean(note)}", file=sys.stderr)
     last = services.saved_addresses()
     before = dict(last)
     results: list[tuple[str, str | None, str]] = []  # (service, error or None, line)
+
+    def report(name: str, error: str | None, line: str) -> None:
+        # Printed as each step ends, so the key's result shows before Coder's sign-in starts.
+        results.append((name, error, line))
+        text = f"failed: {error}" if error else line
+        print(f"xo: {name}: {spec.clean(_redacted(text, _Parser.argv, getattr(args, 'resolved_key', None)))}",
+              file=sys.stderr, flush=True)
     if args.service in (None, *KEY_SERVICES):
         try:
-            results.append(("me", None, _login_xo(args, url, saved)))
+            report("me", None, _login_xo(args, url, saved))
             last["me"], last["xo"] = url, platform
         except XoError as e:
-            results.append(("me", str(e), ""))
+            report("me", str(e), "")
     if args.service in (None, "coder"):
         try:
             line, where = _login_coder(args, coder_at, last)
-            results.append(("coder", None, line))
+            report("coder", None, line)
             if where:
                 last["coder"] = where
         except XoError as e:
-            results.append(("coder", str(e), ""))
+            report("coder", str(e), "")
+    if args.service in (None, "github"):
+        if not github.installed():
+            report("github", None, f"skipped: the GitHub CLI is not installed ({github.INSTALL})")
+        else:
+            try:
+                report("github", None, github.GhClient(timeout=args.timeout).login(_ask))
+            except XoError as e:
+                report("github", str(e), "")
     if last != before:
         try:
             services.save_addresses(last)
         except XoError as e:
             print(f"xo: {spec.clean(str(e))}; the next xo login asks again about any changed address",
                   file=sys.stderr)
-    for name, error, line in results:
-        text = f"failed: {error}" if error else line
-        print(f"xo: {name}: {spec.clean(_redacted(text, _Parser.argv, getattr(args, 'resolved_key', None)))}",
-              file=sys.stderr)
     if os.environ.get(KEY_ENV, "").strip() and args.service in (None, *KEY_SERVICES):
         print(f"xo: {KEY_ENV} is set in this terminal and is used instead; run unset {KEY_ENV} to use the saved key",
               file=sys.stderr)
@@ -551,6 +567,8 @@ def _key_works(client: Client) -> bool:
 
 
 def _check_with_xo(client: Client, url: str) -> None:
+    # The check goes through the server to XO and can take a while; say so, so the wait never looks stuck.
+    print(f"xo: checking the key with XO through {url} ...", file=sys.stderr, flush=True)
     try:
         client.request("GET", f"{CORE_PATH}/spaces/{PROBE_SPACE}")
     except XoError as e:
@@ -610,6 +628,12 @@ def _logout(args: argparse.Namespace) -> int:
         except XoError as e:
             print(f"xo: coder: failed: {spec.clean(str(e))}", file=sys.stderr)
             return 1
+    if github.installed():
+        try:
+            print(f"xo: github: {spec.clean(github.GhClient(timeout=args.timeout).logout(_ask))}", file=sys.stderr)
+        except XoError as e:
+            print(f"xo: github: failed: {spec.clean(str(e))}", file=sys.stderr)
+            return 1
     return 0
 
 
@@ -645,8 +669,10 @@ def _status(args: argparse.Namespace) -> int:
                            else f"logged in to {found[0]}, not this one; run xo login coder")
         except XoError as e:
             coder_state = str(e)
+    gh_state = (github.GhClient(timeout=args.timeout).status() if github.installed()
+                else "the GitHub CLI is not installed")
     rows = [("me", url, state), ("xo", platform, "uses the same key, through the xo server (me)"),
-            ("coder", coder_at, coder_state)]
+            ("coder", coder_at, coder_state), ("github", f"https://{github.HOST}", gh_state)]
     for name, where, what in rows:
         print(spec.clean(f"{name:<6} {where:<34} {what}"))
     return 0
@@ -885,13 +911,14 @@ def main(argv: list[str] | None = None) -> int:
     keyless = _common(key=False)
     li = sub.add_parser("login", parents=[keyless],
                         help="log in to every service the xo server lists (me and xo with your XO API key, "
-                             "coder with Coder's login), or to the one named")
-    li.add_argument("service", nargs="?", choices=(*KEY_SERVICES, "coder"),
+                             "coder with Coder's login), and to GitHub with gh's login, or to the one named")
+    li.add_argument("service", nargs="?", choices=(*KEY_SERVICES, "coder", "github"),
                     help="only this one (xo and me both mean the XO API key; xo-server and xo-platform "
                          "are their old names)")
     li.set_defaults(run=_login)
     lo = sub.add_parser("logout", parents=[keyless],
-                        help="delete the key and addresses xo login saved, and log Coder out of xo's deployment")
+                        help="delete the key and addresses xo login saved, and log Coder out of xo's deployment "
+                             "and gh out of github.com (each asked first)")
     lo.set_defaults(run=_logout)
     st = sub.add_parser("status", parents=[keyless],
                         help="each service, its address, and whether you are logged in (never a key)")

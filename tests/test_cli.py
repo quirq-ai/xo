@@ -382,7 +382,7 @@ def test_a_typed_key_on_a_terminal_is_not_echoed(fake, capsys, monkeypatch):
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
     monkeypatch.setattr("getpass.getpass", lambda prompt: asked.append(prompt) or "ak_typed\n")
     assert run(capsys, "--api-key", "-", "call", "health")[0] == 0
-    assert asked == ["XO API key: "]
+    assert asked == ["XO API key (hidden: paste it, then press Enter): "]
     assert fake.requests[0]["headers"]["Authorization"] == "Bearer ak_typed"
 
 
@@ -1103,6 +1103,7 @@ def test_login_checks_the_key_then_saves_it_private(login, capsys, config_home):
     assert [r["path"] for r in sent(login)] == [PROBE, "/me"]  # XO takes the key, then whose it is
     assert all(r["headers"]["Authorization"] == f"Bearer {KEY}" for r in sent(login))
     assert "xo: me: logged in as sam (user_1); key and URL saved to" in err
+    assert f"xo: checking the key with XO through {login.base} ...\n" in err
     saved = config_home / "xo" / "credentials"
     assert f"key and URL saved to {saved}" in err
     assert json.loads(saved.read_text()) == {"url": login.base, "key": KEY}

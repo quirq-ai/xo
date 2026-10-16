@@ -150,7 +150,7 @@ def api_key(flag: str | None = None, url: str | None = None, saved: "Login | Non
 
 def read_key() -> str:
     """One key from stdin: asked for without echo on a terminal, so it never lands in the scrollback."""
-    typed = getpass.getpass("XO API key: ") if sys.stdin.isatty() else sys.stdin.readline()
+    typed = getpass.getpass("XO API key (hidden: paste it, then press Enter): ") if sys.stdin.isatty() else sys.stdin.readline()
     return typed.strip()
 
 

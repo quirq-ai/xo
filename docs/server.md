@@ -68,8 +68,8 @@ overrides it; `https://app.xo.builders/api/core/v1` keeps the old one.
   process); past it the server answers 503 "The server is busy; try again shortly" without passing
   anything on. Made-up keys step around the per-key limit, so this is what bounds them per instance.
 - **Timeouts.** XO gets 25 seconds for the whole answer, however slowly it sends. A create that
-  times out answers 504 "XO did not answer in time; it may have been received, so check before you
-  retry"; one XO never answered, 502. An answer over 1 MiB is not passed on: the caller gets XO's
+  times out answers 504 "XO (dev.xo.builders) did not answer in time; it may have been received, so
+  check before you retry", naming the host it passes on to; one XO never answered, 502. An answer over 1 MiB is not passed on: the caller gets XO's
   status and "too large to pass on".
 - **No proxy for XO.** Requests passed on to XO go straight to `XO_CORE_API_URL`; `HTTP_PROXY` and
   `HTTPS_PROXY` are not honoured for them (Clerk calls still use them). On a machine whose only way

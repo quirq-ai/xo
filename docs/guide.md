@@ -1,12 +1,13 @@
 # xo user guide
 
-`xo` is one command line for three XO services. One `xo login` logs you in to all of them.
+`xo` is one command line for three XO services and GitHub. One `xo login` logs you in to all of them.
 
 | Service | Address | What it does | You log in with |
 |---|---|---|---|
 | me | `https://xo.quirq.dev` | the xo server: answers `xo me`, holds the list of services, passes creates on to the platform | your XO API key (`ak_...`) |
 | xo | `https://dev.xo.builders` | XO Cloud: creates spaces (Claude Code, Codex, OpenClaw, ...) | the same key, through me |
 | coder | `https://dev-coder.xo.builders` | Coder workspaces: GitHub previews, ssh | Coder's own login, in your browser |
+| github | `https://github.com` | your GitHub account, through the GitHub CLI (`gh`) | gh's own login, in your browser |
 
 xo saves your keys only on your machine; the xo server stores none. Your XO key is still sent to
 the xo server and the platform on every call, and a create copies it into the new space.
@@ -17,7 +18,8 @@ the xo server and the platform on every call, and a create copies it into the ne
 ## Install
 
 Follow the [quickstart](quickstart.md) step 1 (Python 3.11 or newer, one paste). For the `coder`
-service, also install the [Coder CLI](https://coder.com/docs/install/cli).
+service, also install the [Coder CLI](https://coder.com/docs/install/cli); for `github`, the
+[GitHub CLI](https://cli.github.com) (`brew install gh` on a Mac).
 
 ## Log in
 
@@ -25,19 +27,25 @@ service, also install the [Coder CLI](https://coder.com/docs/install/cli).
 xo login          # all services
 xo login xo       # only the XO key (me and xo)
 xo login coder    # only Coder
+xo login github   # only GitHub (gh auth login, unless gh is already connected)
 xo status         # each service, its address, and whether you are logged in
-xo logout         # deletes your XO key; logs Coder out of xo's deployment (asks first)
+xo logout         # deletes your XO key; logs Coder and gh out (asks first for each)
 ```
 
-`xo login` prints the three addresses first. Then:
+`xo login` prints the addresses first. Then:
 - **me / xo:** paste your XO API key at the prompt (nothing shows while you type).
   If a key you saved before still works, it says "already logged in" and doesn't ask.
 - **coder:** Coder opens its sign-in page in your browser; paste back the token it shows. If Coder is
   already logged in to xo's deployment, it says "already logged in". If Coder is logged in somewhere
   else, xo asks before replacing that login.
+- **github:** xo asks GitHub who gh is logged in as. If that works, it says "already connected".
+  Otherwise it runs `gh auth login` for github.com, which opens your browser; then it checks again.
+  xo never sees or saves the GitHub token: gh keeps it. If `GH_TOKEN` or `GITHUB_TOKEN` is set in
+  your terminal, gh uses that instead, and xo says so.
 
-The key and coder each end with one line (`xo: me: ...` and `xo: coder: ...`): logged in, already
-logged in, skipped (no Coder CLI), or failed and why. One failure does not stop the other.
+The key, coder and github each end with one line (`xo: me: ...`, `xo: coder: ...`,
+`xo: github: ...`): logged in, already logged in, skipped (CLI not installed), or failed and why. One
+failure does not stop the others.
 
 ## Create spaces (xo)
 
@@ -95,9 +103,10 @@ with `--api-key -`.
 Each step says what you should see. Nothing here creates anything until step 5.
 
 1. `xo --version` prints `xo 0.1.0`.
-2. `xo login` prints the three addresses, then `xo: me: logged in as ...` and
-   `xo: coder: logged in to https://dev-coder.xo.builders as ...` (or `skipped` without the Coder CLI).
-3. `xo status` shows three lines: me `key saved by xo login`, xo, coder
+2. `xo login` prints the four addresses, then `xo: me: logged in as ...`,
+   `xo: coder: logged in to https://dev-coder.xo.builders as ...` and
+   `xo: github: connected to github.com as ...` (or `skipped` without the Coder CLI or gh).
+3. `xo status` shows four lines: me `key saved by xo login`, xo, coder `logged in as ...`, github
    `logged in as ...`.
 4. `xo spaces --space-id 00000000-0000-0000-0000-000000000000` ends with `HTTP 404: Space not found`:
    your key reaches the platform at dev.xo.builders, and its `/api/core/v1` is there (step 2 checks

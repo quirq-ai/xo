@@ -24,6 +24,15 @@ class FakeXo:
         self.routes[(method, path)] = (status, body, headers or {})
 
 
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_call(item):
+    """Every test body runs with the loopback guard on, whatever its module overrides."""
+    import socket
+    import urllib.request
+    assert getattr(socket.getaddrinfo, "__name__", "") == "guard" and urllib.request.getproxies() == {}, (
+        f"{item.nodeid}: the loopback guard is not active (is loopback_only overridden?)")
+
+
 @pytest.fixture(autouse=True)
 def loopback_only():
     """No test may reach a real host: anything but loopback fails to resolve, and no proxy is used
@@ -41,6 +50,24 @@ def loopback_only():
         mp.setattr(socket, "getaddrinfo", guard)
         mp.setattr(urllib.request, "getproxies", dict)
         yield
+
+
+@pytest.fixture(autouse=True)
+def no_real_gh(monkeypatch):
+    """No test runs the real gh or sees a GitHub token from the machine: xo.github's subprocess
+    answers as if gh were not installed, unless a test puts a fake in its place."""
+    import subprocess
+    import types
+    from xo import github
+
+    def run(*args, **kwargs):
+        raise FileNotFoundError("gh")
+    monkeypatch.setattr(github, "installed", lambda: False)
+    monkeypatch.setattr(github, "subprocess", types.SimpleNamespace(
+        run=run, DEVNULL=subprocess.DEVNULL, TimeoutExpired=subprocess.TimeoutExpired,
+        CompletedProcess=subprocess.CompletedProcess))
+    for name in ("GH_TOKEN", "GITHUB_TOKEN", "GH_HOST"):
+        monkeypatch.delenv(name, raising=False)
 
 
 @pytest.fixture(autouse=True)
