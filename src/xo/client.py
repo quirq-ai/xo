@@ -30,7 +30,7 @@ from typing import Any
 from xo import __version__
 
 # One address for XO API calls: the server answers `xo me` and `xo user-metadata` itself and
-# passes the core API on to XO (app.xo.builders/api/core/v1) under CORE_PATH.
+# passes the core API on to XO's platform (dev.xo.builders/api/core/v1) under CORE_PATH.
 DEFAULT_URL = "https://xo.quirq.dev"
 DEFAULT_CODER_URL = "https://dev-coder.xo.builders"
 CORE_PATH = "/api/core/v1"
@@ -84,13 +84,18 @@ def xo_url(flag: str | None = None, saved: str | None = None) -> str:
         source, url = "the default URL", DEFAULT_URL
     url = url.rstrip("/")
     parts = urllib.parse.urlsplit(url)
+    if "@" in parts.netloc:
+        raise XoError(f"{source} must not hold a user or password; it is not shown")
+    try:
+        port = parts.port
+    except ValueError:
+        port = 0
     ok = parts.scheme == "https" or (parts.scheme == "http" and parts.hostname in LOCAL_HOSTS)
-    if not ok or not parts.hostname or parts.query or parts.fragment or parts.username or parts.password:
-        # Everything up to the last "@" may hold a password, even one with "?" or "#" in it.
-        scheme, sep, rest = url.partition("://")
-        shown = scheme + sep + rest.rpartition("@")[2] if sep and "@" in rest else url
+    if not ok or not parts.hostname or parts.query or parts.fragment or port == 0:
+        # An "@" anywhere may be a password typed with a "/", "?" or "#" in it: never repeat it then.
+        shown = "it is not shown" if "@" in url else f"not {url!r}"
         raise XoError(f"{source} must be an https:// address (or http:// to localhost) with no query "
-                      f"and no user or password, not {shown!r}")
+                      f"and a port from 1 to 65535 if any; {shown}")
     return url
 
 

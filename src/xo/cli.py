@@ -1,4 +1,4 @@
-"""xo: the command line for the XO Cloud core API (app.xo.builders/api/core/v1).
+"""xo: the command line for the XO Cloud core API (dev.xo.builders/api/core/v1, through the xo server).
 
     xo ENDPOINT [ACTION] [--flag VALUE ...]  one command per API endpoint, made from the spec:
                                             POST /openclaw is `xo openclaw`, GET /spaces/{spaceId}
@@ -16,15 +16,21 @@
     xo api METHOD PATH [--query NAME=VALUE ...] [--data JSON|@FILE|-] [--field KEY=VALUE ...]
                                             send any request, spec or not. Through the xo server
                                             only the creates and GET /spaces/{id} pass; for the
-                                            rest, add --url https://app.xo.builders with
+                                            rest, add --url https://dev.xo.builders with
                                             $XO_API_KEY or --api-key - (not the saved key).
     xo serve [--host H] [--port P]          run the xo server: it answers `xo me` and
                                             `xo user-metadata` with the Clerk credentials it holds,
                                             and passes the creates and GET /spaces/{id} on to XO's
                                             core API.
-    xo login [--url URL]                    ask for your API key without showing it, check it with
+    xo login [xo|coder] [--url URL]         log in to every service the xo server lists (or the one
+                                            named): xo-server and xo-platform take your API key,
+                                            asked for without showing it unless a saved key still
+                                            works; coder runs Coder's own login in this terminal.
+    xo status                               each service, its address, and whether you are logged in.
+    (the xo-server step:)                   ask for your API key without showing it, check it with
                                             XO through the xo server, and save it with the URL.
-    xo logout                               delete the saved key and URL.
+    xo logout                               delete the saved key, URL and addresses, and log Coder
+                                            out if it is logged in to xo's deployment.
     xo coder github URL [--name NAME]       create an xo-github workspace for a GitHub repository;
                                             uses your Coder login, then prints workspace and public
                                             app URLs as JSON. See `xo coder github --help`.
@@ -62,13 +68,14 @@ import json
 import math
 import os
 import re
+import shutil
 import sys
 from pathlib import Path
 from typing import Any, NoReturn
 from urllib.parse import quote
 
-from xo import __version__, coder, commands, spec
-from xo.client import (CORE_PATH, DEFAULT_TIMEOUT, KEY_ENV, MAYBE_RECEIVED, MIN_SECRET, Client,
+from xo import __version__, coder, commands, services, spec
+from xo.client import (CODER_URL_ENV, CORE_PATH, DEFAULT_TIMEOUT, KEY_ENV, MAYBE_RECEIVED, MIN_SECRET, Client,
                        CoderClient, Login, XoError, api_key, check_key, coder_url, credentials_path,
                        forget_login, read_key, redact, save_login, saved_login, xo_url)
 
@@ -456,7 +463,7 @@ PROBE_SPACE = "00000000-0000-0000-0000-000000000000"
 
 
 def _login(args: argparse.Namespace) -> int:
-    """Ask for the key, check it with XO through the xo server, and save it with the URL it goes to."""
+    """Log in to every service in the xo server's list (or the one named), one line each."""
     if args.api_key is not None:
         raise XoError("xo login asks for the key itself; leave out --api-key")
     try:
@@ -464,6 +471,55 @@ def _login(args: argparse.Namespace) -> int:
     except XoError:
         saved = None  # a file xo cannot use is replaced
     url = xo_url(args.url, saved.url if saved else None)
+    listed, notes = services.fetch(url, args.timeout)
+    platform, coder_at = listed["xo-platform"].url, listed["coder"].url
+    print(f"xo: services from the xo server at {url}:", file=sys.stderr)
+    print(f"xo:   xo-server    {url}", file=sys.stderr)
+    print(f"xo:   xo-platform  {platform} (your xo key reaches it through the xo server)", file=sys.stderr)
+    print(f"xo:   coder        {coder_at}", file=sys.stderr)
+    for note in notes:
+        print(f"xo: {spec.clean(note)}", file=sys.stderr)
+    last = services.saved_addresses()
+    before = dict(last)
+    results: list[tuple[str, str | None, str]] = []  # (service, error or None, line)
+    if args.service in (None, "xo", "xo-server", "xo-platform"):
+        try:
+            results.append(("xo-server", None, _login_xo(args, url, saved)))
+            last["xo-server"], last["xo-platform"] = url, platform
+        except XoError as e:
+            results.append(("xo-server", str(e), ""))
+    if args.service in (None, "coder"):
+        try:
+            line, where = _login_coder(args, coder_at, last)
+            results.append(("coder", None, line))
+            if where:
+                last["coder"] = where
+        except XoError as e:
+            results.append(("coder", str(e), ""))
+    if last != before:
+        try:
+            services.save_addresses(last)
+        except XoError as e:
+            print(f"xo: {spec.clean(str(e))}; the next xo login asks again about any changed address",
+                  file=sys.stderr)
+    for name, error, line in results:
+        text = f"failed: {error}" if error else line
+        print(f"xo: {name}: {spec.clean(_redacted(text, _Parser.argv, getattr(args, 'resolved_key', None)))}",
+              file=sys.stderr)
+    if os.environ.get(KEY_ENV, "").strip() and args.service in (None, "xo", "xo-server", "xo-platform"):
+        print(f"xo: {KEY_ENV} is set in this terminal and is used instead; run unset {KEY_ENV} to use the saved key",
+              file=sys.stderr)
+    return 1 if any(error for _, error, _ in results) else 0
+
+
+def _login_xo(args: argparse.Namespace, url: str, saved: Login | None) -> str:
+    """The xo-server step: reuse a saved key that still works for this URL, else ask for one, check
+    it with XO through the server, and save it with the URL."""
+    if saved is not None and saved.url == url:
+        args.client = Client(url, saved.key, timeout=args.timeout)
+        if _key_works(args.client):
+            who = _account(args.client)
+            return f"already logged in{f' as {who}' if who else ''}; key saved for {url}"
     print(f"xo: logging in to {url}; the key will only ever be sent there", file=sys.stderr, flush=True)
     key = read_key()
     if not key:
@@ -473,8 +529,25 @@ def _login(args: argparse.Namespace) -> int:
         # A Clerk Secret Key or a provider key pasted by mistake goes nowhere, not even to the server.
         raise XoError("that is not an XO API key (those start with ak_); nothing sent or saved, and it is not shown")
     args.client = Client(url, key, timeout=args.timeout)
+    _check_with_xo(args.client, url)
+    who = _account(args.client)
+    path = save_login(Login(url, key))
+    where = "only you can read it" if os.name != "nt" else "xo cannot limit who reads it on Windows"
+    return (f"logged in as {who}" if who else "logged in; the key works with XO") + (
+        f"; key and URL saved to {path} ({where}); xo logout deletes them")
+
+
+def _key_works(client: Client) -> bool:
     try:
-        args.client.request("GET", f"{CORE_PATH}/spaces/{PROBE_SPACE}")
+        _check_with_xo(client, client.base)
+        return True
+    except XoError:
+        return False
+
+
+def _check_with_xo(client: Client, url: str) -> None:
+    try:
+        client.request("GET", f"{CORE_PATH}/spaces/{PROBE_SPACE}")
     except XoError as e:
         # XO's own answer for a working key (the quickstart's check). Anything else, the server's
         # bare "Not found" included (one that does not pass the core API on), saves nothing.
@@ -483,15 +556,21 @@ def _login(args: argparse.Namespace) -> int:
                 raise XoError(f"{e}; the xo server at {url} does not pass the core API on (is it up to date?); "
                               "nothing saved") from None
             raise XoError(f"{e}; nothing saved") from None
-    who = _account(args.client)
-    path = save_login(Login(url, key))
-    print(f"xo: logged in as {who}" if who else "xo: logged in; the key works with XO", file=sys.stderr)
-    where = "only you can read it" if os.name != "nt" else "xo cannot limit who reads it on Windows"
-    print(f"xo: key and URL saved to {path} ({where}); xo logout deletes them", file=sys.stderr)
-    if os.environ.get(KEY_ENV, "").strip():
-        print(f"xo: {KEY_ENV} is set in this terminal and is used instead; run unset {KEY_ENV} to use the saved key",
-              file=sys.stderr)
-    return 0
+
+
+def _login_coder(args: argparse.Namespace, listed: str, last: dict[str, str]) -> tuple[str, str | None]:
+    """The coder step: (result line, the address logged in to, or None when it was skipped)."""
+    if args.coder_url or os.environ.get(CODER_URL_ENV, "").strip():
+        where = coder_url(args.coder_url)  # chosen by the person, not by the list
+    else:
+        where = coder_url(listed, source="the coder address in the list")
+        before = last.get("coder") or services.builtin()["coder"].url
+        if where != before and not _ask(f"the list names {where} for coder; you last used {before}. Use {where}?"):
+            raise XoError(f"kept {before}: the list's new address was not accepted (answer y at a terminal to "
+                          "use it); nothing sent")
+    if not shutil.which("coder"):
+        return "skipped: the Coder CLI is not installed (https://coder.com/docs/install/cli); xo coder needs it", None
+    return CoderClient(where, timeout=args.timeout).login(_ask), where
 
 
 def _account(client: Client) -> str | None:
@@ -510,10 +589,61 @@ def _account(client: Client) -> str | None:
 
 
 def _logout(args: argparse.Namespace) -> int:
+    """Delete the saved key and addresses; log Coder out only of the deployment xo logged it in to."""
+    # The XO key goes first, whatever else is wrong (a bad XO_CODER_URL must not keep it saved).
     path = forget_login()
-    print(f"xo: deleted {path}" if path else f"xo: no saved key at {credentials_path()}", file=sys.stderr)
+    print(f"xo: xo-server: deleted {path}" if path else f"xo: xo-server: no saved key at {credentials_path()}",
+          file=sys.stderr)
+    coder_default = services.coder_default()
+    services.forget_addresses()
     if os.environ.get(KEY_ENV, "").strip():
         print(f"xo: {KEY_ENV} is still set in this terminal; run unset {KEY_ENV} to clear it", file=sys.stderr)
+    if shutil.which("coder"):
+        try:
+            coder_at = coder_url(args.coder_url, default=coder_default)
+            print(f"xo: coder: {CoderClient(coder_at, timeout=args.timeout).logout(_ask)}", file=sys.stderr)
+        except XoError as e:
+            print(f"xo: coder: failed: {spec.clean(str(e))}", file=sys.stderr)
+            return 1
+    return 0
+
+
+def _status(args: argparse.Namespace) -> int:
+    """Each service, its address, and whether you are logged in. Never a key; only Coder's own CLI
+    is asked anything (where it is logged in), and without naming a deployment."""
+    try:
+        saved = saved_login()
+        problem = None
+    except XoError as e:
+        saved, problem = None, str(e)
+    last = services.saved_addresses()
+    url = xo_url(args.url, saved.url if saved else None)
+    if os.environ.get(KEY_ENV, "").strip():
+        state = f"{KEY_ENV} is set in this terminal and is used"
+    elif problem:
+        state = f"the saved key cannot be used: {problem}"
+    elif saved and saved.url == url:
+        state = "key saved by xo login"
+    elif saved:
+        state = f"not logged in here; the saved key is for {saved.url}"
+    else:
+        state = "not logged in; run xo login"
+    platform = last.get("xo-platform") or services.builtin()["xo-platform"].url
+    coder_at = coder_url(args.coder_url, default=services.coder_default())
+    if not shutil.which("coder"):
+        coder_state = "the Coder CLI is not installed"
+    else:
+        try:
+            found = CoderClient(coder_at, timeout=args.timeout).logged_in_to()
+            coder_state = ("not logged in; run xo login coder" if found is None
+                           else f"logged in as {found[1]}" if found[0] == coder_at
+                           else f"logged in to {found[0]}, not this one; run xo login coder")
+        except XoError as e:
+            coder_state = str(e)
+    rows = [("xo-server", url, state), ("xo-platform", platform, "uses your xo key, through the xo server"),
+            ("coder", coder_at, coder_state)]
+    for name, where, what in rows:
+        print(spec.clean(f"{name:<12} {where:<34} {what}"))
     return 0
 
 
@@ -522,7 +652,7 @@ def _coder_github(args: argparse.Namespace) -> int:
         args.repo_url, name=args.name, ref=args.ref, start_command=args.start_command,
         capacity=args.capacity, workspace_size=args.workspace_size,
         home_disk_size=args.home_disk_size, wait_timeout=args.wait_timeout)
-    args.client = client = CoderClient(coder_url(args.coder_url), timeout=args.timeout)
+    args.client = client = CoderClient(coder_url(args.coder_url, default=services.coder_default()), timeout=args.timeout)
     client.hide(_secrets(_Parser.argv))
     if args.dry_run:
         print(client.scrub(_json({"deploymentUrl": client.base, "template": "xo-github", "name": name,
@@ -559,13 +689,16 @@ def _ask(question: str) -> bool:
 
 
 def _coder_login(args: argparse.Namespace) -> int:
-    client = CoderClient(coder_url(args.coder_url), timeout=args.timeout)
+    client = CoderClient(coder_url(args.coder_url, default=services.coder_default()), timeout=args.timeout)
     print(f"xo: coder: {client.login(_ask)}", file=sys.stderr)
+    last = services.saved_addresses()
+    last["coder"] = client.base
+    services.save_addresses(last)
     return 0
 
 
 def _coder_logout(args: argparse.Namespace) -> int:
-    client = CoderClient(coder_url(args.coder_url), timeout=args.timeout)
+    client = CoderClient(coder_url(args.coder_url, default=services.coder_default()), timeout=args.timeout)
     print(f"xo: coder: {client.logout(_ask)}", file=sys.stderr)
     return 0
 
@@ -595,7 +728,7 @@ def _coder_pass(argv: list[str]) -> int | None:
             seen_coder = True
             i += 1
         elif seen_coder and arg in CODER_PASS:
-            client = CoderClient(coder_url(flag), timeout=timeout)
+            client = CoderClient(coder_url(flag, default=services.coder_default()), timeout=timeout)
             return client.run([arg, *argv[i + 1:]])
         else:
             return None
@@ -695,7 +828,7 @@ def _endpoints(sub: argparse._SubParsersAction, common: argparse.ArgumentParser,
             commands.register(sub, spec.operations(local), [common], _add_send, _endpoint)
     except (XoError, ValueError, TypeError, RecursionError, argparse.ArgumentError) as e:
         command = _command_word(argv)
-        if command in ("ops", "call", "api", "serve", "login", "logout", "coder"):
+        if command in ("ops", "call", "api", "serve", "login", "logout", "status", "coder"):
             return  # they say for themselves when they need the spec
         reason = str(e) if isinstance(e, XoError) else f"cannot use spec {where}: {type(e).__name__}: {e}"
         print(f"xo: {spec.clean(_redacted(reason, argv))}", file=sys.stderr)
@@ -747,11 +880,17 @@ def main(argv: list[str] | None = None) -> int:
 
     keyless = _common(key=False)
     li = sub.add_parser("login", parents=[keyless],
-                        help="ask for your XO API key, check it with XO through the xo server, and save it "
-                             "with the URL")
+                        help="log in to every service the xo server lists (xo-server and xo-platform with "
+                             "your XO API key, coder with Coder's login), or to the one named")
+    li.add_argument("service", nargs="?", choices=("xo", "xo-server", "xo-platform", "coder"),
+                    help="only this one (xo, xo-server and xo-platform all mean the XO API key)")
     li.set_defaults(run=_login)
-    lo = sub.add_parser("logout", parents=[keyless], help="delete the key and URL xo login saved")
+    lo = sub.add_parser("logout", parents=[keyless],
+                        help="delete the key and addresses xo login saved, and log Coder out of xo's deployment")
     lo.set_defaults(run=_logout)
+    st = sub.add_parser("status", parents=[keyless],
+                        help="each service, its address, and whether you are logged in (never a key)")
+    st.set_defaults(run=_status)
 
     s = sub.add_parser("serve", help="run the xo server that holds the Clerk credentials (see docs/server.md)")
     s.add_argument("--host", default="127.0.0.1", help="address to listen on (default 127.0.0.1)")

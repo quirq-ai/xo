@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 # tic-tac-toe game, and `pip install -U xo` would replace this tool with it.
 name = "quirq-xo"
 dynamic = ["version"]
-description = "xo, the command line for the XO Cloud API (app.xo.builders)."
+description = "xo, the command line for the XO Cloud API (dev.xo.builders)."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"

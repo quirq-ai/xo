@@ -29,7 +29,9 @@ Clerk instance: a key from another instance is refused as "Invalid API key".
    top-level `app`. With "Other", no function runs and `/healthz` fails.
 3. **Environment Variables:** add exactly one, `CLERK_SECRET_KEY` = the `sk_test_...` key, for the
    **Production** environment only, marked **Sensitive**. Add no admin key ids: with none, the
-   metadata routes answer 403 to everyone and only `/me` is in use.
+   metadata routes answer 403 to everyone and only `/me` is in use. Without `XO_CORE_API_URL`,
+   creates go to XO's platform at `https://dev.xo.builders` (it was `https://app.xo.builders` before
+   this version); add `XO_CORE_API_URL` only to send them somewhere else.
 4. Leave the **Production Branch** at `main` (**Settings → Git**) and the GitHub integration on.
    The first deploy builds `main`.
 
@@ -79,9 +81,9 @@ address can send XO as many requests as the per-key limit allows for each made-u
 If your plan does not offer rate limit rules, tell Claude before you go on: without the rule,
 anyone can make the server spend Clerk requests (1000 Backend API calls per 10 seconds for the whole instance)
 and, past 100,000 a month, paid key checks. Through `/me` that is the server's own Clerk instance,
-the development one on development credentials. Through `/api/core` it is XO's production
-instance whatever credentials the server holds: a request there goes on to app.xo.builders, where
-XO checks the key with its own Clerk. So the `/api/core` condition matters from the day the
+the development one on development credentials. Through `/api/core` it is XO's own
+instance whatever credentials the server holds: a request there goes on to XO's platform
+(`XO_CORE_API_URL`, dev.xo.builders by default), where XO checks the key with its own Clerk. So the `/api/core` condition matters from the day the
 forwarding is deployed, not only once the server holds production credentials.
 
 ## 4. How it deploys
@@ -148,8 +150,8 @@ missing or refused; the project's **Logs** say which.
 | Requests per address | the Firewall rule in step 3, once published |
 | Requests to XO per instance | `XO_CORE_PER_SECOND` (default 10 a second), then 503 |
 | **Not protected** | a flood from many addresses spread over many instances; only Clerk's and XO's own limits stop it |
-| **Changed for XO** | every xo user now reaches app.xo.builders from Vercel's addresses, not their own, so a per-address limit on XO's side would count all of them together |
-| **Not rate limited** | `/` (the status page), `/status` and `/healthz`: public, one function invocation each, never a Clerk call. An open status page tab polls `/status` every 5 seconds while it is visible (about 17,000 invocations a day per tab left open) and stops while hidden. To cap them too, add a second rule of its own (Request Path **starts with** `/status`, 60 requests per 60 seconds per IP, so `/status/` is capped too); the page stays well under that. Do not add `/status` to the rule in step 3: it would share one per-address budget with `/me`, and an open status tab could then make the test script's Firewall check fail. |
+| **Changed for XO** | every xo user now reaches XO's platform from Vercel's addresses, not their own, so a per-address limit on XO's side would count all of them together |
+| **Not rate limited** | `/config` (the services list `xo login` reads; static, never a Clerk call; do not add it to the rule in step 3, for the same reason as `/status`), `/` (the status page), `/status` and `/healthz`: public, one function invocation each, never a Clerk call. An open status page tab polls `/status` every 5 seconds while it is visible (about 17,000 invocations a day per tab left open) and stops while hidden. To cap them too, add a second rule of its own (Request Path **starts with** `/status`, 60 requests per 60 seconds per IP, so `/status/` is capped too); the page stays well under that. Do not add `/status` to the rule in step 3: it would share one per-address budget with `/me`, and an open status tab could then make the test script's Firewall check fail. |
 
 ## Logs and audit lines
 
@@ -180,7 +182,7 @@ Do not switch to production credentials until all of these hold:
    limit that counts all requests together (one option is a second rate limit rule on the same
    paths keyed by the `host` header, since every request has the same host; whether Vercel counts
    it globally is not verified), or write down that XO accepts the risk: such a flood could use up
-   XO's production Clerk instance's Backend API limit, which app.xo.builders shares, and pay for key
+   the Backend API limit of XO's Clerk instance, which XO's platform shares, and pay for key
    checks past 100,000 a month. TODO(suraj): choose one.
 
 Then replace `CLERK_SECRET_KEY` with the production key (`sk_live_...`), redeploy, and run the test
