@@ -1506,7 +1506,6 @@ def test_one_login_covers_every_service(login, capsys, monkeypatch, config_home)
     assert "Authorization" not in login.requests[0]["headers"] and login.requests[0]["path"] == "/config"
 
 
-
 def test_a_served_or_saved_me_never_changes_where_the_key_goes(login, capsys, monkeypatch, config_home):
     from xo import client, services
     monkeypatch.delenv("XO_URL")
@@ -1521,6 +1520,7 @@ def test_a_served_or_saved_me_never_changes_where_the_key_goes(login, capsys, mo
     assert json.loads((config_home / "xo" / "credentials").read_text())["url"] == login.base
     code, out, err = run(capsys, "status")
     assert code == 0 and ".invalid" not in out + err
+
 
 def test_login_one_service(login, capsys, monkeypatch):
     coder = FakeCoder(monkeypatch)

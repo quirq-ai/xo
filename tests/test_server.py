@@ -917,12 +917,13 @@ def test_forwards_have_a_budget_for_the_whole_process(clerk, monkeypatch):
 
 
 def test_xo_unreachable_or_slow(xo_server, clerk, monkeypatch):
+    core = xo_server.app.cfg.core_url
     monkeypatch.setattr(xo_server.app.cfg, "core_url", "http://127.0.0.1:9")
     assert call(xo_server, "POST", "/api/core/v1/codex", USER_KEY, {}) == (502, {
         "success": False, "error": "XO did not answer; it may have been received, so check before you retry"})
     assert call(xo_server, "GET", "/api/core/v1/spaces/s1", USER_KEY) == (502, {
         "success": False, "error": "XO did not answer"})
-    monkeypatch.undo()
+    monkeypatch.setattr(xo_server.app.cfg, "core_url", core)
     monkeypatch.setattr(server, "CORE_TIMEOUT", 0.2)
     clerk.core_stall = 0.5
     assert call(xo_server, "POST", "/api/core/v1/codex", USER_KEY, {}) == (504, {

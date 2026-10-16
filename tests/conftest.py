@@ -25,16 +25,22 @@ class FakeXo:
 
 
 @pytest.fixture(autouse=True)
-def loopback_only(monkeypatch):
-    """No test may reach a real host: anything but loopback fails to resolve."""
+def loopback_only():
+    """No test may reach a real host: anything but loopback fails to resolve, and no proxy is used
+    (a proxy on loopback would carry the request out). It has its own MonkeyPatch, so a test's
+    monkeypatch.undo() cannot remove it."""
     import socket
+    import urllib.request
     real = socket.getaddrinfo
 
     def guard(host, *args, **kwargs):
         if host not in ("127.0.0.1", "localhost", "::1"):
             raise socket.gaierror(socket.EAI_NONAME, f"tests reach loopback only, not {host}")
         return real(host, *args, **kwargs)
-    monkeypatch.setattr(socket, "getaddrinfo", guard)
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(socket, "getaddrinfo", guard)
+        mp.setattr(urllib.request, "getproxies", dict)
+        yield
 
 
 @pytest.fixture(autouse=True)
