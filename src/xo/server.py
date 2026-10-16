@@ -21,8 +21,8 @@ verifies it with Clerk and answers:
                                     for an XO space the key can read
     POST  /me/spaces/{name}/projects  any user key: {"project", "ref"}: set one project's ref in a
                                     space; the server writes only `spaces`, nothing else
-    PUT   /me/spaces/{name}         any user key: {"rev", "projects"}: replace a space's projects and
-                                    refs, only if its rev is still the one sent (else 409)
+    PUT   /me/spaces/{name}         any user key: {"rev", "projects", "base"}: replace a space's projects
+                                    and refs, only if it is still at that rev holding base (else 409)
     GET   /user-metadata/{userId}   admin keys only: public and private metadata
     PATCH /user-metadata/{userId}   admin keys only: deep-merge changes into allow-listed keys
     POST  /api/core/v1/{create}     passed on to XO's core API as sent, key included, and its

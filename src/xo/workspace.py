@@ -248,10 +248,16 @@ def sync(client: Client, kind: str, name: str) -> Any:
     local = dict(_local(root, installed))
     space = _space(client, name)
     remote = _pairs(space.get("projects"), f"space {name}")
+    left = (f" Your branches were rebased and pushed; no checkout was moved and nothing was recorded. To take the "
+            f"space's refs, run xo install space:{name}; to keep yours, run that, check yours out again and run "
+            f"xo update space:{name}")
     if _rev(space) < state["rev"]:
-        # An older copy of the space was put back (a write racing on another server instance).
-        # Its refs are not changes anyone made: keep yours and record them again.
-        _say(f"space {name} went back to rev {_rev(space)} from your rev {state['rev']}; keeping your refs")
+        # An older copy of the space was put back (a write racing on another server instance), and
+        # someone may have recorded a change on top of it since: xo cannot tell whose refs are newer.
+        differ = sorted(p for p in {*local, *dict(remote)} if local.get(p) != dict(remote).get(p))
+        if differ:
+            raise XoError(f"space {name} went back to rev {_rev(space)} from your rev {state['rev']}, so xo cannot "
+                          f"tell whether yours or the space's are newer for " + ", ".join(differ) + "." + left)
         base = dict(remote)
     merged, clashes = [], []
     for project, was in base.items():  # dropped from the space while you changed it
@@ -266,9 +272,7 @@ def sync(client: Client, kind: str, name: str) -> Any:
         else:
             clashes.append(f"{project} (yours {mine}, the space's {theirs}, installed {was})")
     if clashes:
-        raise XoError("both you and the space changed " + "; ".join(clashes) + f". Nothing was changed. To take "
-                      f"the space's refs, run xo install space:{name}; to keep yours, run that, check yours out "
-                      f"again and run xo update space:{name}")
+        raise XoError("both you and the space changed " + "; ".join(clashes) + "." + left)
     for project, ref in merged:
         if local.get(project) != ref:
             _place(root / project, project, ref)

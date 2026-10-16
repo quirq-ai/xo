@@ -139,8 +139,8 @@ def checkout(dest: Path, ref: str) -> None:
     if _commit(dest, f"refs/heads/{ref}"):
         run("switch", "--quiet", "--no-guess", ref, cwd=dest)
         if run("merge", "--ff-only", "--quiet", f"refs/remotes/origin/{ref}", cwd=dest, check=False) is None:
-            raise XoError(f"./{dest}: your branch {ref} has commits its remote lacks; push them first (git push "
-                          "in that folder)")
+            raise XoError(f"./{dest}: your branch {ref} and its remote have both moved on; rebase yours on it and "
+                          "push (git pull --rebase, then git push, in that folder), then try again")
     else:
         run("switch", "--quiet", "--create", ref, "--track", f"refs/remotes/origin/{ref}", cwd=dest)
 

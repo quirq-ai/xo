@@ -275,8 +275,8 @@ spaces: [{"name": "dev", "kind": "claude-code", "id": "<XO space id>", "rev": 2,
   The re-read gives 409 to one whose write did not stick, but if both re-reads land before the
   second write, both get 200 and the later write stands. The other client's next update is then
   refused, since the space no longer holds the `base` it sends. A space's `rev` can also go back
-  when a stale write lands outside the settle; `xo sync` then keeps the caller's refs and records
-  them again.
+  when a stale write lands outside the settle; `xo sync` then stops, names the projects whose refs
+  differ, records nothing and leaves the choice to the caller (`xo install` takes the space's).
 - **Names and refs.** A space name is 1 to 64 letters, digits, `_ . -`, starting with a letter or
   digit (it becomes a folder). A ref is a branch, tag or commit sha: letters, digits and `. _ / -`,
   starting with a letter or digit, never holding `..`, `//`, `/.` or `@{`, never ending in `/`, `.`

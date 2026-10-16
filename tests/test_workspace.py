@@ -213,16 +213,18 @@ def test_space_sync_rebases_each_branch_on_its_upstream_and_pushes_it(space):
     assert git("log", "-2", "--format=%s", "main", cwd=space.hub.root / "o/a").split("\n") == ["mine", "theirs"]
 
 
-def test_sync_keeps_your_refs_when_the_space_went_back_to_an_older_rev(space):
+def test_sync_stops_when_the_space_went_back_to_an_older_rev(space):
     space.hub.commit("o/a", "feature", "feature work")
     workspace.install(space.client, "space", "dev")
     git("fetch", "-q", cwd="dev/o/a")
     git("switch", "-q", "feature", cwd="dev/o/a")
     assert workspace.update(space.client, "space", "dev")["rev"] == 2
-    _stored(space).update(rev=1, projects=[{"o/a": "main"}, {"o/b": "v1"}, {"notes": "main"}])  # a stale writer
-    out = workspace.sync(space.client, "space", "dev")
-    assert out["projects"][0] == {"o/a": "feature"} and git("branch", "--show-current", cwd="dev/o/a") == "feature"
-    assert _stored(space)["projects"][0] == {"o/a": "feature"}
+    # A stale writer put rev 1 back, and someone may have recorded on top of it: neither side wins.
+    _stored(space).update(rev=1, projects=[{"o/a": "main"}, {"o/b": "v1"}, {"notes": "main"}])
+    patches = len(space.store.patches)
+    with pytest.raises(XoError, match="went back to rev 1 from your rev 2.*o/a.*nothing was recorded"):
+        workspace.sync(space.client, "space", "dev")
+    assert git("branch", "--show-current", cwd="dev/o/a") == "feature" and len(space.store.patches) == patches
 
 
 def test_a_sync_whose_record_is_refused_never_undoes_the_newer_write_next_time(space, monkeypatch):
