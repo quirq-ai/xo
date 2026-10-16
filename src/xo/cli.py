@@ -329,8 +329,28 @@ def _send(client: Client, args: argparse.Namespace, method: str, path: str, *, q
     if copies:
         print(f"xo: {commands.COPIES_KEY}", file=sys.stderr)
     resp = client.request(method, path, query=query, body=body, headers=headers)
-    _print(client, resp.data, resp.text)
+    data = _profile(resp.data) if op is not None and op.server and op.op_id == "get_me" else resp.data
+    _print(client, data, resp.text)
     return 0
+
+
+_PROFILE_FIRST = ("username", "imageUrl", "firstName", "lastName", "email", "id", "createdAt")
+_BUCKETS = (("publicMetadata", "public_data"), ("privateMetadata", "private_data"))
+
+
+def _profile(data: Any) -> Any:
+    """`xo me`: the xo server's answer as one profile under "xo", its metadata last as public_data
+    and private_data. Anything that is not a successful answer is shown as it came."""
+    if not (isinstance(data, dict) and data.get("success") is True and isinstance(data.get("data"), dict)):
+        return data
+    user = data["data"]
+    names = [k for k in _PROFILE_FIRST if k in user]
+    names += [k for k in user if k not in names and k not in dict(_BUCKETS)]
+    profile = {k: user[k] for k in names}
+    for name, shown in _BUCKETS:
+        if name in user:
+            profile[shown] = user[name] if user[name] is not None else {}
+    return {"xo": profile}
 
 
 def _ops(args: argparse.Namespace) -> int:
