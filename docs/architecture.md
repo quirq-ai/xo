@@ -6,7 +6,8 @@ it. Standard library only. Setup is in [quickstart.md](quickstart.md); the serve
 [server.md](server.md).
 
 This describes main at 4027932 (through #33). Every command has its own sequence diagram in
-section 3.
+section 3. [architecture.html](architecture.html) is the same doc as a page with drawn diagrams;
+GitHub shows it as source, so open it locally or from a static host.
 
 | Mode | Runs on | Holds | Entry point |
 |---|---|---|---|
