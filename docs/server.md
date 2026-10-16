@@ -24,7 +24,7 @@ xo codex, ... ──────┘                      └── /api/core/v1/
 | GET | `/healthz` | anyone | `{"status": "ok"}`, with no Clerk call |
 | GET | `/` | anyone | the status page: health, counts and the latest requests, refreshed every 5 seconds |
 | GET | `/status` | anyone | what the page shows, as JSON; no Clerk call |
-| GET | `/config` | anyone | the services list `xo login` reads (`src/xo/services.json`), with `xo.url` set to where this server passes `/api/core/v1` on to (null when that is not a plain https address); addresses only, no Clerk call; answers even when the server is missing its settings |
+| GET | `/config` | anyone | the services list `xo login` reads (`src/xo/services.json`), with `xo.url` set to where this server passes `/api/core/v1` on to (null when that is not a plain https address); addresses only (`me.url` is xo's shipped address, not necessarily this server), no Clerk call; answers even when the server is missing its settings |
 | GET | `/me` | any user key | `id`, `username`, `firstName`, `lastName`, `imageUrl`, `createdAt`; never email or metadata |
 | GET | `/user-metadata/{userId}` | admin keys | `publicMetadata`, `privateMetadata` |
 | PATCH | `/user-metadata/{userId}` | admin keys | both buckets after a deep merge; `null` removes a key |

@@ -107,9 +107,10 @@ is a subcommand, and `me` for the xo server that answers `xo me`:
 | `xo` | `https://dev.xo.builders`, reached through the xo server | the same XO API key | `xo claude-code`, `xo codex`, `xo openclaw`, ... and `xo spaces` |
 | `coder` | `https://dev-coder.xo.builders` | Coder's own login, in your terminal | `xo coder github`, `xo coder list`, `ssh`, ... |
 
-Every XO API command, creates included, still goes to the xo server you logged in to, and the
-server passes creates on to the `xo` address, so your key is sent to one address. A served list's
-`me` address is shown for information; it never changes where xo sends the key.
+Every XO API command, creates included, goes to the xo server you logged in to: xo sends your key
+to that one address, and the server passes it on to the `xo` address with each create. xo does not
+use a served list's `me` address; the key's address is always `--url`, `XO_URL`, the one `xo login`
+saved, else `https://xo.quirq.dev`.
 
 **Changed: XO's platform is now `https://dev.xo.builders`, not `https://app.xo.builders`.** Every
 create carries your XO API key, and it now goes to dev.xo.builders. The xo server takes the new

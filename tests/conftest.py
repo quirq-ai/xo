@@ -25,6 +25,19 @@ class FakeXo:
 
 
 @pytest.fixture(autouse=True)
+def loopback_only(monkeypatch):
+    """No test may reach a real host: anything but loopback fails to resolve."""
+    import socket
+    real = socket.getaddrinfo
+
+    def guard(host, *args, **kwargs):
+        if host not in ("127.0.0.1", "localhost", "::1"):
+            raise socket.gaierror(socket.EAI_NONAME, f"tests reach loopback only, not {host}")
+        return real(host, *args, **kwargs)
+    monkeypatch.setattr(socket, "getaddrinfo", guard)
+
+
+@pytest.fixture(autouse=True)
 def config_home(tmp_path, monkeypatch):
     """Every test gets its own empty config folder, so a key saved by xo login on this machine is
     never read, and no test writes to the real one."""

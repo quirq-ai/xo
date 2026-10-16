@@ -31,7 +31,7 @@ KNOWN = ("me", "xo", "coder")
 # Where each entry sits in the list, and the keys an entry may hold besides nested services.
 _PLACES = {"me": ("me",), "xo": ("xo",), "coder": ("xo", "coder")}
 _FIELDS = ("url", "about")
-# Names the addresses file used before xo-services/2, read once and written under the new names.
+# Names the addresses file used before xo-services/2, read under the new names until the file is next saved.
 _OLD_NAMES = {"xo-server": "me", "xo-platform": "xo"}
 MAX_LIST = 64 * 1024
 _HOST = re.compile(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*")
@@ -91,6 +91,12 @@ def parse(data: object) -> tuple[dict[str, Service], list[str]]:
             raise XoError(f"its entry for {name} is not an object")
         if entry.get("url") is None:
             notes.append(f"the list gives no address for {name}")
+        elif name == "me":
+            # xo never sends anything to a listed me, so a bad one is skipped, not fatal to the list.
+            try:
+                found[name] = Service(name, listed_url(name, entry.get("url")), _clean(entry.get("about")))
+            except XoError as e:
+                notes.append(f"{e}; xo does not use it, so it is skipped")
         else:
             found[name] = Service(name, listed_url(name, entry.get("url")), _clean(entry.get("about")))
         nested = {"xo": ("coder",)}.get(name, ())
@@ -139,6 +145,8 @@ def fetch(server: str, timeout: float) -> tuple[dict[str, Service], list[str]]:
     for name in KNOWN:
         if name not in found:
             found[name] = own[name]
+            if any(n.startswith(f"the address for {name} in the list") for n in notes):
+                continue  # the note already says it was skipped
             if name == "xo":
                 # The server names where it passes creates on to; without it, xo's own copy is a guess.
                 note = "the server's list gives no address for xo; showing xo's own, which may not be where it sends creates"
