@@ -42,10 +42,10 @@ xo logout         # deletes your XO key; logs Coder and gh out (asks first for e
   Otherwise it runs `gh auth login` for github.com, which opens your browser; then it checks again.
   xo never sees or saves the GitHub token: gh keeps it. If `GH_TOKEN` or `GITHUB_TOKEN` is set in
   your terminal, gh uses that instead, and xo says so.
-  gh then asks "Authenticate Git with your GitHub credentials?", and xo prints a line saying so
-  first. Yes (gh's default) makes gh git's login for github.com, which changes `~/.gitconfig` or
-  the github.com login your system keeps for git (the Keychain on a Mac). Answer `n` to leave git
-  as it is.
+  gh may then ask "Authenticate Git with your GitHub credentials?" (not when it already is git's
+  login), and xo prints a line saying so first. Yes (gh's default) makes gh git's login for
+  github.com, which changes `~/.gitconfig` or the github.com login your system keeps for git (the
+  Keychain on a Mac). Answer `n` to leave git as it is.
 
 The key, coder and github each end with one line (`xo: me: ...`, `xo: coder: ...`,
 `xo: github: ...`): logged in, already logged in, skipped (CLI not installed), or failed and why. One

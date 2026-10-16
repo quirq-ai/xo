@@ -34,6 +34,7 @@ def pytest_runtest_call(item):
     import subprocess
     from xo import github
     assert github.subprocess is not subprocess, f"{item.nodeid}: the real gh could run (is no_real_gh overridden?)"
+    assert not _coder_dirs(), f"{item.nodeid}: a real coder is on PATH (is no_real_coder overridden?)"
 
 
 @pytest.fixture(autouse=True)
@@ -73,6 +74,34 @@ def no_real_gh():
             CompletedProcess=subprocess.CompletedProcess))
         for name in ("GH_TOKEN", "GITHUB_TOKEN", "GH_HOST"):
             mp.delenv(name, raising=False)
+        yield
+
+
+_BASETEMP = None  # pytest's temp root, where every tmp_path lives; set by no_real_coder
+
+
+def _coder_dirs(path=None, base=None):
+    """The PATH directories holding a coder that is not a test's own fake (those live under pytest's
+    temp root, not merely anywhere in /tmp). An empty entry is the current folder, as in POSIX."""
+    import os
+    base = os.path.realpath(base or _BASETEMP)
+    dirs = (path if path is not None else os.environ.get("PATH", "")).split(os.pathsep)
+    return [d for d in dirs if os.access(os.path.join(d or os.curdir, "coder"), os.X_OK)
+            and not os.path.realpath(d or os.curdir).startswith(base + os.sep)]
+
+
+@pytest.fixture(autouse=True)
+def no_real_coder(tmp_path_factory):
+    """No test runs the real Coder CLI, which keeps a session token and sends it to any --url: the
+    PATH directories that hold one are dropped. A test may still put its own fake coder on PATH."""
+    import os
+    global _BASETEMP
+    _BASETEMP = str(tmp_path_factory.getbasetemp())
+    with pytest.MonkeyPatch.context() as mp:
+        path = os.environ.get("PATH", "")
+        drop = set(_coder_dirs(path))
+        mp.setenv("PATH", os.pathsep.join(d for d in path.split(os.pathsep) if d not in drop))
+        mp.delenv("CODER_SESSION_TOKEN", raising=False)
         yield
 
 

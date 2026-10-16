@@ -560,15 +560,15 @@ def _login_xo(args: argparse.Namespace, url: str, saved: Login | None) -> str:
 
 def _key_works(client: Client) -> bool:
     try:
-        _check_with_xo(client, client.base)
+        _check_with_xo(client, client.base, "the saved key")
         return True
     except XoError:
         return False
 
 
-def _check_with_xo(client: Client, url: str) -> None:
+def _check_with_xo(client: Client, url: str, what: str = "the key") -> None:
     # The check goes through the server to XO and can take a while; say so, so the wait never looks stuck.
-    print(f"xo: checking the key with XO through {url} ...", file=sys.stderr, flush=True)
+    print(f"xo: checking {what} with XO through {url} ...", file=sys.stderr, flush=True)
     try:
         client.request("GET", f"{CORE_PATH}/spaces/{PROBE_SPACE}")
     except XoError as e:

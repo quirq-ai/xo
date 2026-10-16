@@ -102,7 +102,7 @@ def test_login_runs_gh_in_the_terminal_and_checks_it_worked(monkeypatch, capsys,
     assert code == 0 and "xo: github: connected to github.com as octocat\n" in err
     assert gh.ran("auth", "login") == [["gh", "auth", "login", "--hostname", "github.com",
                                         "--git-protocol", "https", "--web"]]
-    assert "Authenticate Git with your GitHub credentials?" in err and "answer n to leave git as it is" in err
+    assert "gh may ask \"Authenticate Git with your GitHub credentials?\"" in err and "answer n to leave git as it is" in err
 
 
 def test_logged_in_only_to_another_host_reads_as_not_logged_in(monkeypatch, capsys, terminal):
@@ -149,9 +149,12 @@ def test_a_refused_login_is_not_called_logged_out(monkeypatch, capsys, wording):
     gh = FakeGh(monkeypatch, wording=wording)
     gh.revoked = True
     assert "GitHub did not accept it or could not be reached" in run(capsys, "status")[1]
-    monkeypatch.setattr(cli, "_ask", lambda question: False)
+    asked = []
+    monkeypatch.setattr(cli, "_ask", lambda question: asked.append(question) or False)
     code, _, err = run(capsys, "logout")
     assert code == 0 and "xo: github: left logged in\n" in err and gh.ran("auth", "logout") == []
+    assert asked == ["Log gh out of github.com (a login GitHub did not accept or could not check)? git over "
+                     "https on this machine may use the same login"]
 
 
 def test_logout_asks_before_logging_gh_out(monkeypatch, capsys):
