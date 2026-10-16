@@ -25,7 +25,7 @@ xo codex, ... ──────┘                      └── /api/core/v1/
 | GET | `/` | anyone | the status page: health, counts and the latest requests, refreshed every 5 seconds |
 | GET | `/status` | anyone | what the page shows, as JSON; no Clerk call |
 | GET | `/config` | anyone | the services list `xo login` reads (`src/xo/services.json`), with `xo.url` set to where this server passes `/api/core/v1` on to (null when that is not a plain https address); addresses only (`me.url` is xo's shipped address, not necessarily this server), no Clerk call; answers even when the server is missing its settings |
-| GET | `/me` | any user key | `id`, `username`, `firstName`, `lastName`, `imageUrl`, `createdAt`; never email or metadata |
+| GET | `/me` | any user key | `id`, `username`, `firstName`, `lastName`, `imageUrl`, `createdAt`, `email` (primary), `publicMetadata`, `privateMetadata`: the key's own user only, with secret-looking values masked |
 | GET | `/user-metadata/{userId}` | admin keys | `publicMetadata`, `privateMetadata` |
 | PATCH | `/user-metadata/{userId}` | admin keys | both buckets after a deep merge; `null` removes a key |
 | POST | `/api/core/v1/{create}` | an `ak_` key | XO's answer: `claude-code`, `codex`, `antigravity`, `hermes`, `openclaw`, `xo-cowork`, `nebius-openclaw` |
@@ -99,8 +99,14 @@ and when each request (admin metadata reads and writes included) happened and ho
 
 ## Who can do what
 
-- **Any user key** can read its own account through `/me`. The key is verified with Clerk on every
-  request and never cached, so a revoked key stops at once.
+- **Any user key** can read its own account through `/me`, including its own public and private
+  metadata. The user is the one Clerk ties the key to, never an id from the request. The key is
+  verified with Clerk on every request and never cached, so a revoked key stops at once. Under a
+  metadata name that reads like a credential (token, secret, password, credential, cookie, key,
+  `apiKey`, `accessKey`, `privateKey` and the like, at any depth), `/me` shows only the last 4
+  characters of a value 12 characters or longer, and `(hidden)` for anything else. Admin rights
+  never come from metadata, so a user reading their own does not learn anything that grants them.
+  Metadata values are never written to the log or the status page.
 - **An admin key** is a Clerk API key that has the claim `xo_admin: true` **and** whose id is in
   `XO_ADMIN_KEY_IDS`. A key with the claim but not on the list is refused, and the refusal is
   logged with `claimedAdmin: true`, since that is what a forged key would look like.

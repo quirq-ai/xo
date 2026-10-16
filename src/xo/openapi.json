@@ -820,10 +820,10 @@
           "users"
         ],
         "summary": "Show the account this API key belongs to (xo server)",
-        "description": "Returns the key's user: id, username, first and last name, image URL, created time. Served by an xo server (`xo serve`) at $XO_URL (the default https://xo.quirq.dev), not by XO's platform.",
+        "description": "Returns the key's user: id, username, first and last name, image URL, created time, primary email, and its public and private metadata (values under secret-looking names masked). `xo me` prints it as {\"xo\": {..., \"public_data\": {}, \"private_data\": {}}}. Served by an xo server (`xo serve`) at $XO_URL (the default https://xo.quirq.dev), not by XO's platform.",
         "responses": {
           "200": {
-            "description": "data.id, data.username, data.firstName, data.lastName, data.imageUrl, data.createdAt"
+            "description": "data.id, data.username, data.firstName, data.lastName, data.imageUrl, data.createdAt, data.email, data.publicMetadata, data.privateMetadata"
           },
           "401": {
             "description": "Bad key, or a key not tied to a user"

@@ -36,7 +36,9 @@ KEYS = {
 USERS = {
     "user_alice": {"id": "user_alice", "username": "alice", "first_name": "Alice", "last_name": "A",
                    "image_url": "https://img.example/a", "created_at": 1700000000000,
-                   "email_addresses": [{"email_address": "alice@example.com"}],
+                   "primary_email_address_id": "idn_2",
+                   "email_addresses": [{"id": "idn_1", "email_address": "old@example.com"},
+                                       {"id": "idn_2", "email_address": "alice@example.com"}],
                    "public_metadata": {"plan": "free"}, "private_metadata": {"stripeId": "cus_1"}},
     "user_suraj": {"id": "user_suraj", "username": "suraj", "public_metadata": {}, "private_metadata": {}},
 }
@@ -182,21 +184,47 @@ def test_health_needs_no_key_and_no_clerk_call(xo_server, clerk):
     assert clerk.calls == []
 
 
-def test_me_verifies_the_key_and_returns_the_fixed_fields(xo_server, clerk):
+def test_me_verifies_the_key_and_returns_the_profile(xo_server, clerk):
     status, out = call(xo_server, "GET", "/me", USER_KEY)
     assert status == 200
     assert out["data"] == {"id": "user_alice", "username": "alice", "firstName": "Alice", "lastName": "A",
-                           "imageUrl": "https://img.example/a", "createdAt": 1700000000000}
+                           "imageUrl": "https://img.example/a", "createdAt": 1700000000000,
+                           "email": "alice@example.com", "publicMetadata": {"plan": "free"},
+                           "privateMetadata": {"stripeId": "cus_1"}}
     verify = clerk.calls[0]
     assert (verify["method"], verify["path"], verify["body"]) == ("POST", "/v1/api_keys/verify", {"secret": USER_KEY})
     sent = {k.lower(): v for k, v in verify["headers"].items()}
     assert sent["clerk-api-version"] == server.CLERK_API_VERSION and sent["authorization"] == f"Bearer {SECRET}"
-    assert clerk.calls[1]["path"] == "/v1/users/user_alice"
+    assert [c["path"] for c in clerk.calls[1:]] == ["/v1/users/user_alice"]  # only the key's own user
 
 
-def test_me_never_returns_email_or_metadata(xo_server):
-    out = json.dumps(call(xo_server, "GET", "/me", USER_KEY)[1])
-    assert "alice@example.com" not in out and "stripeId" not in out and "plan" not in out
+def test_me_with_no_metadata_or_email_says_so(xo_server):
+    out = call(xo_server, "GET", "/me", ADMIN_KEY)[1]["data"]
+    assert (out["email"], out["publicMetadata"], out["privateMetadata"]) == (None, {}, {})
+
+
+def test_me_masks_secret_looking_metadata_at_any_depth(xo_server, monkeypatch):
+    monkeypatch.setitem(USERS["user_alice"], "private_metadata", {
+        "githubToken": "ghp_abcdefghijklmnop1234", "api_key": "sk-live-0123456789wxyz", "password": "short",
+        "nested": {"clientSecret": {"a": 1}, "keys": ["k1"], "monkey": "banana", "keyboard": "us"},
+        "list": [{"accessKey": "AKIAABCDEFGHIJKL5678"}], "plan": "pro", "emptyToken": ""})
+    monkeypatch.setitem(USERS["user_alice"], "public_metadata", {"session_cookie": "c" * 20 + "WXYZ"})
+    out = call(xo_server, "GET", "/me", USER_KEY)[1]["data"]
+    assert out["privateMetadata"] == {
+        "githubToken": "\u20261234", "api_key": "\u2026wxyz", "password": "(hidden)",
+        "nested": {"clientSecret": "(hidden)", "keys": "(hidden)", "monkey": "banana", "keyboard": "us"},
+        "list": [{"accessKey": "\u20265678"}], "plan": "pro", "emptyToken": ""}
+    assert out["publicMetadata"] == {"session_cookie": "\u2026WXYZ"}
+    text = json.dumps(out)
+    assert "ghp_abcdefghijkl" not in text and "sk-live" not in text and "AKIAABCD" not in text
+
+
+def test_me_metadata_never_reaches_the_audit_log_or_status(xo_server, clerk, capfd):
+    call(xo_server, "GET", "/me", USER_KEY)
+    status = json.dumps(call(xo_server, "GET", "/status")[1])
+    err = capfd.readouterr().err
+    for value in ("cus_1", "stripeId", "free", "alice@example.com"):
+        assert value not in status and value not in err
 
 
 @pytest.mark.parametrize("key, error", [(None, "Missing API key"), ("ak_unknown", "Invalid API key"),
@@ -340,7 +368,9 @@ def test_the_cli_and_the_server_work_together(xo_server, monkeypatch, capfd):
     assert cli.main(["me"]) == 0
     out, err = capfd.readouterr()
     _no_secret(out, err)
-    assert json.loads(out)["data"]["username"] == "alice"
+    profile = json.loads(out)["xo"]
+    assert (profile["username"], profile["email"]) == ("alice", "alice@example.com")
+    assert (profile["public_data"], profile["private_data"]) == ({"plan": "free"}, {"stripeId": "cus_1"})
 
 
 def test_client_mode_never_loads_the_server():

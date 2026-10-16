@@ -64,7 +64,7 @@ xo openclaw --help                               # needs a provider key and a ch
 xo hermes --help
 xo xo-cowork --help
 xo spaces --space-id THE_ID                      # a space you created, with its URLs
-xo me                                            # whose key this is
+xo me                                            # your profile: name, image, email, public and private metadata
 ```
 
 - Add `--dry-run` to any create to see the request without sending it.

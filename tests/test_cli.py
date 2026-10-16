@@ -964,11 +964,31 @@ def xs(core, monkeypatch):
     return core
 
 
-def test_me_goes_to_the_xo_server(xs, capsys):
+def test_me_goes_to_the_xo_server_and_prints_one_profile(xs, capsys):
+    xs.route("GET", "/me", body={"success": True, "data": {
+        "id": "user_1", "createdAt": 1, "privateMetadata": {"tier": "\x9b2J", "note": KEY},
+        "publicMetadata": {"plan": "pro"}, "email": "sam@example.com", "imageUrl": "https://img.example/s",
+        "username": "sam", "extra": True}})
+    code, out, _ = run(capsys, "me")
+    assert code == 0 and xs.requests[0]["headers"]["Authorization"] == f"Bearer {KEY}"
+    assert KEY not in out and "\x9b" not in out and "\\u009b2J" in out
+    profile = json.loads(out)
+    assert list(profile) == ["xo"]
+    assert list(profile["xo"]) == ["username", "imageUrl", "email", "id", "createdAt", "extra",
+                                   "public_data", "private_data"]
+    assert profile["xo"]["public_data"] == {"plan": "pro"} and profile["xo"]["private_data"]["tier"] == "\x9b2J"
+
+
+def test_me_from_an_older_server_has_no_empty_buckets(xs, capsys):
     xs.route("GET", "/me", body={"success": True, "data": {"id": "user_1", "username": "sam"}})
     code, out, _ = run(capsys, "me")
-    assert code == 0 and json.loads(out)["data"]["username"] == "sam"
-    assert xs.requests[0]["headers"]["Authorization"] == f"Bearer {KEY}"
+    assert code == 0 and json.loads(out) == {"xo": {"username": "sam", "id": "user_1"}}
+
+
+def test_a_failed_me_is_shown_as_it_came(xs, capsys):
+    xs.route("GET", "/me", status=404, body={"success": False, "error": "Account not found"})
+    code, _, err = run(capsys, "me")
+    assert code != 0 and "Account not found" in err
 
 
 def test_the_url_must_be_https(core, capsys, monkeypatch):

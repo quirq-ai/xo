@@ -9,7 +9,8 @@ verifies it with Clerk and answers:
     GET   /                         the status page (HTML): health, counts and recent requests
     GET   /status                   the same as JSON: no key, no Clerk call, no ids
     GET   /healthz                  no key, no Clerk call
-    GET   /me                       any user key: the key's own account, a fixed list of fields
+    GET   /me                       any user key: the key's own account, with its primary email and
+                                    its public and private metadata (secret-looking values masked)
     GET   /user-metadata/{userId}   admin keys only: public and private metadata
     PATCH /user-metadata/{userId}   admin keys only: deep-merge changes into allow-listed keys
     POST  /api/core/v1/{create}     passed on to XO's core API as sent, key included, and its
@@ -253,6 +254,46 @@ class Clerk:
     def update_metadata(self, user_id: str, changes: dict) -> dict:
         body = {BUCKETS[name]: value for name, value in changes.items()}
         return self._call("PATCH", "/users/" + urllib.parse.quote(user_id, safe="") + "/metadata", body)
+
+
+# Metadata names that read like a credential: their values are masked in /me, which hands a user's
+# metadata back over a long-lived API key. /user-metadata (admin keys) shows values as stored.
+_SECRET_WORDS = {"token", "tokens", "secret", "secrets", "password", "passwd", "pwd", "credential",
+                 "credentials", "cookie", "cookies", "key", "keys", "apikey", "passphrase"}
+_SECRET_PARTS = ("token", "secret", "passw", "credential", "apikey", "privatekey", "accesskey")
+
+
+def _secret_name(name: str) -> bool:
+    words = {w.lower() for w in re.findall(r"[A-Z]?[a-z]+|[A-Z]+(?![a-z])|[0-9]+", name)}
+    flat = re.sub(r"[^a-z0-9]", "", name.lower())
+    return bool(words & _SECRET_WORDS) or any(part in flat for part in _SECRET_PARTS)
+
+
+def _mask(value: Any) -> str:
+    """The last 4 characters of a long string; nothing of anything shorter or not a string."""
+    if isinstance(value, str) and len(value) >= 12:
+        return "\u2026" + value[-4:]
+    return "(hidden)"
+
+
+def _mask_secrets(value: Any, depth: int = 0) -> Any:
+    """A copy with the value under every secret-looking name masked, at any depth."""
+    if depth > 32:
+        return "(hidden)"
+    if isinstance(value, dict):
+        return {k: (_mask(v) if isinstance(k, str) and _secret_name(k) and v not in (None, "")
+                    else _mask_secrets(v, depth + 1)) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_mask_secrets(v, depth + 1) for v in value]
+    return value
+
+
+def _primary_email(u: dict) -> str | None:
+    primary = u.get("primary_email_address_id")
+    for e in u.get("email_addresses") or []:
+        if isinstance(e, dict) and primary is not None and e.get("id") == primary:
+            return e.get("email_address")
+    return None
 
 
 class Core:
@@ -523,7 +564,12 @@ class App:
                 raise _Reply(404, "Account not found") from None
             raise _clerk_failure(e) from None
         data = {"id": u.get("id"), "username": u.get("username"), "firstName": u.get("first_name"),
-                "lastName": u.get("last_name"), "imageUrl": u.get("image_url"), "createdAt": u.get("created_at")}
+                "lastName": u.get("last_name"), "imageUrl": u.get("image_url"), "createdAt": u.get("created_at"),
+                "email": _primary_email(u),
+                # The key's own user only (the subject Clerk verified, never an id from the request).
+                # Admin rights come from the key's claim and $XO_ADMIN_KEY_IDS, not from metadata.
+                "publicMetadata": _mask_secrets(u.get("public_metadata") or {}),
+                "privateMetadata": _mask_secrets(u.get("private_metadata") or {})}
         with self._lock:
             self._me_cache[subject] = (now, data)
         return data
