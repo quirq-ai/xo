@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from conftest import KEY, git
-from xo import cli
+from xo import cli, names
 from xo.client import XoError, coder_url, xo_url
 
 
@@ -287,15 +287,15 @@ def test_endpoint_commands_are_listed_in_help(fake, capsys):
     with pytest.raises(SystemExit):
         cli.main(["--help"])
     out = capsys.readouterr().out
-    for name in ("claude-code", "templates", "orgs-templates", "health"):
+    for name in ("agent-run", "templates", "orgs-templates", "health"):
         assert f"\n    {name}" in out
 
 
 def test_a_single_operation_endpoint_is_one_command(fake, capsys):
-    fake.route("POST", "/claude-code", body={"ok": True})
-    code, out, err = run(capsys, "claude-code", "--prompt", "hello", "--project-id", "p1")
+    fake.route("POST", "/agent-run", body={"ok": True})
+    code, out, err = run(capsys, "agent-run", "--prompt", "hello", "--project-id", "p1")
     assert code == 0 and json.loads(out) == {"ok": True}
-    assert err == f"xo: POST {fake.base}/api/core/v1/claude-code\n"
+    assert err == f"xo: POST {fake.base}/api/core/v1/agent-run\n"
     assert fake.requests[0]["body"] == {"prompt": "hello", "project_id": "p1"}
     assert fake.requests[0]["headers"]["Authorization"] == f"Bearer {KEY}"
 
@@ -319,7 +319,7 @@ def test_shared_paths_get_method_actions(fake, capsys):
 
 def test_endpoint_commands_check_required_inputs(fake, capsys):
     assert "needs --name" in run(capsys, "templates", "create", "--public", "true")[2]
-    assert "needs --prompt" in run(capsys, "claude-code", "--project-id", "p1")[2]
+    assert "needs --prompt" in run(capsys, "agent-run", "--project-id", "p1")[2]
     assert run(capsys, "templates", "get")[2].endswith("needs --template-id\n")
     code, out, _ = run(capsys, "templates", "create", "--name", "x", "--dry-run")
     assert code == 0 and json.loads(out)["body"] == {"name": "x"}
@@ -336,7 +336,7 @@ def test_without_a_local_spec_only_the_builtins_exist(fake, capsys, monkeypatch)
     monkeypatch.delenv("XO_SPEC")
     monkeypatch.setattr("xo.spec._bundled", lambda: None)
     with pytest.raises(SystemExit):
-        cli.main(["claude-code"])
+        cli.main(["agent-run"])
     assert "invalid choice" in capsys.readouterr().err
     assert fake.requests == []
 
@@ -433,7 +433,7 @@ def test_a_bad_spec_leaves_the_builtins_working(fake, capsys, monkeypatch, tmp_p
     fake.route("GET", "/health", body={"ok": 1})
     assert run(capsys, "api", "GET", "/health")[0] == 0
     with pytest.raises(SystemExit) as e:
-        cli.main(["claude-code", "--prompt", "x"])
+        cli.main(["agent-run", "--prompt", "x"])
     err = capsys.readouterr().err
     # A spec that cannot be read says so in one line; one that reads but lacks the command is a usage error.
     assert e.value.code == code
@@ -445,7 +445,7 @@ def test_a_bad_spec_leaves_the_builtins_working(fake, capsys, monkeypatch, tmp_p
 
 def test_an_unreadable_named_spec_says_so(fake, capsys, tmp_path):
     with pytest.raises(SystemExit) as e:
-        cli.main(["--spec", str(tmp_path / "missing.json"), "claude-code", "--prompt", "x"])
+        cli.main(["--spec", str(tmp_path / "missing.json"), "agent-run", "--prompt", "x"])
     assert e.value.code == 1
     assert "cannot use spec" in capsys.readouterr().err
 
@@ -497,8 +497,8 @@ def test_own_headers_get_no_flag_and_cannot_be_passed(fake, capsys, monkeypatch,
 
 
 def test_a_string_field_keeps_its_text(fake, capsys):
-    fake.route("POST", "/claude-code", body={})
-    assert run(capsys, "claude-code", "--prompt", "true")[0] == 0
+    fake.route("POST", "/agent-run", body={})
+    assert run(capsys, "agent-run", "--prompt", "true")[0] == 0
     assert fake.requests[0]["body"] == {"prompt": "true"}
 
 
@@ -624,7 +624,7 @@ def test_a_spec_that_breaks_argparse_leaves_the_builtins(fake, capsys, monkeypat
     fake.route("GET", "/health", body={})
     assert run(capsys, "api", "GET", "/health")[0] == 0
     with pytest.raises(SystemExit) as e:
-        cli.main(["claude-code"])
+        cli.main(["agent-run"])
     assert e.value.code == 1 and "TypeError: odd spec" in capsys.readouterr().err
 
 
@@ -675,6 +675,11 @@ def core(fake, monkeypatch):
     return fake
 
 
+def space(kind: str, name: str = "c") -> list[str]:
+    """`xo create space NAME KIND`: every create, recorded through the xo server."""
+    return ["create", "space", name, kind]
+
+
 def test_the_default_url_is_the_xo_server():
     from xo.client import CORE_PATH, DEFAULT_URL
     assert DEFAULT_URL == "https://xo.quirq.dev" and CORE_PATH == "/api/core/v1"
@@ -682,8 +687,8 @@ def test_the_default_url_is_the_xo_server():
 
 def test_every_command_goes_to_one_url(core, capsys, monkeypatch):
     monkeypatch.delenv("XO_URL")
-    out = run(capsys, "codex", "--name", "a", "--volume-size", "20", "--dry-run")[1]
-    assert json.loads(out)["url"] == "https://xo.quirq.dev/api/core/v1/codex"
+    out = run(capsys, *space("codex"), "--volume-size", "20", "--dry-run")[1]
+    assert json.loads(out)["url"] == "https://xo.quirq.dev/me/spaces"
     out = run(capsys, "me", "--dry-run")[1]
     assert json.loads(out)["url"] == "https://xo.quirq.dev/me"
     monkeypatch.setenv("XO_URL", "https://other.example/")
@@ -693,32 +698,52 @@ def test_every_command_goes_to_one_url(core, capsys, monkeypatch):
     assert json.loads(out)["url"] == "http://localhost:8787/me"
 
 
-def test_every_core_endpoint_is_a_command(core, capsys):
+def test_every_core_endpoint_is_a_command_and_every_create_a_kind(core, capsys):
     with pytest.raises(SystemExit):
         cli.main(["--help"])
     out = capsys.readouterr().out
-    for name in ("claude-code", "codex", "antigravity", "hermes", "openclaw", "xo-cowork",
-                 "nebius-openclaw", "spaces", "me", "user-metadata"):
+    for name in ("spaces", "me", "user-metadata", "create"):
         assert f"\n    {name}" in out
+    for kind in names.SPACE_KINDS:
+        assert f"\n    {kind} " not in out
+    with pytest.raises(SystemExit):
+        cli.main(["create", "space", "--help"])
+    out = capsys.readouterr().out
+    for kind in names.SPACE_KINDS:
+        assert f"\n    {kind}" in out
 
 
-def test_a_create_sends_the_body_under_the_base_path(core, capsys):
-    core.route("POST", "/api/core/v1/codex", status=201,
-               body={"success": True, "data": {"id": "s1", "name": "my-codex", "type": "codex"}})
-    code, out, err = run(capsys, "codex", "--name", "my-codex", "--volume-size", "20")
-    assert code == 0 and json.loads(out)["data"]["id"] == "s1"
-    assert err == (f"xo: POST {core.base}/api/core/v1/codex\n"
+@pytest.mark.parametrize("kind", names.SPACE_KINDS)
+def test_the_old_create_commands_say_what_replaced_them(core, capsys, kind):
+    code, out, err = run(capsys, kind, "--name", "my-space", "--providers-anthropic-api-key", ANTHROPIC)
+    assert code == 1 and out == "" and core.requests == []
+    assert err == (f"xo: xo {kind} is now xo create space NAME {kind} [flags]; NAME is the space's name on XO "
+                   "and in your spaces, so leave out --name\n")
+
+
+def test_a_create_names_the_space_once(core, capsys):
+    core.route("POST", "/me/spaces", status=200,
+               body={"success": True, "data": {"space": {"name": "my-codex"}, "xo": {"id": "s1"}}})
+    code, out, err = run(capsys, *space("codex", "my-codex"), "--volume-size", "20")
+    assert code == 0 and json.loads(out)["data"]["xo"]["id"] == "s1"
+    assert err == (f"xo: POST {core.base}/me/spaces\n"
                    "xo: the new space gets a copy of this API key (as xo_api_key)\n")
-    assert core.requests[0]["body"] == {"name": "my-codex", "volumeSize": 20}
+    assert core.requests[0]["body"] == {"kind": "codex", "name": "my-codex",
+                                        "body": {"name": "my-codex", "volumeSize": 20}}
+
+
+@pytest.mark.parametrize("argv", [["--name", "other"], ["--data", '{"name": "other"}']])
+def test_a_create_takes_its_name_only_from_name(core, capsys, argv):
+    assert _refused(capsys, *space("codex"), "--volume-size", "20", *argv) and core.requests == []
 
 
 def test_nested_flags_build_enabled_objects(core, capsys):
-    code, out, _ = run(capsys, "openclaw", "--name", "c", "--volume-size", "20",
+    code, out, _ = run(capsys, *space("openclaw"), "--volume-size", "20",
                        "--providers-anthropic-api-key", "sk-ant-x",
                        "--notification-channels-slack-bot-token", "xoxb-1",
                        "--notification-channels-slack-app-token", "xapp-1", "--dry-run", "--show-secrets")
     assert code == 0
-    assert json.loads(out)["body"] == {
+    assert json.loads(out)["body"]["body"] == {
         "name": "c", "volumeSize": 20,
         "providers": {"anthropic": {"apiKey": "sk-ant-x", "enabled": True}},
         "notificationChannels": {"slack": {"botToken": "xoxb-1", "appToken": "xapp-1", "enabled": True}}}
@@ -726,29 +751,29 @@ def test_nested_flags_build_enabled_objects(core, capsys):
 
 
 def test_an_explicit_enabled_wins_over_the_default(core, capsys):
-    code, out, _ = run(capsys, "xo-cowork", "--name", "c", "--volume-size", "20",
+    code, out, _ = run(capsys, *space("xo-cowork"), "--volume-size", "20",
                        "--providers-openai-enabled", "false", "--providers-openai-api-key", "k", "--dry-run",
                        "--show-secrets")
-    assert json.loads(out)["body"]["providers"] == {"openai": {"enabled": False, "apiKey": "k"}}
+    assert json.loads(out)["body"]["body"]["providers"] == {"openai": {"enabled": False, "apiKey": "k"}}
 
 
 def test_required_objects_name_their_flags(core, capsys):
-    err = run(capsys, "openclaw", "--name", "c", "--volume-size", "20")[2]
+    err = run(capsys, *space("openclaw"), "--volume-size", "20")[2]
     # The key and token flags, since an object with only "enabled" is refused by the server (R6-N3).
-    assert err.startswith("xo: openclaw needs one of --providers-anthropic-api-key, --providers-openai-api-key, "
+    assert err.startswith("xo: create space openclaw needs one of --providers-anthropic-api-key, --providers-openai-api-key, "
                           "--providers-openrouter-api-key, one of --notification-channels-telegram-bot-token,")
     assert core.requests == []
 
 
 def test_a_nested_flag_needs_its_parent_to_be_an_object(core, capsys):
-    err = run(capsys, "hermes", "--name", "c", "--volume-size", "20", "--data", '{"providers": 1}',
+    err = run(capsys, *space("hermes"), "--volume-size", "20", "--data", '{"providers": 1}',
               "--providers-openai-api-key", "k")[2]
     assert "needs providers to be a JSON object" in err
 
 
 def test_hermes_has_no_whatsapp_flag(core, capsys):
     assert "unrecognized arguments" in _argparse_err(
-        capsys, "hermes", "--name", "c", "--volume-size", "20", "--notification-channels-whatsapp-creds", "x")
+        capsys, *space("hermes"), "--volume-size", "20", "--notification-channels-whatsapp-creds", "x")
 
 
 def test_get_a_space(core, capsys):
@@ -758,10 +783,10 @@ def test_get_a_space(core, capsys):
 
 
 def test_a_422_shows_the_servers_error(core, capsys):
-    core.route("POST", "/api/core/v1/codex", status=422,
-               body={"success": False, "error": "name: Invalid input"})
-    err = run(capsys, "codex", "--name=-x", "--volume-size", "2")[2]
-    assert err.endswith("HTTP 422: name: Invalid input\n")
+    core.route("POST", "/me/spaces", status=422,
+               body={"success": False, "error": "volumeSize: Invalid input"})
+    err = run(capsys, *space("codex"), "--volume-size", "2")[2]
+    assert err.endswith("HTTP 422: volumeSize: Invalid input\n")
 
 
 # --- audit round 6 -------------------------------------------------------------------------------
@@ -779,7 +804,7 @@ COWORK_SECRETS = {
 
 
 def _cowork(*extra: str) -> list[str]:
-    argv = ["xo-cowork", "--name", "c", "--volume-size", "20"]
+    argv = [*space("xo-cowork"), "--volume-size", "20"]
     for flag, value in COWORK_SECRETS.items():
         argv += [flag, value]
     return argv + list(extra)
@@ -788,15 +813,15 @@ def _cowork(*extra: str) -> list[str]:
 def test_a_dry_run_hides_provider_keys_and_bot_tokens(core, capsys):
     code, out, _ = run(capsys, *_cowork("--dry-run"))
     assert code == 0 and not any(v in out for v in COWORK_SECRETS.values())
-    body = json.loads(out)["body"]
+    body = json.loads(out)["body"]["body"]
     assert body["providers"]["anthropic"] == {"apiKey": "<hidden>", "enabled": True}
     assert body["notificationChannels"]["slack"]["appToken"] == "<hidden>"
     out = run(capsys, *_cowork("--dry-run", "--show-secrets"))[1]
     assert all(v in out for v in COWORK_SECRETS.values())
     # An empty key (XO's default Anthropic key on claude-code) is not a secret to hide.
-    out = run(capsys, "claude-code", "--name", "c", "--volume-size", "20", "--providers-anthropic-api-key", "",
+    out = run(capsys, *space("claude-code"), "--volume-size", "20", "--providers-anthropic-api-key", "",
               "--dry-run")[1]
-    assert json.loads(out)["body"]["providers"]["anthropic"]["apiKey"] == ""
+    assert json.loads(out)["body"]["body"]["providers"]["anthropic"]["apiKey"] == ""
     assert core.requests == []
 
 
@@ -804,7 +829,7 @@ def test_secrets_from_data_and_field_are_hidden_too(core, capsys, tmp_path):
     f = tmp_path / "body.json"
     f.write_text(json.dumps({"name": "c", "volumeSize": 20, "providers": {"anthropic": {"enabled": True,
                                                                                         "apiKey": ANTHROPIC}}}))
-    out = run(capsys, "hermes", "--data", f"@{f}", "--field",
+    out = run(capsys, *space("hermes"), "--data", f"@{f}", "--field",
               'notificationChannels={"telegram": {"enabled": true, "botToken": "%s"}}' % TELEGRAM, "--dry-run")[1]
     assert ANTHROPIC not in out and TELEGRAM not in out and out.count("<hidden>") == 2
     out = run(capsys, "call", "create_hermes", "--data", f"@{f}", "--dry-run")[1]
@@ -817,14 +842,14 @@ def test_secrets_from_data_and_field_are_hidden_too(core, capsys, tmp_path):
 def test_a_response_that_echoes_a_secret_is_redacted(core, capsys, status):
     echo = f"rejected {ANTHROPIC}; telegram {TELEGRAM}; key {KEY}"
     body = {"success": True, "data": {"note": echo}} if status == 201 else {"success": False, "error": echo}
-    core.route("POST", "/api/core/v1/openclaw", status=status, body=body)
-    code, out, err = run(capsys, "openclaw", "--name", "c", "--volume-size", "20",
+    core.route("POST", "/me/spaces", status=status, body=body)
+    code, out, err = run(capsys, *space("openclaw"), "--volume-size", "20",
                          "--providers-anthropic-api-key", ANTHROPIC,
                          "--notification-channels-telegram-bot-token", TELEGRAM)
     assert ANTHROPIC not in out + err and TELEGRAM not in out + err
     assert (out if status == 201 else err).count("<redacted>") == 3
     # The same through `xo api`, which finds the operation in the spec.
-    code, out, err = run(capsys, "api", "POST", "/openclaw", "--data", json.dumps(core.requests[0]["body"]))
+    code, out, err = run(capsys, "api", "POST", "/openclaw", "--data", json.dumps(core.requests[0]["body"]["body"]))
     assert ANTHROPIC not in out + err and TELEGRAM not in out + err
 
 
@@ -836,23 +861,23 @@ def test_api_hides_the_secrets_of_the_operation_it_matches(core, capsys):
 
 
 def test_a_secret_in_an_argparse_error_is_hidden(core, capsys):
-    err = _argparse_err(capsys, "hermes", "--name", "c", "--volume-size", "20",
+    err = _argparse_err(capsys, *space("hermes"), "--volume-size", "20",
                         "--notification-channels-whatsapp-creds", "FAKE-r6-whatsapp-creds-0123456789")
     assert "whatsapp-creds-0123456789" not in err and "<hidden>" in err
 
 
 def test_creates_that_store_the_key_say_so(core, capsys):
-    core.route("POST", "/api/core/v1/nebius-openclaw", status=201, body={"success": True, "data": {"id": "n"}})
-    err = run(capsys, "nebius-openclaw", "--name", "c", "--token-factory-api-key", "tf-FAKE-0123456789")[2]
+    core.route("POST", "/me/spaces", body={"success": True, "data": {"space": {"name": "c"}, "xo": {"id": "n"}}})
+    err = run(capsys, *space("nebius-openclaw"), "--token-factory-api-key", "tf-FAKE-0123456789")[2]
     assert "copy of this API key" not in err
-    err = run(capsys, "codex", "--name", "c", "--volume-size", "20", "--dry-run")[2]
+    err = run(capsys, *space("codex"), "--volume-size", "20", "--dry-run")[2]
     assert "xo: the new space gets a copy of this API key (as xo_api_key)" in err
     for command in ("claude-code", "codex", "antigravity", "hermes", "openclaw", "xo-cowork"):
         with pytest.raises(SystemExit):
-            cli.main([command, "--help"])
+            cli.main([*space(command), "--help"])
         assert "copy of this API key" in " ".join(capsys.readouterr().out.split())
     with pytest.raises(SystemExit):
-        cli.main(["nebius-openclaw", "--help"])
+        cli.main([*space("nebius-openclaw"), "--help"])
     assert "copy of this API key" not in " ".join(capsys.readouterr().out.split())
 
 
@@ -862,7 +887,7 @@ def test_creates_that_store_the_key_say_so(core, capsys):
     (["--data", '{"volumesize": 30}'], "did you mean 'volumeSize'?"),
 ])
 def test_an_unknown_top_level_field_is_refused(core, capsys, argv, hint):
-    code, _, err = run(capsys, "hermes", "--name", "c", "--volume-size", "20", *argv)
+    code, _, err = run(capsys, *space("hermes"), "--volume-size", "20", *argv)
     assert code == 1 and hint in err and ANTHROPIC not in err
     assert core.requests == []
     assert "xo api sends any body" in err
@@ -871,14 +896,14 @@ def test_an_unknown_top_level_field_is_refused(core, capsys, argv, hint):
 def test_a_secret_flag_reads_dash_from_stdin(core, capsys, monkeypatch):
     import io
     monkeypatch.setattr("sys.stdin", io.StringIO(ANTHROPIC + "\n"))
-    out = run(capsys, "claude-code", "--name", "c", "--volume-size", "20", "--providers-anthropic-api-key", "-",
+    out = run(capsys, *space("claude-code"), "--volume-size", "20", "--providers-anthropic-api-key", "-",
               "--dry-run", "--show-secrets")[1]
-    assert json.loads(out)["body"]["providers"]["anthropic"]["apiKey"] == ANTHROPIC
+    assert json.loads(out)["body"]["body"]["providers"]["anthropic"]["apiKey"] == ANTHROPIC
     monkeypatch.setattr("sys.stdin", io.StringIO(""))
-    err = run(capsys, "claude-code", "--name", "c", "--volume-size", "20", "--providers-anthropic-api-key", "-",
+    err = run(capsys, *space("claude-code"), "--volume-size", "20", "--providers-anthropic-api-key", "-",
               "--dry-run")[2]
     assert "read nothing from stdin" in err
-    err = run(capsys, "--api-key", "-", "claude-code", "--name", "c", "--volume-size", "20",
+    err = run(capsys, "--api-key", "-", *space("claude-code"), "--volume-size", "20",
               "--providers-anthropic-api-key", "-")[2]
     assert "all read stdin" in err and core.requests == []
 
@@ -887,9 +912,9 @@ def test_a_create_that_times_out_may_have_happened(core, capsys):
     import threading
     import time
     done = threading.Event()
-    core.route("POST", "/api/core/v1/codex", status=201,
+    core.route("POST", "/me/spaces", status=201,
                body=lambda req: time.sleep(1.5) or done.set() or {})
-    err = run(capsys, "--timeout", "0.3", "codex", "--name", "c", "--volume-size", "20")[2]
+    err = run(capsys, "--timeout", "0.3", *space("codex"), "--volume-size", "20")[2]
     assert "the request may have been received, so check before you retry" in err
     assert len(core.requests) == 1
     assert done.wait(5)  # the slow handler finishes inside this test, not during a later one
@@ -899,30 +924,30 @@ def test_an_interrupted_create_may_have_happened(core, capsys, monkeypatch):
     def interrupt(*a, **k):
         raise KeyboardInterrupt
     monkeypatch.setattr("urllib.request.OpenerDirector.open", interrupt)
-    code, _, err = run(capsys, "codex", "--name", "c", "--volume-size", "20")
+    code, _, err = run(capsys, *space("codex"), "--volume-size", "20")
     assert code == 130 and err.endswith("xo: interrupted; the request may have been received, so check before you retry\n")
     code, _, err = run(capsys, "spaces", "--space-id", "s1")
     assert code == 130 and err == "xo: interrupted\n"
 
 
 def test_yes_exists_only_where_a_delete_can_be_sent(core, capsys):
-    assert "unrecognized arguments: --yes" in _argparse_err(capsys, "codex", "--name", "c", "--volume-size", "20",
+    assert "unrecognized arguments: --yes" in _argparse_err(capsys, *space("codex"), "--volume-size", "20",
                                                             "--yes")
     assert "unrecognized arguments: --yes" in _argparse_err(capsys, "spaces", "--space-id", "s1", "--yes")
 
 
 def test_a_flag_wins_over_the_same_field_in_data(core, capsys):  # M5
     data = {"providers": {"openai": {"enabled": True, "apiKey": "A-from-data"}, "anthropic": {"enabled": False}}}
-    out = run(capsys, "xo-cowork", "--name", "c", "--volume-size", "20", "--data", json.dumps(data),
+    out = run(capsys, *space("xo-cowork"), "--volume-size", "20", "--data", json.dumps(data),
               "--providers-openai-api-key", "B-from-flag", "--dry-run", "--show-secrets")[1]
-    assert json.loads(out)["body"]["providers"] == {"openai": {"enabled": True, "apiKey": "B-from-flag"},
+    assert json.loads(out)["body"]["body"]["providers"] == {"openai": {"enabled": True, "apiKey": "B-from-flag"},
                                                     "anthropic": {"enabled": False}}
 
 
 def test_two_providers_keep_their_own_keys(core, capsys):  # M15
-    out = run(capsys, "hermes", "--name", "c", "--volume-size", "20", "--providers-anthropic-api-key", "AAAA1",
+    out = run(capsys, *space("hermes"), "--volume-size", "20", "--providers-anthropic-api-key", "AAAA1",
               "--providers-openai-api-key", "BBBB2", "--dry-run", "--show-secrets")[1]
-    assert json.loads(out)["body"]["providers"] == {"anthropic": {"apiKey": "AAAA1", "enabled": True},
+    assert json.loads(out)["body"]["body"]["providers"] == {"anthropic": {"apiKey": "AAAA1", "enabled": True},
                                                     "openai": {"apiKey": "BBBB2", "enabled": True}}
 
 
@@ -952,9 +977,9 @@ def test_required_fields_come_from_all_of_too(fake, capsys, monkeypatch, tmp_pat
 
 def test_only_near_misses_of_a_flag_are_shown(core, capsys):  # R5-N1, R5-N3
     long_word = "--0123456789abcdef0123456789abcdef0123"
-    err = _argparse_err(capsys, "codex", long_word)
+    err = _argparse_err(capsys, *space("codex"), long_word)
     assert long_word not in err and "--<hidden>" in err
-    err = _argparse_err(capsys, "openclaw", "--providers_anthropic_api_key", ANTHROPIC)
+    err = _argparse_err(capsys, *space("openclaw"), "--providers_anthropic_api_key", ANTHROPIC)
     assert "--providers_anthropic_api_key <hidden>" in err and ANTHROPIC not in err
 
 
@@ -1051,11 +1076,11 @@ def test_the_old_url_variables_are_refused_not_ignored(core, capsys, monkeypatch
     monkeypatch.delenv("XO_URL", raising=False)
     for name in names:
         monkeypatch.setenv(name, "http://127.0.0.1:3000/api/core/v1")
-    code, _, err = run(capsys, "codex", "--name", "x", "--volume-size", "20", "--dry-run")
+    code, _, err = run(capsys, *space("codex"), "--volume-size", "20", "--dry-run")
     assert code == 1 and core.requests == []
     assert err.startswith(f"xo: {' and '.join(names)} ") and "no longer read; set XO_URL" in err
     monkeypatch.setenv("XO_URL", core.base)  # with XO_URL set, the old ones no longer matter
-    assert run(capsys, "codex", "--name", "x", "--volume-size", "20", "--dry-run")[0] == 0
+    assert run(capsys, *space("codex"), "--volume-size", "20", "--dry-run")[0] == 0
 
 
 def test_core_commands_go_under_the_core_path(xs, capsys):
@@ -1664,28 +1689,27 @@ SPACE = {"name": "dev", "kind": "claude-code", "id": "sp-1", "rev": 1, "projects
 def test_create_space_sends_the_kinds_body_to_the_xo_server(core, capsys):
     core.route("POST", "/me/spaces", body={"success": True, "data": {"space": SPACE, "xo": {"id": "sp-1"}}})
     secret = "sk-ant-provider-secret-never-printed"
-    code, out, err = run(capsys, "create", "space", "claude-code", "dev", "--name", "my-cc", "--volume-size", "20",
+    code, out, err = run(capsys, "create", "space", "dev", "claude-code", "--volume-size", "20",
                          "--providers-anthropic-api-key", secret)
     assert code == 0 and json.loads(out)["data"]["space"] == SPACE
     assert [(r["method"], r["path"]) for r in core.requests] == [("POST", "/me/spaces")]
     body = core.requests[0]["body"]
     assert (body["kind"], body["name"]) == ("claude-code", "dev")
-    assert body["body"]["name"] == "my-cc" and body["body"]["providers"]["anthropic"]["apiKey"] == secret
+    assert body["body"]["name"] == "dev" and body["body"]["providers"]["anthropic"]["apiKey"] == secret
     assert secret not in out and secret not in err and "copy of this API key" in err
 
 
 def test_create_space_dry_run_hides_provider_keys(core, capsys):
     secret = "sk-ant-provider-secret-never-printed"
-    code, out, err = run(capsys, "create", "space", "claude-code", "dev", "--name", "my-cc", "--volume-size", "20",
+    code, out, err = run(capsys, "create", "space", "dev", "claude-code", "--volume-size", "20",
                          "--providers-anthropic-api-key", secret, "--dry-run")
     assert code == 0 and core.requests == [] and secret not in out
     assert json.loads(out)["body"]["body"]["providers"]["anthropic"]["apiKey"] == "<hidden>"
 
 
-@pytest.mark.parametrize("argv", [["create", "space", "claude-code", "-x"], ["create", "space", "claude-code", "a b"],
-                                  ["create", "space", "claude-code", "../x"]])
-def test_create_space_refuses_a_bad_name_before_sending(core, capsys, argv):
-    assert _refused(capsys, *argv, "--name", "n", "--volume-size", "1") and core.requests == []
+@pytest.mark.parametrize("name", ["-x", "a b", "../x", "dot.name", "under_score", "a" * 33, "new", "Create"])
+def test_create_space_refuses_a_bad_name_before_sending(core, capsys, name):
+    assert _refused(capsys, "create", "space", name, "claude-code", "--volume-size", "1") and core.requests == []
 
 
 def test_connect_project_and_space(xs, capsys):
@@ -1749,6 +1773,40 @@ def test_create_project_refuses_a_folder_that_exists_or_a_url_that_is_not_github
                 "https://github.com/-a/b", "http://github.com/a/b"):
         assert run(capsys, "create", "project", url)[0] == 1
     assert xs.requests == []
+
+
+def test_create_project_takes_a_name_and_a_url_only_when_they_match(xs, capsys, github):
+    github.repo("quirq-ai/xo")
+    xs.route("POST", "/me/projects", body={"success": True, "data": {"projects": ["quirq-ai/xo"]}})
+    code, _, err = run(capsys, "create", "project", "notes", "https://github.com/quirq-ai/xo")
+    assert code == 1 and xs.requests == [] and not Path("notes").exists()
+    assert "xo connect project:notes --repo" in err
+    assert run(capsys, "create", "project", "quirq-ai/XO", "https://github.com/quirq-ai/xo")[0] == 0
+    assert xs.requests[0]["body"] == {"name": "quirq-ai/xo"}
+    assert Path("quirq-ai/xo/README").read_text() == "hi\n"
+
+
+def test_connect_repo_records_it_and_points_the_folder_at_github(xs, capsys, github):
+    xs.route("POST", "/me/projects", body={"success": True, "data": {"projects": ["notes"]}})
+    xs.route("POST", "/me/projects/connect", body={"success": True, "data": {"projects": ["quirq-ai/notes"]}})
+    assert run(capsys, "create", "project", "notes")[0] == 0
+    code, out, err = run(capsys, "connect", "project:notes", "--repo", "https://github.com/quirq-ai/notes")
+    assert code == 0 and json.loads(out) == ["quirq-ai/notes"]
+    assert xs.requests[1]["body"] == {"name": "notes", "repo": "quirq-ai/notes"}
+    assert not Path("notes").exists() and Path("quirq-ai/notes/.git").is_dir()
+    from xo import gitops
+    assert git("remote", "get-url", "origin", cwd="quirq-ai/notes") == f"{gitops.GITHUB}/quirq-ai/notes"
+    assert "moved to ./quirq-ai/notes" in err
+
+
+@pytest.mark.parametrize("argv", [
+    ["connect", "project:notes", "space:dev", "--repo", "https://github.com/o/r"],
+    ["connect", "project:notes", "--repo", "https://github.com/o/r", "--ref", "v1"],
+    ["connect", "project:o/r", "--repo", "https://github.com/o/x"],
+    ["connect", "project:notes", "--repo", "https://gitlab.com/o/r"],
+    ["connect", "project:notes", "--repo", "notes2"]])
+def test_connect_repo_refuses_before_sending(xs, capsys, argv):
+    assert run(capsys, *argv)[0] == 1 and xs.requests == []
 
 
 def test_create_project_says_when_the_folder_could_not_be_made(xs, capsys, github):

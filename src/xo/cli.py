@@ -1,8 +1,9 @@
 """xo: the command line for the XO Cloud core API (dev.xo.builders/api/core/v1, through the xo server).
 
     xo ENDPOINT [ACTION] [--flag VALUE ...]  one command per API endpoint, made from the spec:
-                                            POST /openclaw is `xo openclaw`, GET /spaces/{spaceId}
-                                            is `xo spaces --space-id ID`. Its parameters and body
+                                            GET /spaces/{spaceId} is `xo spaces --space-id ID`; the
+                                            space creates (POST /openclaw, ...) are kinds of
+                                            `xo create space` instead. Its parameters and body
                                             fields are its flags, nested fields too
                                             (--providers-anthropic-api-key); `xo ENDPOINT --help`
                                             lists them. A path with several methods has actions
@@ -33,11 +34,16 @@
     xo projects [add NAME]                  show the projects list in your private metadata, or add
                                             NAME to it. The xo server makes the change and writes only
                                             that list; xo sends just the name.
-    xo create project NAME|GITHUB-URL       add a project and make its folder here: a GitHub URL (or
-                                            OWNER/REPO) is cloned, any other name gets `git init`.
-    xo create space KIND NAME [flags]       create a space as `xo KIND` does (claude-code, codex, ...)
-                                            and record it in your spaces as NAME.
+    xo create project NAME [GITHUB-URL]     add a project and make its folder here. Give a name, a
+                                            GitHub URL, or both: a GitHub project is named OWNER/REPO and
+                                            cloned, any other name gets `git init` (its repo can be added
+                                            later with xo connect project:NAME --repo URL).
+    xo create space NAME KIND [flags]       create a space on XO (KIND: claude-code, codex, antigravity,
+                                            hermes, openclaw, xo-cowork, nebius-openclaw) named NAME there
+                                            too, and record it in your spaces.
     xo connect project:P space:S [--ref R]  set project P in space S at ref R (default main).
+    xo connect project:P --repo URL         give project P, made with a name only, its GitHub repo; P
+                                            is renamed OWNER/REPO.
     xo connect space:S [--id ID]            a new space entry S in your metadata; --id ties it to an
                                             XO space you already have.
     xo list projects | spaces               show your projects or your spaces.
@@ -474,8 +480,9 @@ def _endpoint(args: argparse.Namespace) -> int:
     return _send(client, args, op.method, path, query=query, body=body, headers=headers, op=op)
 
 
-def _request(args: argparse.Namespace, *, server: bool = False) -> tuple:
-    """The client, operation, path, query, headers and body an endpoint command's flags make."""
+def _request(args: argparse.Namespace, *, server: bool = False, preset: dict | None = None) -> tuple:
+    """The client, operation, path, query, headers and body an endpoint command's flags make.
+    preset: body fields set by the command itself (create space's name), which --data may not change."""
     op = args.op
     label = " ".join([args.command, *(getattr(args, k) for k in ("what", "kind", "action") if getattr(args, k, None))])
     params, args.fields = commands.values(args)
@@ -494,6 +501,15 @@ def _request(args: argparse.Namespace, *, server: bool = False) -> tuple:
                 value = _read_secret(flag)
             # A string field keeps the text as typed: --prompt true sends "true", not true.
             _set(body, flag, value if flag.type == "string" else _value(value), label)
+    if preset:
+        if body is None:
+            body = {}
+        if not isinstance(body, dict):
+            raise XoError(f"{label}: --data must be a JSON object")
+        for k, v in preset.items():
+            if k in body and body[k] != v:
+                raise XoError(f"{label}: the body's {k} comes from the command line; leave it out of --data")
+            body[k] = v
     if body is None and op.body_required:
         if not op.required_fields:
             raise XoError(f"{label} needs a body: its field flags, --data or --field")
@@ -671,14 +687,20 @@ def _post_server(client: Client, path: str, body: dict) -> Any:
 
 
 def _create_project(args: argparse.Namespace) -> int:
-    """`xo create project NAME|URL`: the server adds the name to your projects, then the folder is
-    made here: a GitHub project is cloned, any other gets an empty repository."""
-    text = args.target.strip()
-    name = names.from_github_url(text) if text.startswith(("https:", "http:", "git@", "ssh:")) else text
-    if name is None:
-        raise XoError("a project URL must be https://github.com/OWNER/REPO")
-    if not names.project_ok(name):
-        raise XoError(names.PROJECT_RULE)
+    """`xo create project NAME [URL]`: the server adds the project to your projects, then its folder
+    is made here. A GitHub project is named OWNER/REPO and cloned; any other name gets an empty
+    repository, and can get its repo later with `xo connect project:NAME --repo URL`. NAME and URL
+    may both be given only when they name the same repository."""
+    name = _project_target(args.target.strip())
+    if args.repo is not None:
+        repo = _project_target(args.repo.strip())
+        if not names.is_github(repo):
+            raise XoError("a project URL must be https://github.com/OWNER/REPO")
+        if repo.casefold() != name.casefold():
+            raise XoError(f"a project with a repo is named after it ({repo}): run xo create project {repo}, "
+                          f"or keep {name} without one and add it later with xo connect project:{name} --repo "
+                          f"{gitops.GITHUB}/{repo}")
+        name = repo
     dest = Path(name)
     if dest.exists() or dest.is_symlink():
         raise XoError(f"./{name} already exists here; nothing was changed")
@@ -694,20 +716,51 @@ def _create_project(args: argparse.Namespace) -> int:
     return 0
 
 
+def _project_target(text: str) -> str:
+    """A project's name from what was typed: a GitHub URL becomes OWNER/REPO."""
+    name = names.from_github_url(text) if text.startswith(("https:", "http:", "git@", "ssh:")) else text
+    if name is None:
+        raise XoError("a project URL must be https://github.com/OWNER/REPO")
+    if not names.project_ok(name):
+        raise XoError(names.PROJECT_RULE)
+    return name
+
+
 def _create_space(args: argparse.Namespace) -> int:
-    """`xo create space KIND NAME [flags]`: the body `xo KIND` would send, sent to the xo server,
-    which creates the space through XO with your key and records it in your spaces as NAME."""
-    if not names.space_ok(args.space_name):
-        raise XoError(names.SPACE_RULE)
-    client, op, _, _, _, body = _request(args, server=True)
+    """`xo create space NAME KIND [flags]`: the body KIND's create takes, with NAME as the space's
+    name on XO too, sent to the xo server, which creates the space through XO with your key and
+    records it in your spaces as NAME."""
+    if not names.xo_name_ok(args.space_name):
+        raise XoError(names.XO_NAME_RULE)
+    client, op, _, _, _, body = _request(args, server=True, preset={"name": args.space_name})
     wrapped = {"kind": op.path.strip("/"), "name": args.space_name, "body": body if body is not None else {}}
     return _send(client, args, "POST", "/me/spaces", query={}, body=wrapped,
                  paths=[("body", *p) for p in op.secret_paths], copies=op.copies_key)
 
 
+def _moved(kind: str) -> str:
+    """What replaced `xo KIND`, the create before `xo create space`."""
+    return (f"xo {kind} is now xo create space NAME {kind} [flags]; NAME is the space's name on XO and in "
+            "your spaces, so leave out --name")
+
+
 def _connect(args: argparse.Namespace) -> int:
     """`xo connect project:P space:S [--ref R]` or `xo connect space:S [--id ID]`."""
     kind, _, value = args.first.partition(":")
+    if kind == "project" and args.repo is not None:
+        if args.second is not None or args.ref is not None or args.id is not None:
+            raise XoError("give a project its repo with: xo connect project:NAME --repo https://github.com/OWNER/REPO")
+        if not names.project_ok(value) or names.is_github(value):
+            raise XoError(f"{value} already names a repo" if names.project_ok(value) else names.PROJECT_RULE)
+        repo = _project_target(args.repo.strip())
+        if not names.is_github(repo):
+            raise XoError("a project URL must be https://github.com/OWNER/REPO")
+        client = _client(args, server=True)
+        data = _post_server(client, "/me/projects/connect", {"name": value, "repo": repo})
+        projects = _answer(data, "projects", "a projects list")
+        _local_repo(Path(value), repo)
+        print(client.scrub(_json(projects)))
+        return 0
     if kind == "project":
         where, _, space = (args.second or "").partition(":")
         if where != "space" or not space or args.id is not None:
@@ -735,6 +788,26 @@ def _connect(args: argparse.Namespace) -> int:
         raise XoError("connect what? project:NAME space:NAME, or space:NAME [--id ID]")
     print(client.scrub(_json(_answer(data, "space", "a space"))))
     return 0
+
+
+def _local_repo(dest: Path, repo: str) -> None:
+    """After the project is renamed OWNER/REPO: point its folder here, if any, at the repo, and move it
+    to ./OWNER/REPO, where xo install and xo sync look for it."""
+    if not dest.is_dir():
+        print(f"xo: ./{dest} is not here; xo install project:{repo} clones it", file=sys.stderr)
+        return
+    try:
+        print(f"xo: ./{dest}: {gitops.set_origin(dest, repo)}", file=sys.stderr)
+    except XoError as e:
+        print(f"xo: ./{dest} was left as it is: {e}", file=sys.stderr)
+        return
+    target = Path(repo)
+    if target.exists() or target.is_symlink():
+        print(f"xo: ./{target} already exists, so ./{dest} was not moved there; move it yourself", file=sys.stderr)
+        return
+    target.parent.mkdir(parents=True, exist_ok=True)
+    dest.rename(target)
+    print(f"xo: ./{dest} moved to ./{target}", file=sys.stderr)
 
 
 def _workspace(args: argparse.Namespace) -> int:
@@ -1002,6 +1075,11 @@ def _command_word(argv: list[str]) -> str | None:
     return None
 
 
+def _is_create(op: spec.Operation) -> bool:
+    """One of XO's space creates, which `xo create space NAME KIND` runs instead of `xo KIND`."""
+    return op.method == "POST" and not op.server and op.path.strip("/") in names.SPACE_KINDS
+
+
 def _endpoints(sub: argparse._SubParsersAction, common: argparse.ArgumentParser, argv: list[str],
                space_kinds: argparse._SubParsersAction | None = None) -> None:
     """One command per endpoint, from a local spec (never the network, so --help stays offline).
@@ -1017,12 +1095,14 @@ def _endpoints(sub: argparse._SubParsersAction, common: argparse.ArgumentParser,
         local = spec.load_local(known.spec)
         if local is not None:
             ops = spec.operations(local)
-            commands.register(sub, ops, [common], _add_send, _endpoint)
-            for op in ops if space_kinds is not None else []:
-                if op.method == "POST" and not op.server and op.path.count("/") == 1:
-                    p = space_kinds.add_parser(op.path.strip("/"), parents=[common], help=commands._line(op))
-                    p.add_argument("space_name", metavar="NAME", help=names.SPACE_RULE)
-                    commands.add_operation(p, op, _add_send, _create_space)
+            creates = [op for op in ops if _is_create(op)]
+            commands.register(sub, [op for op in ops if op not in creates], [common], _add_send, _endpoint)
+            for op in creates:  # `xo KIND` itself is gone: main() says what replaced it
+                kind = op.path.strip("/")
+                if space_kinds is not None:
+                    p = space_kinds.add_parser(kind, parents=[common], help=commands._line(op),
+                                               description=commands._about(op))
+                    commands.add_operation(p, op, _add_send, _create_space, skip={"name"})
     except (XoError, ValueError, TypeError, RecursionError, argparse.ArgumentError) as e:
         command = _command_word(argv)
         if command in ("ops", "call", "api", "serve", "login", "logout", "status", "coder"):
@@ -1044,6 +1124,9 @@ def main(argv: list[str] | None = None) -> int:
         return 130
     if passed is not None:
         return passed
+    if _command_word(argv) in names.SPACE_KINDS:  # nothing is parsed or sent, so no value is echoed
+        print(f"xo: {_moved(_command_word(argv))}", file=sys.stderr)
+        return 1
     _Parser.argv = argv
     _Parser.flags = set()
     common = _common()
@@ -1109,19 +1192,25 @@ def main(argv: list[str] | None = None) -> int:
     mksub = mk.add_subparsers(dest="what", required=True, metavar="WHAT")
     mp = mksub.add_parser("project", parents=[common],
                           help="add a project and make its folder here: a GitHub URL or OWNER/REPO is cloned, "
-                               "any other name gets an empty git repository")
+                               "any other name gets an empty git repository (add its repo later with xo connect)")
     mp.add_argument("target", metavar="NAME|URL", help=names.PROJECT_RULE + ", or https://github.com/OWNER/REPO")
+    mp.add_argument("repo", nargs="?", metavar="URL",
+                    help="the project's https://github.com/OWNER/REPO, when NAME is also given (they must match)")
     mp.set_defaults(run=_create_project)
     ms = mksub.add_parser("space", parents=[common],
-                          help="create a space as `xo KIND` does, and record it in your spaces")
+                          help="create a space on XO and record it in your spaces: xo create space NAME KIND")
+    ms.add_argument("space_name", metavar="NAME", help=names.XO_NAME_RULE)
     space_kinds = ms.add_subparsers(dest="kind", required=True, metavar="KIND")
     cn = sub.add_parser("connect", parents=[common],
-                        help="set a project's ref in one of your spaces, or make a new space entry")
+                        help="set a project's ref in one of your spaces, give a project its repo, or make a new "
+                             "space entry")
     cn.add_argument("first", metavar="project:NAME|space:NAME")
     cn.add_argument("second", nargs="?", metavar="space:NAME", help="the space a project goes in")
     cn.add_argument("--ref", help="a branch, tag or commit sha for the project (default main)")
     cn.add_argument("--id", help="with space:NAME, an XO space you already have (XO must confirm your key "
                                  "can read it)")
+    cn.add_argument("--repo", metavar="URL", help="with project:NAME alone, the project's GitHub repo; the project "
+                                                  "is renamed OWNER/REPO")
     cn.set_defaults(run=_connect)
     for verb, about in (("install", "clone or fetch a project here, or each of a space's projects into ./SPACE at its "
                                     "ref"),
