@@ -338,15 +338,22 @@ def _mask_secrets(value: Any, depth: int = 0) -> Any:
     return value
 
 
-# A token's body: a long run of letters and digits. Branch names that only start like a token
-# prefix (npm_bump, sk-rewrite, hf_integration) have none, so they are refs, not credentials.
+# Token prefixes a branch can also start with (npm_bump, sk-rewrite, hf_integration). Behind one
+# of these a ref is a credential only with a token's body: a long run of letters and digits, or,
+# separators removed, 20 or more that mix upper case, lower case and digits (a token split by / or
+# -). Every other credential prefix (glpat-, AIza, ya29., eyJ, Bearer) is refused on its own.
+_BRANCH_PREFIX = re.compile(r"\A\s*(?:(?:sk|rk|pk)[-_]|ak_|gh[pousr]_|github_pat_|hf_|npm_|pypi-|xox[abprs]-|AKIA|ASIA)")
 _TOKEN_BODY = re.compile(r"[A-Za-z0-9]{16,}")
 
 
 def _secret_ref(ref: str) -> bool:
-    """A ref that looks like a credential: a token prefix and a token's body. A commit sha has the
-    body but never the prefix."""
-    return bool(_SECRET_VALUE.search(ref) and _TOKEN_BODY.search(ref))
+    """A ref that looks like a credential. A commit sha has a token's body but never a prefix."""
+    if not _SECRET_VALUE.search(ref):
+        return False
+    if not _BRANCH_PREFIX.match(ref) or _TOKEN_BODY.search(ref):
+        return True
+    body = re.sub(r"[^A-Za-z0-9]", "", ref)
+    return len(body) >= 20 and all(re.search(p, body) for p in ("[0-9]", "[a-z]", "[A-Z]"))
 
 
 def _mask_values(value: Any, depth: int = 0) -> Any:
@@ -358,7 +365,8 @@ def _mask_values(value: Any, depth: int = 0) -> Any:
         return {k: _mask_values(v, depth + 1) for k, v in value.items()}
     if isinstance(value, list):
         return [_mask_values(v, depth + 1) for v in value]
-    if isinstance(value, str) and _secret_ref(value):
+    # Only a valid ref gets the ref rule; anything else someone stored is masked as /me masks it.
+    if isinstance(value, str) and (_secret_ref(value) if names.ref_ok(value) else _SECRET_VALUE.search(value)):
         return _mask(value)
     return value
 
@@ -965,7 +973,8 @@ class App:
         except _Reply as r:
             # A race, or a Clerk that is busy, failing or unreachable, can pass; the refusals checked
             # above cannot, so no hint for them.
-            hint = f". Run xo connect space:{name} --id {space_id} to record it" if r.status in (409, 429, 502, 503) else ""
+            hint = (f". If xo list spaces does not show it, run xo connect space:{name} --id {space_id} to record it"
+                    if r.status in (409, 429, 502, 503) else "")
             raise _Reply(r.status, f"XO created the space (id {space_id}) but xo could not record it: {r.error}{hint}",
                          r.clerk) from None
         return {"space": _shown_space(entry), "xo": _mask_secrets(made)}

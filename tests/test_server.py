@@ -1707,11 +1707,36 @@ def test_refs_and_ids_that_look_like_credentials_are_refused(clerk):
 def test_branch_names_that_only_start_like_a_token_are_refs(clerk):
     store = _Store({"projects": ["notes"], "spaces": [_space("dev")]})
     app = _app(store)
-    for ref in ("npm_bump", "sk-rewrite", "hf_integration", "pypi-release", "ghp_fix/login-page"):
+    for ref in ("npm_bump", "sk-rewrite", "hf_integration", "pypi-release", "sk-rewrite-auth-flow",
+                "npm_bump-lodash-4-17-21", "pypi-release-2026-10", "AKIA-rotation", "ghp_fix/login-page"):
         status, out = _post(app, "/me/spaces/dev/projects", {"project": "notes", "ref": ref})
         assert status == 200 and out["data"]["space"]["projects"] == [{"notes": ref}], ref
     status, out = app.handle("GET", "/me/spaces", {"authorization": f"Bearer {USER_KEY}"}, None)
     assert out["data"]["spaces"][0]["projects"] == [{"notes": "ghp_fix/login-page"}]
+
+
+# A made-up GitLab token, built here so no scanner reads the file as holding one.
+GLPAT = "glpat" + "-2O76UMFxFkM_R5Kjp1vR"
+
+
+@pytest.mark.parametrize("ref", [GLPAT, "AIzaSy-abc", "ya29.fix", "eyJhbGciOi.eyJzdWIi.x",
+                                 "ghp_aB3dE5gH7j/K9mN1pQ3rS5", "sk_live_aB3dE5gH7jK9-mN1pQ3r"])
+def test_refs_that_are_tokens_are_refused_however_they_are_cut(clerk, ref):
+    store = _Store({"projects": ["notes"], "spaces": [_space("dev")]})
+    assert _post(_app(store), "/me/spaces/dev/projects", {"project": "notes", "ref": ref})[0] == 422
+    assert store.patches == []
+
+
+def test_values_someone_else_stored_in_a_spaces_projects_stay_masked(clerk):
+    stored = ["https://user:hunter2pass@git.example/x", "postgres://admin:s3cret@db:5432/x", "Bearer abc.def.ghi",
+              GLPAT]
+    store = _Store({"spaces": [_space("dev", projects=[{f"p{i}": v} for i, v in enumerate(stored)]
+                                      + [{"q": "npm_bump"}, {"r": "sk-1234"}])]})
+    app = _app(store)
+    for path, pick in (("/me/spaces", lambda d: d["spaces"]), ("/me", lambda d: d["privateMetadata"]["spaces"])):
+        shown = pick(app.handle("GET", path, {"authorization": f"Bearer {USER_KEY}"}, None)[1]["data"])[0]["projects"]
+        assert all(list(p.values())[0] != v for p, v in zip(shown, stored)), shown
+        assert shown[-2:] == [{"q": "npm_bump"}, {"r": "sk-1234"}]
 
 
 def test_create_space_hints_at_connect_when_clerk_fails_or_cannot_be_reached(clerk):
