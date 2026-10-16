@@ -991,6 +991,27 @@ def test_a_failed_me_is_shown_as_it_came(xs, capsys):
     assert code != 0 and "Account not found" in err
 
 
+def test_projects_lists_from_the_xo_server(xs, capsys):
+    xs.route("GET", "/me/projects", body={"success": True, "data": {"projects": ["a", "b"]}})
+    code, out, _ = run(capsys, "projects")
+    assert code == 0 and json.loads(out) == ["a", "b"]
+    assert xs.requests[0]["headers"]["Authorization"] == f"Bearer {KEY}"
+
+
+def test_projects_add_sends_only_the_name(xs, capsys):
+    xs.route("POST", "/me/projects", body={"success": True, "data": {"projects": ["a", "new one"]}})
+    code, out, _ = run(capsys, "projects", "add", "new one")
+    assert code == 0 and json.loads(out) == ["a", "new one"]
+    assert [(r["method"], r["path"]) for r in xs.requests] == [("POST", "/me/projects")]
+    assert xs.requests[0]["body"] == {"name": "new one"}
+
+
+def test_projects_from_an_older_server_says_so(xs, capsys):
+    xs.route("GET", "/me/projects", status=404, body={"success": False, "error": "Not found"})
+    code, _, err = run(capsys, "projects")
+    assert code == 1 and "Not found" in err
+
+
 def test_the_url_must_be_https(core, capsys, monkeypatch):
     monkeypatch.setenv("XO_URL", "http://xo-server.example")
     code, _, err = run(capsys, "me")

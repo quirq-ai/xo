@@ -1176,3 +1176,157 @@ def test_config_answers_even_without_the_clerk_secret(monkeypatch):
 def test_the_platform_default_is_the_listed_one():
     assert server.DEFAULT_CORE_URL == "https://dev.xo.builders/api/core/v1"
     assert services.SHIPPED["xo"]["url"] == "https://dev.xo.builders"
+
+
+# --- /me/projects: the one write a normal key can make ------------------------------------------
+
+@pytest.fixture
+def alice(monkeypatch):
+    """A copy of alice the fake Clerk may change, so no test leaks into another."""
+    user = json.loads(json.dumps(USERS["user_alice"]))
+    user["private_metadata"] = {"stripeId": "cus_1", "notes": {"a": [1, 2]}, "flag": True}
+    monkeypatch.setitem(USERS, "user_alice", user)
+    return user
+
+
+def test_projects_starts_empty_and_reads_only_the_callers_user(xo_server, clerk, alice):
+    assert call(xo_server, "GET", "/me/projects", USER_KEY) == (200, {"success": True, "data": {"projects": []}})
+    assert [c["path"] for c in clerk.calls[1:]] == ["/v1/users/user_alice"]
+
+
+def test_add_project_writes_only_projects_and_keeps_every_other_key(xo_server, clerk, alice):
+    before = json.dumps({k: v for k, v in alice.items() if k != "private_metadata"}, sort_keys=True)
+    others = json.loads(json.dumps(alice["private_metadata"]))
+    assert call(xo_server, "POST", "/me/projects", USER_KEY, {"name": "alpha"}) == \
+        (200, {"success": True, "data": {"projects": ["alpha"]}})
+    assert call(xo_server, "POST", "/me/projects", USER_KEY, {"name": " beta 2 "})[1]["data"] == \
+        {"projects": ["alpha", "beta 2"]}
+    patches = [c for c in clerk.calls if c["method"] == "PATCH"]
+    assert [p["body"] for p in patches] == [{"private_metadata": {"projects": ["alpha"]}},
+                                            {"private_metadata": {"projects": ["alpha", "beta 2"]}}]
+    assert all(p["path"] == "/v1/users/user_alice/metadata" for p in patches)
+    assert {k: v for k, v in alice["private_metadata"].items() if k != "projects"} == others
+    assert json.dumps({k: v for k, v in alice.items() if k != "private_metadata"}, sort_keys=True) == before
+    assert call(xo_server, "GET", "/me/projects", USER_KEY)[1]["data"] == {"projects": ["alpha", "beta 2"]}
+    adds = [json.loads(line) for line in xo_server.audit if '"/me/projects"' in line]
+    assert [(a["outcome"], a["count"], a["keyId"], a["caller"]) for a in adds] == \
+        [(200, 1, "ak_user", "user_alice"), (200, 2, "ak_user", "user_alice")]
+    assert not any("alpha" in line or "cus_1" in line for line in xo_server.audit)
+
+
+@pytest.mark.parametrize("body, error", [
+    ({"name": "alpha", "privateMetadata": {"x": 1}}, 'Body must be {"name": "..."} and nothing else'),
+    ({"projects": ["a"]}, 'Body must be {"name": "..."} and nothing else'),
+    ({"name": ["a"]}, 'Body must be {"name": "..."} and nothing else'),
+    (["alpha"], 'Body must be {"name": "..."} and nothing else'),
+    ({"name": ""}, None), ({"name": "-lead"}, None), ({"name": "a/b"}, None), ({"name": "x" * 65}, None),
+    ({"name": "café"}, None), ({"name": "a\nb"}, None)])
+def test_add_project_refuses_anything_but_one_plain_name_and_writes_nothing(xo_server, clerk, alice, body, error):
+    status, out = call(xo_server, "POST", "/me/projects", USER_KEY, body)
+    assert status == 422 and (error is None or out["error"] == error)
+    assert not [c for c in clerk.calls if c["method"] == "PATCH"]
+
+
+def test_add_project_refuses_a_duplicate_ignoring_case(xo_server, clerk, alice):
+    alice["private_metadata"]["projects"] = ["Alpha"]
+    status, out = call(xo_server, "POST", "/me/projects", USER_KEY, {"name": "alpha"})
+    assert (status, out["error"]) == (409, "alpha is already in your projects; nothing was changed")
+    assert not [c for c in clerk.calls if c["method"] == "PATCH"]
+
+
+@pytest.mark.parametrize("value", [{"a": 1}, "alpha", 3, True])
+def test_add_project_never_overwrites_projects_that_is_not_a_list(xo_server, clerk, alice, value):
+    alice["private_metadata"]["projects"] = value
+    status, _ = call(xo_server, "POST", "/me/projects", USER_KEY, {"name": "alpha"})
+    assert status == 409 and alice["private_metadata"]["projects"] == value
+    assert not [c for c in clerk.calls if c["method"] == "PATCH"]
+
+
+def test_add_project_stops_at_the_cap(xo_server, clerk, alice):
+    alice["private_metadata"]["projects"] = [f"p{i}" for i in range(server.MAX_PROJECTS)]
+    assert call(xo_server, "POST", "/me/projects", USER_KEY, {"name": "one more"})[0] == 422
+    assert not [c for c in clerk.calls if c["method"] == "PATCH"]
+
+
+def test_a_normal_key_still_cannot_write_other_metadata(xo_server, clerk, alice):
+    assert call(xo_server, "PATCH", "/user-metadata/user_alice", USER_KEY, {"privateMetadata": {"x": 1}})[0] == 403
+    assert call(xo_server, "PATCH", "/me/projects", USER_KEY, {"name": "a"})[0] == 405
+    assert call(xo_server, "PUT", "/me/projects", USER_KEY, {"name": "a"})[0] == 405
+    assert call(xo_server, "POST", "/me", USER_KEY, {"name": "a"})[0] == 405
+    assert not [c for c in clerk.calls if c["method"] == "PATCH"]
+
+
+def test_add_project_needs_a_good_key_and_audits_the_refusal(xo_server, clerk, alice):
+    assert call(xo_server, "POST", "/me/projects", "ak_unknown", {"name": "a"})[0] == 401
+    assert call(xo_server, "POST", "/me/projects", None, {"name": "a"})[0] == 401
+    assert [json.loads(line)["outcome"] for line in xo_server.audit] == [401, 401]
+    assert not [c for c in clerk.calls if c["method"] == "PATCH"]
+
+
+def test_add_project_clears_the_me_cache(xo_server, alice):
+    assert call(xo_server, "GET", "/me", USER_KEY)[1]["data"]["privateMetadata"].get("projects") is None
+    call(xo_server, "POST", "/me/projects", USER_KEY, {"name": "alpha"})
+    assert call(xo_server, "GET", "/me", USER_KEY)[1]["data"]["privateMetadata"]["projects"] == ["alpha"]
+
+
+class _RacingClerk:
+    """Stands in for Clerk where another writer replaces `projects` right after this add's write."""
+
+    def __init__(self, stored: dict, races: int) -> None:
+        self.stored, self.races, self.patches = stored, races, []
+
+    def verify_key(self, secret: str) -> dict:
+        return KEYS[secret]
+
+    def user(self, user_id: str) -> dict:
+        return json.loads(json.dumps(self.stored))
+
+    def update_metadata(self, user_id: str, changes: dict) -> dict:
+        self.patches.append(changes)
+        self.stored["private_metadata"].update(changes["privateMetadata"])
+        if self.races:
+            self.races -= 1
+            self.stored["private_metadata"]["projects"] = ["theirs"]  # the other writer wins
+        return json.loads(json.dumps(self.stored))
+
+
+def test_add_project_tries_again_when_another_write_replaced_the_list(clerk):
+    user = {"id": "user_alice", "private_metadata": {"stripeId": "cus_1", "projects": []}}
+    fake = _RacingClerk(user, races=1)
+    lines: list[str] = []
+    app = server.App(server.Config(), clerk=fake, audit=lines.append)
+    status, out = app.handle("POST", "/me/projects", {"authorization": f"Bearer {USER_KEY}"}, b'{"name": "mine"}')
+    assert (status, out["data"]["projects"]) == (200, ["theirs", "mine"])
+    assert user["private_metadata"] == {"stripeId": "cus_1", "projects": ["theirs", "mine"]}
+    assert len(fake.patches) == 2
+
+
+def test_add_project_gives_up_and_says_so_when_the_list_keeps_changing(clerk):
+    user = {"id": "user_alice", "private_metadata": {"projects": []}}
+    fake = _RacingClerk(user, races=server.PROJECT_TRIES)
+    app = server.App(server.Config(), clerk=fake, audit=lambda line: None)
+    status, out = app.handle("POST", "/me/projects", {"authorization": f"Bearer {USER_KEY}"}, b'{"name": "mine"}')
+    assert status == 503 and "run xo projects" in out["error"] and len(fake.patches) == server.PROJECT_TRIES
+
+
+def test_projects_shows_up_on_the_status_page_as_its_route(xo_server, alice):
+    call(xo_server, "GET", "/me/projects", USER_KEY)
+    activity = call(xo_server, "GET", "/status")[1]["data"]["activity"]
+    assert activity[0]["route"] == "/me/projects"
+
+
+def test_xo_projects_end_to_end(xo_server, clerk, alice, monkeypatch, capfd):
+    monkeypatch.setenv("XO_URL", xo_server.url)
+    monkeypatch.setenv("XO_API_KEY", USER_KEY)
+    assert cli.main(["projects"]) == 0
+    assert json.loads(capfd.readouterr().out) == []
+    assert cli.main(["projects", "add", "my app"]) == 0
+    out, err = capfd.readouterr()
+    _no_secret(out, err)
+    assert json.loads(out) == ["my app"] and "POST" in err
+    assert cli.main(["projects", "add", "My App"]) == 1
+    assert "already in your projects" in capfd.readouterr().err
+    assert alice["private_metadata"] == {"stripeId": "cus_1", "notes": {"a": [1, 2]}, "flag": True,
+                                         "projects": ["my app"]}
+    assert [c["body"] for c in clerk.calls if c["method"] == "PATCH"] == \
+        [{"private_metadata": {"projects": ["my app"]}}]

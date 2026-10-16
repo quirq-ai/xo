@@ -11,6 +11,9 @@ verifies it with Clerk and answers:
     GET   /healthz                  no key, no Clerk call
     GET   /me                       any user key: the key's own account, with its primary email and
                                     its public and private metadata (secret-looking values masked)
+    GET   /me/projects              any user key: the `projects` list in its own private metadata
+    POST  /me/projects              any user key: add {"name": ...} to that list; the server builds
+                                    the change and writes only `projects`, nothing else
     GET   /user-metadata/{userId}   admin keys only: public and private metadata
     PATCH /user-metadata/{userId}   admin keys only: deep-merge changes into allow-listed keys
     POST  /api/core/v1/{create}     passed on to XO's core API as sent, key included, and its
@@ -97,7 +100,12 @@ BUCKETS = {"publicMetadata": "public_metadata", "privateMetadata": "private_meta
 MAX_BODY = 32 * 1024  # two 8KB buckets with room for JSON overhead
 # Requests per minute per key: /me, then /user-metadata. Clerk allows 1000 Backend API calls per
 # 10 seconds for the whole instance and 10 metadata writes per 10 seconds per user.
-LIMITS = {"me": 60, "user-metadata": 20, "core": 30}
+LIMITS = {"me": 60, "projects": 30, "user-metadata": 20, "core": 30}
+# /me/projects: the one write a normal key can make. A name is letters, digits, spaces and _ . -,
+# starting with a letter or digit; the list stays well under Clerk's 8KB private metadata limit.
+PROJECT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9 _.-]{0,63}")
+MAX_PROJECTS = 50
+PROJECT_TRIES = 3  # writes tried when the list read back is not the one written
 MAX_TRACKED = 10_000  # tokens remembered for rate limiting; the least recently seen go first
 ME_CACHE_SECONDS = 60
 ME_CACHE_PRUNE_AT = 1000  # cached /me answers kept before the expired ones are dropped
@@ -107,7 +115,7 @@ ACTIVITY_KEPT = 100  # recent requests the status page lists, per process
 # amount of other traffic hides one, and each heals by itself once it is older than that.
 DEGRADED_SECONDS = 300
 DEGRADED_KEPT = 1000  # times remembered of each kind; enough to count five minutes of real traffic
-_CLERK_ROUTES = ("/me", "/user-metadata/{userId}")
+_CLERK_ROUTES = ("/me", "/me/projects", "/user-metadata/{userId}")
 _PROCESS_STARTED = time.time()  # when this process (on Vercel, this instance) loaded the server
 REQUEST_TIMEOUT = 10  # seconds a client may wait between bytes of its request
 # Seconds a connection to `xo serve` may stay open in all: a client that trickles one byte at a time
@@ -443,6 +451,7 @@ class App:
         self._lock = threading.Lock()
         self._hits: collections.OrderedDict[tuple[str, str], list[float]] = collections.OrderedDict()
         self._me_cache: dict[str, tuple[float, dict]] = {}
+        self._project_locks: dict[str, threading.Lock] = {}  # one add per user at a time, per instance
         # What the status page shows: counts and the last ACTIVITY_KEPT requests, each only its time,
         # method, route template, status and duration (never a key, user id, path or address).
         self.started = _PROCESS_STARTED
@@ -559,6 +568,12 @@ class App:
             if method != "GET":
                 raise _Reply(405, "Method not allowed")
             return self._me(self._key(headers, "me"))
+        if path == "/me/projects":
+            if method == "GET":
+                return self._projects(self._key(headers, "projects"))
+            if method == "POST":
+                return self._add_project(headers, body)
+            raise _Reply(405, "Method not allowed")
         if path.startswith(CORE_PREFIX + "/"):
             return self._forward(method, path[len(CORE_PREFIX):], headers, body)
         if path.startswith("/user-metadata/"):
@@ -602,6 +617,100 @@ class App:
                 self._me_cache = {s: e for s, e in self._me_cache.items() if now - e[0] < ME_CACHE_SECONDS}
             self._me_cache[subject] = (now, data)
         return data
+
+    def _projects(self, key: dict) -> dict:
+        """The `projects` list in the key's own private metadata ([] when there is none)."""
+        u = self._user(key["subject"])
+        private = u.get("private_metadata")
+        projects = private.get("projects") if isinstance(private, dict) else None
+        return {"projects": _mask_secrets([] if projects is None else projects)}
+
+    def _user(self, subject: str) -> dict:
+        try:
+            return self.clerk.user(subject)
+        except ClerkError as e:
+            if e.status == 404:
+                raise _Reply(404, "Account not found") from None
+            raise _clerk_failure(e) from None
+
+    def _add_project(self, headers: dict[str, str], body: bytes | None) -> dict:
+        """Add one name to the key's own private metadata `projects`. The client sends only the
+        name; the server reads the list, appends, and sends Clerk a merge that names `projects` and
+        nothing else, so every other key is left as it was. Clerk has no compare-and-swap, so the
+        list is read back after the write and the add tried again if it is not there."""
+        try:
+            key = self._key(headers, "projects")
+        except _Reply as r:
+            self.audit(method="POST", route="/me/projects", keyId=None, caller=None, outcome=r.status,
+                       **({"clerk": r.clerk} if r.clerk is not None else {}))
+            raise
+        subject = key["subject"]
+        who = {"method": "POST", "route": "/me/projects", "keyId": key.get("id"), "caller": subject}
+
+        def refuse(status: int, error: str) -> _Reply:
+            self.audit(**who, outcome=status)
+            return _Reply(status, error)
+
+        try:
+            sent = json.loads(body or b"")
+        except (json.JSONDecodeError, UnicodeDecodeError, RecursionError):
+            raise refuse(422, "Body is not JSON") from None
+        if not isinstance(sent, dict) or set(sent) != {"name"} or not isinstance(sent["name"], str):
+            raise refuse(422, 'Body must be {"name": "..."} and nothing else')
+        name = sent["name"].strip()
+        if not PROJECT_NAME.fullmatch(name):
+            raise refuse(422, "A project name is 1 to 64 letters, digits, spaces, _ . or -, "
+                              "starting with a letter or digit")
+        with self._lock:
+            lock = self._project_locks.setdefault(subject, threading.Lock())
+        with lock:
+            wrote = False
+            for _ in range(PROJECT_TRIES):
+                try:
+                    u = self.clerk.user(subject)
+                except ClerkError as e:
+                    reply = _Reply(404, "Account not found") if e.status == 404 else _clerk_failure(e)
+                    self.audit(**who, outcome=reply.status, clerk=e.seen)
+                    raise reply from None
+                private = u.get("private_metadata")
+                private = {} if private is None else private
+                if not isinstance(private, dict):
+                    raise refuse(409, "Your private metadata is not an object; nothing was changed")
+                projects = private.get("projects", [])
+                if not isinstance(projects, list):
+                    raise refuse(409, "Your private metadata `projects` is not a list; nothing was changed")
+                present = any(isinstance(p, str) and p.casefold() == name.casefold() for p in projects)
+                if present and wrote:  # our earlier write raced another one and is there after all
+                    wanted, others = projects, None
+                    break
+                if present:
+                    raise refuse(409, f"{name} is already in your projects; nothing was changed")
+                if len(projects) >= MAX_PROJECTS:
+                    raise refuse(422, f"You have {MAX_PROJECTS} projects, the most there can be; nothing was changed")
+                wanted = [*projects, name]
+                try:
+                    # A merge naming only `projects`: Clerk leaves every other key as it is.
+                    after = self.clerk.update_metadata(subject, {"privateMetadata": {"projects": wanted}})
+                except ClerkError as e:
+                    reply = self._clerk_reply(e)
+                    self.audit(**who, outcome=reply.status, clerk=e.seen)
+                    raise reply from None
+                wrote = True
+                stored = after.get("private_metadata")
+                stored = stored if isinstance(stored, dict) else {}
+                if stored.get("projects") == wanted:
+                    # Anything else that differs was changed by someone else meanwhile, not by this merge.
+                    others = {k: v for k, v in stored.items() if k != "projects"} != \
+                        {k: v for k, v in private.items() if k != "projects"}
+                    break
+            else:
+                raise refuse(503, "Your projects changed while this add ran; run xo projects to see "
+                                  "whether it is there before trying again")
+        with self._lock:
+            self._me_cache.pop(subject, None)
+        extra = {"othersChanged": True} if others else {}
+        self.audit(**who, outcome=200, count=len(wanted), **extra)  # never the names or values
+        return {"projects": _mask_secrets(wanted)}
 
     def _shown_private(self, private: Any) -> Any:
         """The private metadata /me shows its user: all of it, or only $XO_ME_PRIVATE_KEYS."""
@@ -693,7 +802,7 @@ def _route_name(path: str) -> str | None:
     path = urllib.parse.urlsplit(path).path.rstrip("/") or "/"
     if path in ("/", "/status"):
         return None
-    if path in ("/healthz", "/me", "/config"):
+    if path in ("/healthz", "/me", "/me/projects", "/config"):
         return path
     if path.startswith("/user-metadata/"):
         return "/user-metadata/{userId}"
