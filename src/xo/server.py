@@ -15,6 +15,8 @@ verifies it with Clerk and answers:
     POST  /me/projects              any user key: add {"name": ...} to that list; the server builds
                                     the change and writes only `projects`, nothing else
     GET   /me/spaces                any user key: the `spaces` list in its own private metadata
+    POST  /me/projects/connect      any user key: {"name", "repo"}: give a project with no repo its
+                                    GitHub OWNER/REPO, which becomes its name (`projects` only)
     POST  /me/spaces                any user key: {"kind", "name", "body"}: create the space through
                                     XO with the caller's key, then record it in `spaces`
     POST  /me/spaces/connect        any user key: {"name", "id"?}: a new space entry; with an id, only
@@ -153,11 +155,11 @@ ACTIVITY_KEPT = 100  # recent requests the status page lists, per process
 # amount of other traffic hides one, and each heals by itself once it is older than that.
 DEGRADED_SECONDS = 300
 DEGRADED_KEPT = 1000  # times remembered of each kind; enough to count five minutes of real traffic
-_CLERK_ROUTES = ("/me", "/me/projects", "/me/spaces", "/me/spaces/connect", "/me/spaces/{name}",
+_CLERK_ROUTES = ("/me", "/me/projects", "/me/projects/connect", "/me/spaces", "/me/spaces/connect", "/me/spaces/{name}",
                  "/me/spaces/{name}/projects", "/me/share", "/me/shared", "/me/shared/accept", "/me/shared/reject",
                  "/user-metadata/{userId}")
-# The creates `xo create space KIND` may record: the core routes that make a space.
-SPACE_KINDS = ("claude-code", "codex", "antigravity", "hermes", "openclaw", "xo-cowork", "nebius-openclaw")
+# The creates `xo create space NAME KIND` may record: the core routes that make a space.
+SPACE_KINDS = names.SPACE_KINDS
 _PROCESS_STARTED = time.time()  # when this process (on Vercel, this instance) loaded the server
 REQUEST_TIMEOUT = 10  # seconds a client may wait between bytes of its request
 # Seconds a connection to `xo serve` may stay open in all: a client that trickles one byte at a time
@@ -749,6 +751,10 @@ class App:
             if method == "POST":
                 return self._add_project(headers, body)
             raise _Reply(405, "Method not allowed")
+        if path == "/me/projects/connect":
+            if method != "POST":
+                raise _Reply(405, "Method not allowed")
+            return self._connect_repo(headers, body)
         if path == "/me/spaces":
             if method == "GET":
                 return self._spaces(self._key(headers, "spaces"))
@@ -968,6 +974,60 @@ class App:
         projects = self._change(key["subject"], who, "projects", step, "projects",
                                 "Your projects changed while this add ran; run xo projects to see whether it is "
                                 "there before trying again")
+        return {"projects": _mask_secrets(projects)}
+
+    def _connect_repo(self, headers: dict[str, str], body: bytes | None) -> dict:
+        """Give a project that has no repo its GitHub OWNER/REPO. A project's name is its repo, so
+        the name in `projects` becomes OWNER/REPO, in place; the server writes `projects` and nothing
+        else. A project already in a space is refused, since its spaces would still name it the old
+        way."""
+        key, _, who = self._caller(headers, "projects", "/me/projects/connect")
+        sent = self._body(body, who, {"name": True, "repo": True})
+        name, repo = sent["name"], sent["repo"]
+        self._project_name(name, who)
+        self._project_name(repo, who)
+        if names.is_github(name):
+            raise self._refuse(who, 422, f"{name} already has a repo: a project's name is its OWNER/REPO")
+        if not names.is_github(repo):
+            raise self._refuse(who, 422, "repo must be a GitHub OWNER/REPO")
+        seen: list = []
+
+        def same(p: Any, q: str) -> bool:
+            return isinstance(p, str) and p.casefold() == q.casefold()
+
+        def step(projects: list, private: dict, wrote: bool) -> tuple[str, list]:
+            has_name = any(same(p, name) for p in projects)
+            has_repo = any(same(p, repo) for p in projects)
+            # No user route removes a project, so anything read earlier and gone now was dropped
+            # by a racing write that started from an older list: put it back.
+            missing = [p for p in seen if p not in projects and not same(p, name) and not same(p, repo)]
+            if wrote and has_repo and not has_name and not missing:
+                return "done", projects
+            if not wrote:
+                if not has_name:
+                    raise self._refuse(who, 404, f"{name} is not in your projects; nothing was changed")
+                if has_repo:
+                    raise self._refuse(who, 409, f"{repo} is already in your projects; nothing was changed")
+                spaces = private.get("spaces", [])
+                held = sorted(e["name"] for e in spaces if isinstance(spaces, list) and isinstance(e, dict)
+                              and isinstance(e.get("name"), str)
+                              and any(isinstance(x, dict) and any(same(k, name) for k in x) for x in
+                                      (e.get("projects") if isinstance(e.get("projects"), list) else [])))
+                if held:
+                    # TODO(suraj): rename the project inside its spaces too (one merge naming `projects`
+                    # and `spaces`), so a project already in a space can get its repo.
+                    raise self._refuse(who, 409, f"{name} is in space {held[0]}, which would still name it {name}; "
+                                                 "nothing was changed")
+            wanted = [repo if same(p, name) else p for p in projects]
+            if not any(same(p, repo) for p in wanted):
+                wanted.append(repo)
+            wanted += missing
+            seen.extend(p for p in projects if p not in seen and not same(p, name))
+            return "write", wanted
+
+        projects = self._change(key["subject"], who, "projects", step, "projects",
+                                "Your projects changed while this ran; run xo projects to see whether "
+                                f"{repo} is there before trying again")
         return {"projects": _mask_secrets(projects)}
 
     def _project_name(self, name: str, who: dict) -> None:
@@ -1624,8 +1684,8 @@ def _route_name(path: str) -> str | None:
     path = urllib.parse.urlsplit(path).path.rstrip("/") or "/"
     if path in ("/", "/status"):
         return None
-    if path in ("/healthz", "/me", "/me/projects", "/me/spaces", "/me/spaces/connect", "/config", "/me/share",
-                "/me/shared", "/me/shared/accept", "/me/shared/reject"):
+    if path in ("/healthz", "/me", "/me/projects", "/me/projects/connect", "/me/spaces", "/me/spaces/connect",
+                "/config", "/me/share", "/me/shared", "/me/shared/accept", "/me/shared/reject"):
         return path
     if path.startswith("/me/spaces/") and path.endswith("/projects") and path.count("/") == 4:
         return "/me/spaces/{name}/projects"

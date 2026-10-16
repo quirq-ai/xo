@@ -43,7 +43,7 @@ XO API commands go to one address: your creates, `xo spaces`, `xo me` and `xo us
 
 ```sh
 xo --help
-xo codex --help
+xo create space NAME codex --help
 xo spaces --space-id 00000000-0000-0000-0000-000000000000
 ```
 
@@ -52,7 +52,7 @@ The last command should print `xo: GET /spaces/00000000-0000-0000-0000-000000000
 ## 4. Preview a create (sends nothing)
 
 ```sh
-xo codex --name my-first-space --volume-size 20 --dry-run
+xo create space my-first-space codex --volume-size 20 --dry-run
 ```
 
 This prints the request xo would send, a notice that a real create copies your key into the space, then `xo: dry run, nothing sent`.
@@ -65,10 +65,11 @@ Before you create anything, know these three things:
 - `xo spaces` prints URLs that carry a session token. Don't share them.
 
 ```sh
-xo codex --name my-first-space --volume-size 20
+xo create space my-first-space codex --volume-size 20
 ```
 
-This creates a real space on your account. Keep the `data.id` it prints. To look at the space again later:
+This creates a real space on your account and records it in your spaces. `xo list spaces` shows it
+again later, with its XO id; to see XO's own view of it, with its connection URLs:
 
 ```sh
 xo spaces --space-id THE_ID
@@ -82,14 +83,15 @@ coder`) and needs no XO API key.
 
 | Command | Creates |
 |---|---|
-| `xo codex --name N --volume-size 20` | a Codex space |
-| `xo antigravity --name N --volume-size 20` | an Antigravity space |
-| `xo claude-code --name N --volume-size 20 --providers-anthropic-api-key -` | a Claude Code space (`-` asks for the key) |
-| `xo hermes …`, `xo openclaw …`, `xo xo-cowork …` | spaces with providers and chat channels; see `xo openclaw --help` |
-| `xo nebius-openclaw --name N --token-factory-api-key -` | a Nebius OpenClaw space |
+| `xo create space N codex --volume-size 20` | a Codex space |
+| `xo create space N antigravity --volume-size 20` | an Antigravity space |
+| `xo create space N claude-code --volume-size 20 --providers-anthropic-api-key -` | a Claude Code space (`-` asks for the key) |
+| `xo create space N hermes …`, `… openclaw …`, `… xo-cowork …` | spaces with providers and chat channels; see `xo create space N openclaw --help` |
+| `xo create space N nebius-openclaw --token-factory-api-key -` | a Nebius OpenClaw space |
+| `xo create project N` or `xo create project https://github.com/OWNER/REPO` | a project: an empty repository at `./N`, or a clone named `OWNER/REPO` |
 | `xo spaces --space-id ID` | nothing; it shows a space you own |
 
-A name is 1 to 32 letters, digits or hyphens, starts with a letter or digit, and can't be `new` or `create`. A name you already used fails with HTTP 500. The volume size is 20 to 100 GB. Add `--dry-run` to any create to see it first.
+A space's name N is 1 to 32 letters, digits or hyphens, starts with a letter or digit, and can't be `new` or `create`; it is its name on XO and in your spaces. A name you already used fails. The volume size is 20 to 100 GB. Add `--dry-run` to any create to see it first.
 
 `nebius-openclaw` is behind a feature flag on XO Cloud; when the flag is off for your account it answers HTTP 404.
 

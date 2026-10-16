@@ -5,7 +5,7 @@ Vercel at `xo.quirq.dev` through `app.py`), which holds the Clerk Secret Key so 
 it. Standard library only. Setup is in [quickstart.md](quickstart.md); the server's settings in
 [server.md](server.md).
 
-This describes main at 4027932 (through #33). Every command has its own sequence diagram in
+This describes main at 4027932 (through #33) plus the unified `xo create` change. Every command has its own sequence diagram in
 section 3. [architecture.html](architecture.html) is the same doc as a page with drawn diagrams;
 GitHub shows it as source, so open it locally or from a static host.
 
@@ -50,6 +50,7 @@ flowchart LR
 
 Most commands are generated: `commands.register()` reads the bundled spec (`src/xo/openapi.json`,
 or `--spec`) and makes one command per operation, with every parameter and body field as a flag.
+XO's seven space creates are the exception: they are the kinds of `xo create space NAME KIND`.
 `xo coder VERB` is caught before argparse and handed to the coder CLI.
 
 ```mermaid
@@ -65,19 +66,19 @@ flowchart LR
 
 | Command | Goes to | What it does |
 |---|---|---|
-| `xo claude-code --name N --volume-size GB` | server, then XO | `POST /claude-code`: volume 20 to 100 GB; add `--providers-anthropic-api-key -` for the Anthropic provider |
-| `xo codex --name N --volume-size GB` | server, then XO | `POST /codex` |
-| `xo antigravity --name N --volume-size GB` | server, then XO | `POST /antigravity` |
-| `xo hermes --name N --volume-size GB` | server, then XO | `POST /hermes`: plus a provider key and a Telegram or Slack bot token |
-| `xo openclaw --name N --volume-size GB` | server, then XO | `POST /openclaw`: plus at least one provider key and one channel (Telegram, WhatsApp or Slack) |
-| `xo xo-cowork --name N --volume-size GB` | server, then XO | `POST /xo-cowork`: providers and channels optional |
-| `xo nebius-openclaw --name N --token-factory-api-key K --telegram-bot-token T` | server, then XO | `POST /nebius-openclaw`: feature flagged, 404 when off |
+| `xo create space NAME claude-code --volume-size GB` | server, then XO | a Claude Code space named NAME on XO and in your spaces; add `--providers-anthropic-api-key -` for the Anthropic provider |
+| `xo create space NAME codex --volume-size GB` | server, then XO | a Codex space |
+| `xo create space NAME antigravity --volume-size GB` | server, then XO | an Antigravity space |
+| `xo create space NAME hermes --volume-size GB` | server, then XO | plus a provider key and a Telegram or Slack bot token |
+| `xo create space NAME openclaw --volume-size GB` | server, then XO | plus at least one provider key and one channel (Telegram, WhatsApp or Slack) |
+| `xo create space NAME xo-cowork --volume-size GB` | server, then XO | providers and channels optional |
+| `xo create space NAME nebius-openclaw --token-factory-api-key K --telegram-bot-token T` | server, then XO | feature flagged, 404 when off |
 | `xo spaces --space-id ID` | server, then XO | `GET /spaces/{spaceId}`: connection URLs with a session token |
 | `xo me` | server only | your profile, primary email and both metadata buckets, as `{"xo": {..., "public_data", "private_data"}}`; credential-looking values masked |
 | `xo projects [add NAME]` | server only | read or append to the `projects` list in your private metadata |
-| `xo create project NAME\|URL` | server, then git | add the project, then clone `OWNER/REPO` here or `git init` a plain name |
-| `xo create space KIND NAME --name N --volume-size GB` | server, then XO | create the space as `xo KIND` would, then record it in `spaces` as NAME |
+| `xo create project NAME [URL]` | server, then git | add the project, then clone `OWNER/REPO` here or `git init` a plain name; a NAME given with a URL must match it |
 | `xo connect project:P space:S [--ref R]` | server only | set P in space S at R (default `main`) |
+| `xo connect project:P --repo URL` | server, then git | a project made with a name only gets its repo and is renamed `OWNER/REPO`; `./P` gets that origin and moves to `./OWNER/REPO` |
 | `xo connect space:S [--id ID]` | server, then XO | record a space entry; `--id` ties it to an XO space your key can read |
 | `xo list projects\|spaces` | server only | show either list |
 | `xo install project:P\|space:S` | server, git | clone, or fetch and fast-forward, P; for a space, each project into `./S/` at its ref |
@@ -94,8 +95,7 @@ flowchart LR
 
 ## 3. Every command, step by step
 
-One sequence per command: who does each step, in order. Generated from the same steps as the
-diagrams on the published architecture page.
+One swimlane per command: who does each step, in order, and what moves between them. Highlighted is the step the command exists for; dashed is a step that happens only sometimes.
 
 ### Log in and check
 
@@ -105,18 +105,18 @@ Setup commands. Only xo login sends your key anywhere, and only to the xo server
 
 ```mermaid
 sequenceDiagram
-  participant CLI as You (xo CLI)
-  participant Server as xo server
-  participant XO as XO core API
-  participant Git as git and GitHub
+  participant Cli as You · xo CLI
+  participant Srv as xo server
+  participant Xo as XO core API
+  participant Git as git · GitHub
   participant Coder as Coder
-  Note over CLI: xo login: or: xo login coder
-  CLI->>Server: fetch / GET /config: addresses, no key
-  Server->>CLI: the list / ask for your key: hidden, must start ak_
-  CLI->>Server: your key / GET spaces/0000...: a space no one has
-  Server->>XO: forwarded / Space not found: 404 means the key works
-  XO->>CLI: 404 / save key + URL: ~/.config/xo/credentials
-  CLI->>Coder: then / coder login: in your terminal
+  Note over Cli: xo login: or: xo login coder
+  Cli->>Srv: fetch / GET /config: addresses, no key
+  Srv->>Cli: the list / ask for your key: hidden, must start ak_
+  Cli->>Srv: your key / GET spaces/0000...: a space no one has
+  Srv->>Xo: forwarded / Space not found: 404 means the key works
+  Xo->>Cli: 404 / save key + URL: ~/.config/xo/credentials
+  Cli->>Coder: then / coder login: in your terminal
   Coder->>Git: then / gh auth login: only if not logged in
 ```
 
@@ -126,12 +126,12 @@ A key is saved only after XO accepts it. A 401, or the server's own bare 404, sa
 
 ```mermaid
 sequenceDiagram
-  participant CLI as You (xo CLI)
-  participant Git as git and GitHub
+  participant Cli as You · xo CLI
+  participant Git as git · GitHub
   participant Coder as Coder
-  Note over CLI: xo logout
-  Note over CLI: delete key + addresses: the files login saved
-  CLI-->>Coder: if logged in there / coder logout: asks, xo's deployment only
+  Note over Cli: xo logout
+  Note over Cli: delete key + addresses: the files login saved
+  Cli-->>Coder: if logged in there / coder logout: asks, xo's deployment only
   Coder-->>Git: if you say yes / gh auth logout: asks first
 ```
 
@@ -141,14 +141,14 @@ Logout is local first. Coder and gh are logged out only where they point at xo's
 
 ```mermaid
 sequenceDiagram
-  participant CLI as You (xo CLI)
-  participant Git as git and GitHub
+  participant Cli as You · xo CLI
+  participant Git as git · GitHub
   participant Coder as Coder
-  Note over CLI: xo status
-  Note over CLI: read saved login: never prints the key
-  CLI->>Coder: ask / where is Coder?: asked without a URL
+  Note over Cli: xo status
+  Note over Cli: read saved login: never prints the key
+  Cli->>Coder: ask / where is Coder?: asked without a URL
   Coder->>Git: ask / gh auth status: who, on github.com
-  Git->>CLI: answers / four rows: me, xo, coder, github
+  Git->>Cli: answers / four rows: me, xo, coder, github
 ```
 
 Status sends no key. It only asks the Coder and GitHub CLIs who they are logged in as.
@@ -161,15 +161,15 @@ Answered by the xo server itself, with the Clerk Secret Key only it holds.
 
 ```mermaid
 sequenceDiagram
-  participant CLI as You (xo CLI)
-  participant Server as xo server
+  participant Cli as You · xo CLI
+  participant Srv as xo server
   participant Clerk as Clerk
-  Note over CLI: xo me
-  CLI->>Server: key / GET /me: 60 a minute per key
-  Server->>Clerk: verify / verify key: every call, never cached
+  Note over Cli: xo me
+  Cli->>Srv: key / GET /me: 60 a minute per key
+  Srv->>Clerk: verify / verify key: every call, never cached
   Note over Clerk: read user: profile cached 60 s
-  Clerk->>Server: user / mask secrets: email + both buckets
-  Server->>CLI: profile / print profile: ("xo": (...))
+  Clerk->>Srv: user / mask secrets: email + both buckets
+  Srv->>Cli: profile / print profile: ("xo": (...))
 ```
 
 You see your own metadata, masked. Values under credential-like names, or that look like keys, show only their last 4 characters or (hidden). XO_ME_PRIVATE_KEYS can narrow the private keys shown.
@@ -178,50 +178,64 @@ You see your own metadata, masked. Values under credential-like names, or that l
 
 ```mermaid
 sequenceDiagram
-  participant CLI as You (xo CLI)
-  participant Server as xo server
+  participant Cli as You · xo CLI
+  participant Srv as xo server
   participant Clerk as Clerk
-  Note over CLI: xo user-metadata: --api-key - (admin key)
-  CLI->>Server: key / /user-metadata/(id): 20 a minute per key
-  Server->>Clerk: verify / verify key: has claim xo_admin?
-  Clerk->>Server: claims / admin check: id in XO_ADMIN_KEY_IDS
-  Server->>Clerk: if admin / GET or PATCH user: allow-listed keys only
-  Clerk->>Server: audit line: ids and key names only
-  Server->>CLI: answer / both buckets
+  Note over Cli: xo user-metadata: --api-key - (admin key)
+  Cli->>Srv: key / /user-metadata/(id): 20 a minute per key
+  Srv->>Clerk: verify / verify key: has claim xo_admin?
+  Clerk->>Srv: claims / admin check: id in XO_ADMIN_KEY_IDS
+  Srv->>Clerk: if admin / GET or PATCH user: allow-listed keys only
+  Clerk->>Srv: audit line: ids and key names only
+  Srv->>Cli: answer / both buckets
 ```
 
 Admin needs two locks, and none is issued yet. Until a key has the claim and its id is listed, every caller gets 403. PATCH changes only top-level keys named in XO_EDITABLE_*_KEYS.
 
 ### Spaces on XO
 
-Generated from the spec. The server passes these on with your key and returns XO's answer as it came.
+Every space is created one way, xo create space NAME KIND, and recorded in your spaces. The old xo claude-code, xo codex, ... commands are gone and say so.
 
-#### `xo claude-code | codex | openclaw | ...`
+#### `xo create space NAME KIND`
 
 ```mermaid
 sequenceDiagram
-  participant CLI as You (xo CLI)
-  participant Server as xo server
-  participant XO as XO core API
-  Note over CLI: xo codex --name a: flags become the body
-  CLI->>Server: POST + key / /api/core/v1/codex: allowed route, ak_ shape
-  Server->>XO: same key / create space: XO checks the key
-  XO->>CLI: answer, as it came / the new space: keep data.id
+  participant Cli as You · xo CLI
+  participant Srv as xo server
+  participant Clerk as Clerk
+  participant Xo as XO core API
+  Note over Cli: xo create space dev codex: KIND's flags, no --name
+  Cli->>Srv: kind + body / POST /me/spaces: name, room, 6KB first
+  Srv->>Xo: POST + key / create space: named dev on XO too
+  Xo->>Srv: new id / got the id
+  Srv->>Clerk: write / merge (spaces): name, kind, id, rev 1
+  Clerk->>Cli: 200 / space recorded
 ```
 
-Seven creates, one shape. claude-code, codex, antigravity, hermes, openclaw, xo-cowork and nebius-openclaw. Every one but nebius-openclaw stores your key inside the new space, and xo says so first.
+One name, on XO and in your spaces. KIND is claude-code, codex, antigravity, hermes, openclaw, xo-cowork or nebius-openclaw; NAME is 1 to 32 letters, digits or hyphens. Everything recording needs is checked before XO is called. Every kind but nebius-openclaw stores your key inside the new space, and xo says so first.
+
+#### `xo claude-code | codex | ... (removed)`
+
+```mermaid
+sequenceDiagram
+  participant Cli as You · xo CLI
+  Note over Cli: xo codex --name a: an old create
+  Note over Cli: nothing sent: says: xo create space
+```
+
+The old creates only point to the new one. xo stops before parsing, so nothing is sent and no flag value is echoed: xo codex is now xo create space NAME codex [flags].
 
 #### `xo spaces --space-id ID`
 
 ```mermaid
 sequenceDiagram
-  participant CLI as You (xo CLI)
-  participant Server as xo server
-  participant XO as XO core API
-  Note over CLI: xo spaces --space-id
-  CLI->>Server: GET + key / /api/core/v1/spaces/ID: id: 64 safe characters
-  Server->>XO: same key / read space: owner only
-  XO->>CLI: answer / connection URLs: carry a session token
+  participant Cli as You · xo CLI
+  participant Srv as xo server
+  participant Xo as XO core API
+  Note over Cli: xo spaces --space-id
+  Cli->>Srv: GET + key / /api/core/v1/spaces/ID: id: 64 safe characters
+  Srv->>Xo: same key / read space: owner only
+  Xo->>Cli: answer / connection URLs: carry a session token
 ```
 
 The only way back to a space XO made. The API has no list, delete, start or stop. Treat the URLs as secrets: their token lasts up to an hour.
@@ -234,68 +248,69 @@ Each write goes through the server's one engine: a per-user lock, a write that n
 
 ```mermaid
 sequenceDiagram
-  participant CLI as You (xo CLI)
-  participant Server as xo server
+  participant Cli as You · xo CLI
+  participant Srv as xo server
   participant Clerk as Clerk
-  Note over CLI: xo projects add N: or just: xo projects
-  CLI->>Server: name / POST /me/projects: ("name") only
-  Server->>Clerk: verify / verify, read user
-  Clerk->>Server: list / append name: rules, 30 max, 6KB
-  Server->>Clerk: write / merge (projects): nothing else written
+  Note over Cli: xo projects add N: or just: xo projects
+  Cli->>Srv: name / POST /me/projects: ("name") only
+  Srv->>Clerk: verify / verify, read user
+  Clerk->>Srv: list / append name: rules, 30 max, 6KB
+  Srv->>Clerk: write / merge (projects): nothing else written
   Note over Clerk: read back: dropped? write again
-  Clerk->>CLI: 200 / the new list
+  Clerk->>Cli: 200 / the new list
 ```
 
 Only the projects list changes. A duplicate (ignoring case), a credential-like name, or a full list is refused with nothing written.
 
-#### `xo create project NAME | URL`
+#### `xo create project NAME [URL]`
 
 ```mermaid
 sequenceDiagram
-  participant CLI as You (xo CLI)
-  participant Server as xo server
+  participant Cli as You · xo CLI
+  participant Srv as xo server
   participant Clerk as Clerk
-  participant Git as git and GitHub
-  Note over CLI: xo create project: ./NAME must not exist
-  CLI->>Server: name / POST /me/projects: the same add as above
-  Server->>Clerk: write / merge (projects)
-  Clerk->>CLI: 200 / listed
-  CLI->>Git: make ./NAME / clone or git init: OWNER/REPO: clone
+  participant Git as git · GitHub
+  Note over Cli: xo create project N: or a URL, or both
+  Note over Cli: name the project: a repo: OWNER/REPO
+  Cli->>Srv: name / POST /me/projects: the same add as above
+  Srv->>Clerk: write / merge (projects)
+  Clerk->>Cli: 200 / listed
+  Cli->>Git: make ./NAME / clone or git init: OWNER/REPO: clone
 ```
 
-Record first, then make the folder. A GitHub URL or OWNER/REPO is cloned over https; any other name gets an empty repository. If git fails, the name stays listed and xo says so.
+A project is named after its repo. Give a name (git init ./notes), a GitHub URL (cloned as OWNER/REPO), or both when they name the same repository; a different name with a URL is refused before anything is sent. Record first, then make the folder.
 
-#### `xo create space KIND NAME`
+#### `xo connect project:P --repo URL`
 
 ```mermaid
 sequenceDiagram
-  participant CLI as You (xo CLI)
-  participant Server as xo server
+  participant Cli as You · xo CLI
+  participant Srv as xo server
   participant Clerk as Clerk
-  participant XO as XO core API
-  Note over CLI: xo create space: flags of xo KIND
-  CLI->>Server: kind + body / POST /me/spaces: name, room, 6KB first
-  Server->>XO: POST + key / create space: with your key
-  XO->>Server: new id / got the id
-  Server->>Clerk: write / merge (spaces): name, kind, id, rev 1
-  Clerk->>CLI: 200 / space recorded
+  participant Git as git · GitHub
+  Note over Cli: xo connect project:notes: --repo URL
+  Cli->>Srv: name, repo / POST /me/projects/connect: ("name", "repo")
+  Srv->>Clerk: read / read user: notes in no space?
+  Note over Clerk: merge (projects): notes becomes OWNER/REPO
+  Clerk->>Cli: 200 / the new list
+  Cli-->>Git: if ./notes is here / set origin: ./notes to ./OWNER/REPO
 ```
 
-XO creates, then the server records. Everything recording needs is checked before XO is called. If recording fails after XO made the space, the answer gives its id and the xo connect space:NAME --id ID that records it.
+A project made with a name gets its repo later. The name is replaced in place, through the same engine as an add. Refused while the project is in a space, since the space would still name it the old way. An origin the folder already has is left as it is.
 
 #### `xo connect space:S [--id ID]`
 
 ```mermaid
 sequenceDiagram
-  participant CLI as You (xo CLI)
-  participant Server as xo server
+  participant Cli as You · xo CLI
+  participant Srv as xo server
   participant Clerk as Clerk
-  participant XO as XO core API
-  Note over CLI: xo connect space:S: --id: an XO space
-  CLI->>Server: name / POST .../connect: ("name", "id"?)
-  Server-->>XO: only with --id / GET spaces/ID: can your key read it?
-  XO->>Clerk: write / merge (spaces): new entry, rev 1
-  Clerk->>CLI: 200 / the entry
+  participant Xo as XO core API
+  Note over Cli: xo connect space:S: --id: an XO space
+  Cli->>Srv: name / POST .../connect: ("name", "id"?)
+  Srv-->>Xo: only with --id / GET spaces/ID: can your key read it?
+  Xo->>Clerk: write / merge (spaces): new entry, rev 1
+  Clerk->>Cli: 200 / the entry
 ```
 
 An entry without creating anything. With an id, XO must confirm your key can read that space (403 or 404 there is a 404 here). A name or id already recorded is refused.
@@ -304,14 +319,14 @@ An entry without creating anything. With an id, XO must confirm your key can rea
 
 ```mermaid
 sequenceDiagram
-  participant CLI as You (xo CLI)
-  participant Server as xo server
+  participant Cli as You · xo CLI
+  participant Srv as xo server
   participant Clerk as Clerk
-  Note over CLI: xo connect project:P: space:S --ref R
-  CLI->>Server: P, ref / POST spaces/S/projects: ("project", "ref")
-  Server->>Clerk: read / read user: P must be in projects
+  Note over Cli: xo connect project:P: space:S --ref R
+  Cli->>Srv: P, ref / POST spaces/S/projects: ("project", "ref")
+  Srv->>Clerk: read / read user: P must be in projects
   Note over Clerk: merge (spaces): (P: R), rev + 1
-  Clerk->>CLI: 200 / the space
+  Clerk->>Cli: 200 / the space
 ```
 
 One project, one ref, one more rev. A missing ref is main. Connecting P again replaces its ref in place; a space holds at most 10 projects.
@@ -320,14 +335,14 @@ One project, one ref, one more rev. A missing ref is main. Connecting P again re
 
 ```mermaid
 sequenceDiagram
-  participant CLI as You (xo CLI)
-  participant Server as xo server
+  participant Cli as You · xo CLI
+  participant Srv as xo server
   participant Clerk as Clerk
-  Note over CLI: xo list spaces: or projects
-  CLI->>Server: key / GET /me/spaces
-  Server->>Clerk: verify / verify, read user
-  Clerk->>Server: list / mask: refs shown as stored
-  Server->>CLI: answer / print the list
+  Note over Cli: xo list spaces: or projects
+  Cli->>Srv: key / GET /me/spaces
+  Srv->>Clerk: verify / verify, read user
+  Clerk->>Srv: list / mask: refs shown as stored
+  Srv->>Cli: answer / print the list
 ```
 
 A read, masked as /me is. Project names and refs are not masked: a repository called auth-service is not a secret.
@@ -340,17 +355,17 @@ Your own git, over https only, with no submodules and none of xo's tokens. The m
 
 ```mermaid
 sequenceDiagram
-  participant CLI as You (xo CLI)
-  participant Server as xo server
+  participant Cli as You · xo CLI
+  participant Srv as xo server
   participant Clerk as Clerk
-  participant Git as git and GitHub
-  Note over CLI: xo install space:S
-  CLI->>Server: key / GET /me/spaces
-  Server->>Clerk: read / read user
-  Clerk->>CLI: space S / each project: dirty checkout: refuse
-  CLI->>Git: https / clone or fetch: ./S/OWNER/REPO
+  participant Git as git · GitHub
+  Note over Cli: xo install space:S
+  Cli->>Srv: key / GET /me/spaces
+  Srv->>Clerk: read / read user
+  Clerk->>Cli: space S / each project: dirty checkout: refuse
+  Cli->>Git: https / clone or fetch: ./S/OWNER/REPO
   Note over Git: checkout ref: fast-forward only
-  Git->>CLI: done / save state.json: rev N and refs
+  Git->>Cli: done / save state.json: rev N and refs
 ```
 
 The installed rev and refs are the base for later updates. A project with no GitHub remote is left as it is. A branch that has moved on from its remote is refused, never merged.
@@ -359,13 +374,13 @@ The installed rev and refs are the base for later updates. A project with no Git
 
 ```mermaid
 sequenceDiagram
-  participant CLI as You (xo CLI)
-  participant Server as xo server
-  participant Git as git and GitHub
-  Note over CLI: xo install project:P
-  CLI->>Server: key / GET /me/projects: P must be listed
-  Server->>CLI: yes / ./P here?
-  CLI->>Git: https / clone, or fetch: over https
+  participant Cli as You · xo CLI
+  participant Srv as xo server
+  participant Git as git · GitHub
+  Note over Cli: xo install project:P
+  Cli->>Srv: key / GET /me/projects: P must be listed
+  Srv->>Cli: yes / ./P here?
+  Cli->>Git: https / clone, or fetch: over https
   Note over Git: fast-forward: never a merge
 ```
 
@@ -375,18 +390,18 @@ Clone once, then only fast-forward. If your branch and its upstream have both mo
 
 ```mermaid
 sequenceDiagram
-  participant CLI as You (xo CLI)
-  participant Server as xo server
+  participant Cli as You · xo CLI
+  participant Srv as xo server
   participant Clerk as Clerk
-  participant Git as git and GitHub
-  Note over CLI: xo update space:S: reads state.json
-  Note over CLI: check checkouts: own, clean
-  CLI->>Git: push / git push: each tracked branch
-  Git->>CLI: pushed / read refs here: branch, or commit
-  CLI->>Git: check / ref on remote?: else refuse
-  Git->>Server: refs / PUT /me/spaces/S: rev N + base
-  Server->>Clerk: write / merge (spaces): rev N + 1, or 409
-  Clerk->>CLI: 200 / save state.json
+  participant Git as git · GitHub
+  Note over Cli: xo update space:S: reads state.json
+  Note over Cli: check checkouts: own, clean
+  Cli->>Git: push / git push: each tracked branch
+  Git->>Cli: pushed / read refs here: branch, or commit
+  Cli->>Git: check / ref on remote?: else refuse
+  Git->>Srv: refs / PUT /me/spaces/S: rev N + base
+  Srv->>Clerk: write / merge (spaces): rev N + 1, or 409
+  Clerk->>Cli: 200 / save state.json
 ```
 
 Push, then record, only if nobody moved the space. The server refuses with 409 "run xo sync" unless the space is still at rev N and still holds base, the refs you installed. With nothing changed, nothing is recorded.
@@ -395,12 +410,12 @@ Push, then record, only if nobody moved the space. The server refuses with 409 "
 
 ```mermaid
 sequenceDiagram
-  participant CLI as You (xo CLI)
-  participant Git as git and GitHub
-  Note over CLI: xo update project:P
-  Note over CLI: check upstream: own, on a branch, clean
-  CLI->>Git: push / push to upstream: never forced
-  Git->>CLI: pushed: remote ahead: xo sync
+  participant Cli as You · xo CLI
+  participant Git as git · GitHub
+  Note over Cli: xo update project:P
+  Note over Cli: check upstream: own, on a branch, clean
+  Cli->>Git: push / push to upstream: never forced
+  Git->>Cli: pushed: remote ahead: xo sync
 ```
 
 A plain push, never forced. It goes to the branch's upstream remote, not a pushRemote, and needs a branch, not a detached HEAD.
@@ -409,19 +424,19 @@ A plain push, never forced. It goes to the branch's upstream remote, not a pushR
 
 ```mermaid
 sequenceDiagram
-  participant CLI as You (xo CLI)
-  participant Server as xo server
+  participant Cli as You · xo CLI
+  participant Srv as xo server
   participant Clerk as Clerk
-  participant Git as git and GitHub
-  Note over CLI: xo sync space:S: reads state.json
-  CLI->>Git: rebase / pull --rebase, push: each tracked branch
-  Git->>Server: read space / GET /me/spaces
-  Server->>Clerk: read / read user
-  Clerk->>CLI: space S / merge refs: installed, yours, space
-  CLI->>Git: no clash / checkout merged
-  Git->>Server: refs / PUT /me/spaces/S: only if refs changed
-  Server->>Clerk: write / merge (spaces)
-  Clerk->>CLI: 200 / save state.json
+  participant Git as git · GitHub
+  Note over Cli: xo sync space:S: reads state.json
+  Cli->>Git: rebase / pull --rebase, push: each tracked branch
+  Git->>Srv: read space / GET /me/spaces
+  Srv->>Clerk: read / read user
+  Clerk->>Cli: space S / merge refs: installed, yours, space
+  Cli->>Git: no clash / checkout merged
+  Git->>Srv: refs / PUT /me/spaces/S: only if refs changed
+  Srv->>Clerk: write / merge (spaces)
+  Clerk->>Cli: 200 / save state.json
 ```
 
 A three-way merge of refs, per project. If you and the space both changed one project, or the space's rev went back, it stops, names the projects and records nothing. A rebase that conflicts is undone and left for you.
@@ -430,12 +445,12 @@ A three-way merge of refs, per project. If you and the space both changed one pr
 
 ```mermaid
 sequenceDiagram
-  participant CLI as You (xo CLI)
-  participant Git as git and GitHub
-  Note over CLI: xo sync project:P
-  CLI->>Git: rebase / pull --rebase: undone on conflict
+  participant Cli as You · xo CLI
+  participant Git as git · GitHub
+  Note over Cli: xo sync project:P
+  Cli->>Git: rebase / pull --rebase: undone on conflict
   Note over Git: push: never forced
-  Git->>CLI: done / rebased, pushed
+  Git->>Cli: done / rebased, pushed
 ```
 
 Rebase on the upstream, then push. On a conflict xo runs git rebase --abort, so the checkout is as it was.
@@ -448,10 +463,10 @@ For operations the generated commands don't cover, or to see what a command woul
 
 ```mermaid
 sequenceDiagram
-  participant CLI as You (xo CLI)
-  Note over CLI: xo ops codex
-  Note over CLI: read openapi.json: or --spec, XO_SPEC
-  Note over CLI: print operations: id, method, path
+  participant Cli as You · xo CLI
+  Note over Cli: xo ops codex
+  Note over Cli: read openapi.json: or --spec, XO_SPEC
+  Note over Cli: print operations: id, method, path
 ```
 
 Offline. The spec is read from disk, never fetched, so ops and every --help work without a network.
@@ -460,13 +475,13 @@ Offline. The spec is read from disk, never fetched, so ops and every --help work
 
 ```mermaid
 sequenceDiagram
-  participant CLI as You (xo CLI)
-  participant Server as xo server
-  participant XO as XO core API
-  Note over CLI: xo call create_codex: --param, --data, --field
-  CLI->>Server: request + key / /api/core/v1/...: creates + space read only
-  Server->>XO: forwarded / XO's answer
-  XO->>CLI: answer / print JSON: secrets redacted
+  participant Cli as You · xo CLI
+  participant Srv as xo server
+  participant Xo as XO core API
+  Note over Cli: xo call create_codex: --param, --data, --field
+  Cli->>Srv: request + key / /api/core/v1/...: creates + space read only
+  Srv->>Xo: forwarded / XO's answer
+  Xo->>Cli: answer / print JSON: secrets redacted
 ```
 
 Anything else gets the server's 404. To reach XO directly, add --url https://dev.xo.builders with XO_API_KEY or --api-key -. --dry-run sends nothing and hides provider keys.
@@ -479,13 +494,13 @@ Coder keeps its own login; xo checks where it points before every call.
 
 ```mermaid
 sequenceDiagram
-  participant CLI as You (xo CLI)
+  participant Cli as You · xo CLI
   participant Coder as Coder
-  Note over CLI: xo coder github URL: --name, --ref, --start-command
-  CLI->>Coder: check / where logged in?: must be xo's deployment
+  Note over Cli: xo coder github URL: --name, --ref, --start-command
+  Cli->>Coder: check / where logged in?: must be xo's deployment
   Note over Coder: create workspace: template xo-github
   Note over Coder: wait for the build: up to 600 s
-  Coder->>CLI: done / print URLs: workspace + public app
+  Coder->>Cli: done / print URLs: workspace + public app
 ```
 
 The app on port 3000 is public. --dry-run prints the plan without Coder. Provisioner logs are never printed, since they can hold credentials.
@@ -494,10 +509,10 @@ The app on port 3000 is public. --dry-run prints the plan without Coder. Provisi
 
 ```mermaid
 sequenceDiagram
-  participant CLI as You (xo CLI)
+  participant Cli as You · xo CLI
   participant Coder as Coder
-  Note over CLI: xo coder ssh my-app: caught before argparse
-  CLI->>Coder: check / where logged in?: asked without a URL
+  Note over Cli: xo coder ssh my-app: caught before argparse
+  Cli->>Coder: check / where logged in?: asked without a URL
   Note over Coder: coder --url DEP ssh: in your terminal
 ```
 
@@ -507,10 +522,10 @@ No Coder command runs against another deployment. Options that change the deploy
 
 ```mermaid
 sequenceDiagram
-  participant CLI as You (xo CLI)
-  participant Server as xo server
-  Note over CLI: xo serve: --host, --port
-  CLI->>Server: start / ThreadingHTTPServer: 127.0.0.1:8787
+  participant Cli as You · xo CLI
+  participant Srv as xo server
+  Note over Cli: xo serve: --host, --port
+  Cli->>Srv: start / ThreadingHTTPServer: 127.0.0.1:8787
 ```
 
 The same App Vercel runs. It needs CLERK_SECRET_KEY in its environment and listens on localhost by default; anything else should sit behind HTTPS.
@@ -562,6 +577,7 @@ sequenceDiagram
 | Route | Command | Change |
 |---|---|---|
 | `POST /me/projects` | `xo projects add`, `xo create project` | append a name |
+| `POST /me/projects/connect` | `xo connect project:P --repo URL` | replace a plain name with its `OWNER/REPO`, in place; refused while P is in a space |
 | `POST /me/spaces` | `xo create space` | check name and budget, create on XO with your key, record `{name, kind, id, rev: 1}` |
 | `POST /me/spaces/connect` | `xo connect space:S [--id]` | new entry; with an id, only after XO confirms your key can read it |
 | `POST /me/spaces/{name}/projects` | `xo connect project:P space:S` | set one project's ref |

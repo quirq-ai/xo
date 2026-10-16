@@ -63,6 +63,21 @@ def clone(name: str, dest: Path) -> None:
     run("clone", "--no-recurse-submodules", "--end-of-options", f"{GITHUB}/{name}", str(dest))
 
 
+def set_origin(dest: Path, name: str) -> str:
+    """Point a checkout with no origin at GitHub's owner/repo. An origin that is already there is
+    left as it is: what happened, in words."""
+    if not (names.project_ok(name) and names.is_github(name)):
+        raise XoError(f"{name} is not a GitHub owner/repo")
+    own_checkout(dest)
+    url = f"{GITHUB}/{name}"
+    have = run("remote", "get-url", "origin", cwd=dest, check=False)
+    if have is None:
+        run("remote", "add", "origin", url, cwd=dest)
+        return f"its origin is now {url}"
+    have = have.strip()
+    return f"its origin was already {have}, so it was left as it is" if have != url else f"its origin is {url}"
+
+
 def init(dest: Path) -> None:
     """An empty repository at dest, for a project with no GitHub remote yet."""
     run("init", "--quiet", "--end-of-options", str(dest))

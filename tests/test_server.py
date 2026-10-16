@@ -1145,10 +1145,11 @@ def test_config_names_no_platform_for_a_malformed_core_address(monkeypatch):
     assert data["xo"]["url"] is None and data["xo"]["coder"]["url"]
 
 
-def test_a_cli_create_goes_through_the_server(xo_server, clerk, monkeypatch, capfd):
+def test_a_cli_core_create_goes_through_the_server(xo_server, clerk, monkeypatch, capfd):
+    # `xo create space` records through /me/spaces; `xo call` still sends a bare create through /api/core.
     monkeypatch.setenv("XO_URL", xo_server.url)
     monkeypatch.setenv("XO_API_KEY", USER_KEY)
-    assert cli.main(["codex", "--name", "my-codex", "--volume-size", "20"]) == 0
+    assert cli.main(["call", "create_codex", "--data", '{"name": "my-codex", "volumeSize": 20}']) == 0
     out, err = capfd.readouterr()
     _no_secret(out, err)
     assert json.loads(out)["data"]["id"] == "space_1"
@@ -1257,6 +1258,46 @@ def test_add_project_never_overwrites_projects_that_is_not_a_list(xo_server, cle
     status, _ = call(xo_server, "POST", "/me/projects", USER_KEY, {"name": "alpha"})
     assert status == 409 and alice["private_metadata"]["projects"] == value
     assert not [c for c in clerk.calls if c["method"] == "PATCH"]
+
+
+def test_connect_repo_renames_a_plain_project_in_place_and_writes_only_projects(xo_server, clerk, alice):
+    alice["private_metadata"]["projects"] = ["alpha", "notes", "beta"]
+    others = json.loads(json.dumps({k: v for k, v in alice["private_metadata"].items() if k != "projects"}))
+    status, out = call(xo_server, "POST", "/me/projects/connect", USER_KEY, {"name": "Notes", "repo": "o/notes"})
+    assert (status, out["data"]) == (200, {"projects": ["alpha", "o/notes", "beta"]})
+    patches = [c["body"] for c in clerk.calls if c["method"] == "PATCH"]
+    assert patches == [{"private_metadata": {"projects": ["alpha", "o/notes", "beta"]}}]
+    assert {k: v for k, v in alice["private_metadata"].items() if k != "projects"} == others
+    audits = [json.loads(line) for line in xo_server.audit if '"/me/projects/connect"' in line]
+    assert [(a["outcome"], a["count"]) for a in audits] == [(200, 3)]
+    assert not any("notes" in line for line in xo_server.audit)
+
+
+@pytest.mark.parametrize("projects, body, status", [
+    (["alpha"], {"name": "notes", "repo": "o/notes"}, 404),
+    (["notes", "O/Notes"], {"name": "notes", "repo": "o/notes"}, 409),
+    (["o/notes"], {"name": "o/notes", "repo": "o/other"}, 422),
+    (["notes"], {"name": "notes", "repo": "notes2"}, 422),
+    (["notes"], {"name": "notes", "repo": "ghp_x/notes"}, 422),
+    (["notes"], {"name": "notes"}, 422),
+    (["notes"], {"name": "notes", "repo": "o/notes", "x": "1"}, 422)])
+def test_connect_repo_refuses_and_writes_nothing(xo_server, clerk, alice, projects, body, status):
+    alice["private_metadata"]["projects"] = projects
+    assert call(xo_server, "POST", "/me/projects/connect", USER_KEY, body)[0] == status
+    assert not [c for c in clerk.calls if c["method"] == "PATCH"]
+
+
+def test_connect_repo_refuses_a_project_already_in_a_space(xo_server, clerk, alice):
+    alice["private_metadata"]["projects"] = ["notes"]
+    alice["private_metadata"]["spaces"] = [{"name": "dev", "kind": "codex", "rev": 2, "projects": [{"notes": "main"}]}]
+    status, out = call(xo_server, "POST", "/me/projects/connect", USER_KEY, {"name": "notes", "repo": "o/notes"})
+    assert (status, out["error"]) == (409, "notes is in space dev, which would still name it notes; nothing was changed")
+    assert not [c for c in clerk.calls if c["method"] == "PATCH"]
+
+
+def test_connect_repo_is_a_route_of_its_own(xo_server, clerk, alice):
+    assert call(xo_server, "GET", "/me/projects/connect", USER_KEY)[0] == 405
+    assert server._route_name("/me/projects/connect") == "/me/projects/connect"
 
 
 def test_add_project_stops_at_the_cap(xo_server, clerk, alice):
@@ -1798,9 +1839,9 @@ def test_xo_create_connect_and_list_spaces_end_to_end(xo_server, clerk, alice, m
     monkeypatch.setenv("XO_API_KEY", USER_KEY)
     monkeypatch.delenv("XO_SPEC", raising=False)
     alice["private_metadata"]["projects"] = ["notes"]
-    assert cli.main(["create", "space", "claude-code", "dev", "--name", "my-cc", "--volume-size", "20"]) == 0
+    assert cli.main(["create", "space", "dev", "claude-code", "--volume-size", "20"]) == 0
     assert [(c["method"], c["path"]) for c in clerk.core] == [("POST", "/core/claude-code")]
-    assert json.loads(clerk.core[0]["body"]) == {"name": "my-cc", "volumeSize": 20}
+    assert json.loads(clerk.core[0]["body"]) == {"name": "dev", "volumeSize": 20}
     assert cli.main(["connect", "project:notes", "space:dev", "--ref", "v1"]) == 0
     capfd.readouterr()
     assert cli.main(["list", "spaces"]) == 0
