@@ -72,7 +72,10 @@ def test_fetch_takes_a_good_list_without_sending_a_key(fake):
     (200, {"success": True, "data": {"schema": "other"}}, "it is not an xo-services/2 list"),
     (200, {"success": True, "data": {"schema": "xo-services/1", "services": {}}}, "it is not an xo-services/2 list"),
     (200, {"success": True, "data": {**GOOD, "xo": {"coder": {"url": "http://evil.example"}}}},
-     "the address for coder in the list is not a plain https:// address")])
+     "the address for coder in the list is not a plain https:// address"),
+    (200, {"success": True, "data": {**GOOD, "xo": {"url": "http://platform.example",
+                                                    "coder": {"url": "https://coder.example"}}}},
+     "the address for xo in the list is not a plain https:// address")])
 def test_fetch_falls_back_to_the_shipped_list_and_says_why(fake, status, body, why):
     fake.route("GET", "/config", status=status, body=body, headers={"Location": "https://evil.example/config"})
     found, notes = services.fetch(fake.base, 5)
@@ -105,7 +108,6 @@ def test_a_list_without_an_address_for_xo_keeps_coder_and_says_so(fake):
                      "sends creates"]
 
 
-
 def test_a_bad_me_address_is_skipped_and_the_rest_of_the_list_kept(fake):
     # xo never uses a listed me, so it must not cost the server's xo and coder addresses.
     fake.route("GET", "/config", body={"success": True, "data": {"schema": "xo-services/2", "xo": {
@@ -116,6 +118,16 @@ def test_a_bad_me_address_is_skipped_and_the_rest_of_the_list_kept(fake):
     assert found["me"] == services.builtin()["me"]
     assert notes == ["the address for me in the list is not a plain https:// address; xo does not use it, "
                      "so it is skipped"]
+
+
+def test_tests_reach_loopback_only(monkeypatch):
+    import socket
+    import urllib.request
+    monkeypatch.undo()  # a test's own undo must not remove the guard
+    with pytest.raises(socket.gaierror, match="tests reach loopback only"):
+        socket.getaddrinfo("canary.invalid", 443)
+    assert urllib.request.getproxies() == {}
+
 
 def test_unreachable_server_uses_the_shipped_list():
     found, notes = services.fetch("http://127.0.0.1:9", 2)
