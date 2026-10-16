@@ -1010,9 +1010,10 @@ def test_config_lists_the_services_without_a_key_or_clerk(xo_server, clerk, monk
     status, out = call(xo_server, "GET", "/config")
     assert status == 200 and out["data"] == services.SHIPPED
     monkeypatch.setenv("XO_CORE_API_URL", "https://platform.example/api/core/v1")
-    assert call(xo_server, "GET", "/config")[1]["data"]["services"]["xo-platform"]["url"] == "https://platform.example"
+    assert call(xo_server, "GET", "/config")[1]["data"]["xo"]["url"] == "https://platform.example"
     monkeypatch.setenv("XO_CORE_API_URL", "http://127.0.0.1:9/core")  # not an address the list may name
-    assert "xo-platform" not in call(xo_server, "GET", "/config")[1]["data"]["services"]
+    listed = call(xo_server, "GET", "/config")[1]["data"]
+    assert listed["xo"]["url"] is None and listed["xo"]["coder"] == services.SHIPPED["xo"]["coder"]
 
 
 def test_config_answers_even_without_the_clerk_secret(monkeypatch):
@@ -1026,4 +1027,4 @@ def test_config_answers_even_without_the_clerk_secret(monkeypatch):
 
 def test_the_platform_default_is_the_listed_one():
     assert server.DEFAULT_CORE_URL == "https://dev.xo.builders/api/core/v1"
-    assert services.SHIPPED["services"]["xo-platform"]["url"] == "https://dev.xo.builders"
+    assert services.SHIPPED["xo"]["url"] == "https://dev.xo.builders"

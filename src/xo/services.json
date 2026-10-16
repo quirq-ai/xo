@@ -1,13 +1,15 @@
 {
-  "schema": "xo-services/1",
-  "services": {
-    "xo-platform": {
-      "url": "https://dev.xo.builders",
-      "about": "XO Cloud: the creates (xo claude-code, xo codex, ...) and xo spaces, passed on by the xo server"
-    },
+  "schema": "xo-services/2",
+  "xo": {
+    "url": "https://dev.xo.builders",
+    "about": "XO Cloud: the creates (xo claude-code, xo codex, ...) and xo spaces, passed on by the xo server",
     "coder": {
       "url": "https://dev-coder.xo.builders",
       "about": "Coder workspaces: xo coder github, list, ssh, ..."
     }
+  },
+  "me": {
+    "url": "https://xo.quirq.dev",
+    "about": "the xo server: xo me and xo user-metadata, and the one address your XO key is sent to"
   }
 }
