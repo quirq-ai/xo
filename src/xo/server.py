@@ -21,6 +21,8 @@ verifies it with Clerk and answers:
                                     for an XO space the key can read
     POST  /me/spaces/{name}/projects  any user key: {"project", "ref"}: set one project's ref in a
                                     space; the server writes only `spaces`, nothing else
+    PUT   /me/spaces/{name}         any user key: {"rev", "projects"}: replace a space's projects and
+                                    refs, only if its rev is still the one sent (else 409)
     GET   /user-metadata/{userId}   admin keys only: public and private metadata
     PATCH /user-metadata/{userId}   admin keys only: deep-merge changes into allow-listed keys
     POST  /api/core/v1/{create}     passed on to XO's core API as sent, key included, and its
@@ -128,7 +130,8 @@ ACTIVITY_KEPT = 100  # recent requests the status page lists, per process
 # amount of other traffic hides one, and each heals by itself once it is older than that.
 DEGRADED_SECONDS = 300
 DEGRADED_KEPT = 1000  # times remembered of each kind; enough to count five minutes of real traffic
-_CLERK_ROUTES = ("/me", "/me/projects", "/me/spaces", "/me/spaces/connect", "/me/spaces/{name}/projects",
+_CLERK_ROUTES = ("/me", "/me/projects", "/me/spaces", "/me/spaces/connect", "/me/spaces/{name}",
+                 "/me/spaces/{name}/projects",
                  "/user-metadata/{userId}")
 # The creates `xo create space KIND` may record: the core routes that make a space.
 SPACE_KINDS = ("claude-code", "codex", "antigravity", "hermes", "openclaw", "xo-cowork", "nebius-openclaw")
@@ -672,6 +675,10 @@ class App:
             if method != "POST":
                 raise _Reply(405, "Method not allowed")
             return self._connect_space(headers, body)
+        if path.startswith("/me/spaces/") and path.count("/") == 3 and path != "/me/spaces/connect":
+            if method != "PUT":
+                raise _Reply(405, "Method not allowed")
+            return self._update_space(urllib.parse.unquote(path.split("/")[3]), headers, body)
         if path.startswith("/me/spaces/") and path.endswith("/projects") and path.count("/") == 4:
             if method != "POST":
                 raise _Reply(405, "Method not allowed")
@@ -735,16 +742,16 @@ class App:
                 raise _Reply(404, "Account not found") from None
             raise _clerk_failure(e) from None
 
-    def _caller(self, headers: dict[str, str], group: str, route: str) -> tuple[dict, str, dict]:
+    def _caller(self, headers: dict[str, str], group: str, route: str, method: str = "POST") -> tuple[dict, str, dict]:
         """The verified key, its token and the audit fields of a request that changes metadata;
         a refused key is audited too."""
         try:
             key, token = self._verified(headers, group)
         except _Reply as r:
-            self.audit(method="POST", route=route, keyId=None, caller=None, outcome=r.status,
+            self.audit(method=method, route=route, keyId=None, caller=None, outcome=r.status,
                        **({"clerk": r.clerk} if r.clerk is not None else {}))
             raise
-        return key, token, {"method": "POST", "route": route, "keyId": key.get("id"), "caller": key["subject"]}
+        return key, token, {"method": method, "route": route, "keyId": key.get("id"), "caller": key["subject"]}
 
     def _refuse(self, who: dict, status: int, error: str) -> _Reply:
         self.audit(**who, outcome=status)
@@ -1011,6 +1018,55 @@ class App:
 
         return {"space": _shown_space(self._change_space(key["subject"], who, name, make))}
 
+    def _update_space(self, name: str, headers: dict[str, str], body: bytes | None) -> dict:
+        """Replace a space's projects and refs with the caller's, if nobody changed the space since
+        the caller last read it: `rev` must be the space's rev now. Each project must be in the
+        caller's `projects`; the answer is the space with its rev one higher."""
+        key, _, who = self._caller(headers, "spaces", "/me/spaces/{name}", method="PUT")
+        try:
+            sent = json.loads(body or b"")
+        except (json.JSONDecodeError, UnicodeDecodeError, RecursionError):
+            raise self._refuse(who, 422, "Body is not JSON") from None
+        rev, entries = (sent.get("rev"), sent.get("projects")) if isinstance(sent, dict) else (None, None)
+        if (not isinstance(sent, dict) or set(sent) != {"rev", "projects"} or not isinstance(rev, int)
+                or isinstance(rev, bool) or not isinstance(entries, list)):
+            raise self._refuse(who, 422, 'Body must be {"rev": N, "projects": [{"PROJECT": "REF"}, ...]} '
+                                         "and nothing else")
+        self._space_name(name, who)
+        wanted, seen = [], set()
+        for e in entries:
+            if not (isinstance(e, dict) and len(e) == 1):
+                raise self._refuse(who, 422, 'Each project is {"PROJECT": "REF"}')
+            (project, ref), = e.items()
+            if not names.project_ok(project) or _SECRET_VALUE.search(project):
+                raise self._refuse(who, 422, names.PROJECT_RULE[0].upper() + names.PROJECT_RULE[1:])
+            if not names.ref_ok(ref):
+                raise self._refuse(who, 422, names.REF_RULE[0].upper() + names.REF_RULE[1:])
+            if _secret_ref(ref):
+                raise self._refuse(who, 422, "That ref looks like a credential (sk-, ghp_, ak_ and the like); "
+                                             "nothing was changed")
+            if project in seen:
+                raise self._refuse(who, 422, f"{project} is listed twice; a space holds each project once")
+            seen.add(project)
+            wanted.append({project: ref})
+        if len(wanted) > MAX_SPACE_PROJECTS:
+            raise self._refuse(who, 422, f"A space holds at most {MAX_SPACE_PROJECTS} projects; nothing was changed")
+
+        def make(current: dict | None, private: dict) -> dict:
+            if current is None:
+                raise self._refuse(who, 404, f"You have no space named {name}")
+            if _rev(current) != rev:
+                raise self._refuse(who, 409, f"Space {name} is at rev {_rev(current)}, not your rev {rev}: it changed since "
+                                             f"you read it; run xo sync space:{name} first")
+            projects = private.get("projects", [])
+            missing = [p for p in seen if not isinstance(projects, list) or p not in projects]
+            if missing:
+                raise self._refuse(who, 404, f"{missing[0]} is not in your projects; add it with xo create project "
+                                             "first")
+            return {**current, "projects": wanted, "rev": rev + 1}
+
+        return {"space": _shown_space(self._change_space(key["subject"], who, name, make))}
+
     def _connect_project(self, name: str, headers: dict[str, str], body: bytes | None) -> dict:
         """Set one project's ref in one of the caller's spaces: added, or replaced if it is there."""
         key, _, who = self._caller(headers, "spaces", "/me/spaces/{name}/projects")
@@ -1145,6 +1201,8 @@ def _route_name(path: str) -> str | None:
         return path
     if path.startswith("/me/spaces/") and path.endswith("/projects") and path.count("/") == 4:
         return "/me/spaces/{name}/projects"
+    if path.startswith("/me/spaces/") and path.count("/") == 3:
+        return "/me/spaces/{name}"
     if path.startswith("/user-metadata/"):
         return "/user-metadata/{userId}"
     if path.startswith(CORE_PREFIX + "/"):

@@ -76,8 +76,23 @@ xo connect space:dev                             # a new space entry in your met
 xo connect space:old --id THE_ID                 # an entry for an XO space you already have, or
                                                  # the id for an entry made without one
 xo list spaces                                   # your spaces, with their projects and refs
+xo install space:dev                             # ./dev/OWNER/REPO for each project, at its ref
+xo update space:dev                              # record the branches checked out under ./dev
+xo sync space:dev                                # take the space's changes, keep yours, record both
+xo update project:OWNER/REPO                     # git push its branch (never forced)
+xo sync project:OWNER/REPO                       # git pull --rebase, then push
 ```
 
+- `xo install`, `update` and `sync` use your own git and its login, over https only and without
+  submodules. A space's projects go in `./SPACE/OWNER/REPO`; `./SPACE/.xo/state.json` remembers the
+  space's rev and refs as installed. A project with no GitHub remote is left as it is.
+  - `update` sends the branch (or, when detached, the commit) each checkout is on, and is refused
+    when the space moved on since: run `xo sync`. A ref its remote does not have is refused too, so
+    nobody else's install breaks: push it first.
+  - `sync` takes the space's changes and keeps yours; if both changed the same project it stops
+    and changes nothing.
+  - A checkout with uncommitted changes is never touched. Pushes are never forced, only go to the
+    branch's upstream, and need a branch (not a detached HEAD).
 - Add `--dry-run` to `xo KIND` or `xo create space` to see the request without sending it.
   `xo create project` and `xo connect` have no `--dry-run`.
 - `-` makes xo ask for a key or token without showing it. Only one `-` works per command; put any

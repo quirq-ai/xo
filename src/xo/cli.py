@@ -41,6 +41,12 @@
     xo connect space:S [--id ID]            a new space entry S in your metadata; --id ties it to an
                                             XO space you already have.
     xo list projects | spaces               show your projects or your spaces.
+    xo install project:P | space:S          clone or fetch P here; for a space, each of its projects
+                                            into ./S/ at its ref.
+    xo update project:P | space:S           push P's branch (never forced); for a space, record the
+                                            refs checked out under ./S/ (refused if the space moved on).
+    xo sync project:P | space:S             pull --rebase and push P; for a space, take its changes,
+                                            keep yours, then record the result.
     (the xo key step:)                      ask for your API key without showing it, check it with
                                             XO through the xo server, and save it with the URL.
     xo logout                               delete the saved key, URL and addresses, and log Coder
@@ -89,7 +95,7 @@ from pathlib import Path
 from typing import Any, NoReturn
 from urllib.parse import quote
 
-from xo import __version__, coder, commands, github, gitops, names, services, spec
+from xo import __version__, coder, commands, github, gitops, names, services, spec, workspace
 from xo.client import (CODER_URL_ENV, CORE_PATH, DEFAULT_TIMEOUT, KEY_ENV, MAYBE_RECEIVED, MIN_SECRET, Client,
                        CoderClient, Login, XoError, api_key, check_key, coder_url, credentials_path,
                        forget_login, read_key, redact, save_login, saved_login, xo_url)
@@ -731,6 +737,15 @@ def _connect(args: argparse.Namespace) -> int:
     return 0
 
 
+def _workspace(args: argparse.Namespace) -> int:
+    """`xo install | update | sync project:P | space:S` (see xo/workspace.py)."""
+    kind, name = workspace.target(args.target)
+    client = _client(args, server=True) if kind == "space" or args.command == "install" else None
+    result = getattr(workspace, args.command)(client, kind, name)
+    print(_json(result) if client is None else client.scrub(_json(result)))
+    return 0
+
+
 def _list(args: argparse.Namespace) -> int:
     """`xo list projects | spaces`: that list in your private metadata."""
     client = _client(args, server=True)
@@ -1108,6 +1123,15 @@ def main(argv: list[str] | None = None) -> int:
     cn.add_argument("--id", help="with space:NAME, an XO space you already have (XO must confirm your key "
                                  "can read it)")
     cn.set_defaults(run=_connect)
+    for verb, about in (("install", "clone or fetch a project here, or each of a space's projects into ./SPACE at its "
+                                    "ref"),
+                        ("update", "push a project's branch, or record the refs checked out under ./SPACE in the "
+                                   "space (refused if the space moved on: run xo sync)"),
+                        ("sync", "pull --rebase and push a project, or merge a space's changes with yours and "
+                                 "record the result")):
+        w = sub.add_parser(verb, parents=[common], help=about)
+        w.add_argument("target", metavar="project:NAME|space:NAME")
+        w.set_defaults(run=_workspace)
     ls = sub.add_parser("list", parents=[common], help="show your projects or your spaces")
     ls.add_argument("what", choices=("projects", "spaces"))
     ls.set_defaults(run=_list)
