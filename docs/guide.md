@@ -69,7 +69,11 @@ xo me                                            # whose key this is
 
 - Add `--dry-run` to any create to see the request without sending it.
 - `-` makes xo ask for a key or token without showing it. Only one `-` works per command; put any
-  other secret in a JSON file and pass it with `--data @FILE`.
+  other secret in a JSON file and pass it with `--data @FILE`. The file holds part of the request
+  body, and the flags you give are added to it. For example, `body.json` holding
+  `{"providers": {"anthropic": {"enabled": true, "apiKey": "sk-ant-..."}}}` with
+  `xo claude-code --name my-cc --volume-size 20 --data @body.json`. Make the file readable only by
+  you (`chmod 600 body.json`) and delete it afterwards.
 - Every create except `nebius-openclaw` copies your XO key into the new space, and xo says so as it
   sends.
 - There is no delete or list: keep the `data.id` a create prints.
@@ -115,8 +119,7 @@ Each step says what you should see. Nothing here creates anything until step 5.
 4. `xo spaces --space-id 00000000-0000-0000-0000-000000000000` ends with `HTTP 404: Space not found`:
    your key reaches the platform at dev.xo.builders, and its `/api/core/v1` is there (step 2 checks
    the same way). A 401 means the platform does not know the key. `HTTP 404: XO answered 404 without
-   a JSON object` means the platform has no core API at that address; then `xo login` in step 2
-   fails the same way and saves nothing.
+   a JSON object` means the platform has no core API at that address; then `xo login` in step 2 fails the same way and saves nothing.
 5. `xo codex --name test-1 --volume-size 20 --dry-run`, then without `--dry-run` to really create.
 6. `xo coder github https://github.com/OWNER/REPO --dry-run`, then without `--dry-run`; open the
    `appUrl` it prints.

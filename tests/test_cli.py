@@ -990,6 +990,13 @@ def test_a_user_or_password_is_refused_and_nothing_of_the_url_is_repeated(core, 
     assert "hunter2" not in err and "hun" not in err and "sam" not in err and "u:p" not in err
 
 
+@pytest.mark.parametrize("url", ["https://[::1]@evil.example", "https://[::1", "https://[xo.example]"])
+def test_a_malformed_bracketed_host_is_refused_cleanly(core, capsys, url):
+    code, _, err = run(capsys, "me", "--url", url)
+    assert code == 1 and core.requests == [] and "unexpected" not in err
+    assert err.startswith("xo: --url is not a valid address") or err.startswith("xo: --url must ")
+
+
 def test_an_at_sign_in_the_path_is_fine():
     # Coder's path-based app URLs carry @owner.
     app = "https://coder.example/@alice/ws.main/apps/xo-cowork"

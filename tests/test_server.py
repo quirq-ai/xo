@@ -409,6 +409,12 @@ def test_the_audit_line_says_when_clerk_never_answered(xo_server, monkeypatch):
     assert (audits(xo_server)[-1]["outcome"], audits(xo_server)[-1]["clerk"]) == (502, "unreachable")
 
 
+def test_a_clerk_answer_that_is_not_json_is_not_called_unreachable(xo_server, clerk):
+    clerk.raw = b"<html>maintenance</html>"
+    assert call(xo_server, "GET", "/user-metadata/user_alice", ADMIN_KEY)[0] == 502
+    assert (audits(xo_server)[-1]["outcome"], audits(xo_server)[-1]["clerk"]) == (502, "not JSON")
+
+
 def test_a_refusal_before_clerk_has_no_clerk_field(xo_server):
     call(xo_server, "GET", "/user-metadata/user_alice", "ak_unknown_and_unlisted")
     assert "clerk" not in audits(xo_server)[-1]
@@ -989,6 +995,33 @@ def test_a_bad_core_url_stops_the_server_at_start(clerk, monkeypatch, url):
     monkeypatch.setenv("XO_CORE_API_URL", url)
     with pytest.raises(server.XoError, match="XO_CORE_API_URL (has a port|needs a host)"):
         server.Config()
+
+
+@pytest.mark.parametrize("name", ["XO_CORE_API_URL", "CLERK_API_URL"])
+@pytest.mark.parametrize("url", ["https://[::1/api", "https://[::1]@evil.example/api", "https://app.xo.example/a\nb",
+                                 "https://app.xo.example/a b"])
+def test_a_malformed_upstream_address_stops_the_server_with_a_clear_message(clerk, monkeypatch, name, url):
+    monkeypatch.setenv(name, url)
+    with pytest.raises(server.XoError, match=f"{name} is not a valid address"):
+        server.Config()
+
+
+@pytest.mark.parametrize("name, value", [
+    ("XO_CORE_API_URL", " https://app.xo.example/api"), ("XO_CORE_API_URL", "\nhttps://app.xo.example/api"),
+    ("XO_CORE_API_URL", "https://app.xo.example/api\n"), ("XO_CORE_API_URL", "https://app.xo.example/api\r\n"),
+    ("XO_CORE_API_URL", "https://app.xo.example/api\t"), ("CLERK_API_URL", " https://clerk.example"),
+    ("CLERK_API_URL", "https://clerk.example\n")])
+def test_whitespace_at_either_end_of_an_upstream_address_is_ignored(clerk, monkeypatch, name, value):
+    """A value pasted into the deploy settings often carries a trailing newline: it must not take the API down."""
+    monkeypatch.setenv(name, value)
+    cfg = server.Config()
+    assert (cfg.core_url if name == "XO_CORE_API_URL" else cfg.clerk_url) == value.strip()
+
+
+def test_config_names_no_platform_for_a_malformed_core_address(monkeypatch):
+    monkeypatch.setenv("XO_CORE_API_URL", "https://[::1/api/core/v1")
+    data = server.services_list()
+    assert data["xo"]["url"] is None and data["xo"]["coder"]["url"]
 
 
 def test_a_cli_create_goes_through_the_server(xo_server, clerk, monkeypatch, capfd):
