@@ -15,7 +15,7 @@ Using bash? Before you paste, change `~/.zshrc` (twice) in the block to `~/.bash
 
 ```sh
 python3 -m venv ~/.xo \
-  && ~/.xo/bin/pip install "quirq-xo @ git+https://github.com/quirq-ai/xo@e4dee3e636fe67a090fb4b2079a7c58dc15a34c1" \
+  && ~/.xo/bin/pip install "quirq-xo @ git+https://github.com/quirq-ai/xo@ebc2ae89f462018dd1f606b392bde9ad6e41489b" \
   && { grep -qxF 'export PATH="$HOME/.xo/bin:$PATH"' ~/.zshrc 2>/dev/null || echo 'export PATH="$HOME/.xo/bin:$PATH"' >> ~/.zshrc; } \
   && export PATH="$HOME/.xo/bin:$PATH" \
   && xo --version
