@@ -53,6 +53,24 @@ def loopback_only():
 
 
 @pytest.fixture(autouse=True)
+def no_real_gh(monkeypatch):
+    """No test runs the real gh or sees a GitHub token from the machine: xo.github's subprocess
+    answers as if gh were not installed, unless a test puts a fake in its place."""
+    import subprocess
+    import types
+    from xo import github
+
+    def run(*args, **kwargs):
+        raise FileNotFoundError("gh")
+    monkeypatch.setattr(github, "installed", lambda: False)
+    monkeypatch.setattr(github, "subprocess", types.SimpleNamespace(
+        run=run, DEVNULL=subprocess.DEVNULL, TimeoutExpired=subprocess.TimeoutExpired,
+        CompletedProcess=subprocess.CompletedProcess))
+    for name in ("GH_TOKEN", "GITHUB_TOKEN", "GH_HOST"):
+        monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture(autouse=True)
 def config_home(tmp_path, monkeypatch):
     """Every test gets its own empty config folder, so a key saved by xo login on this machine is
     never read, and no test writes to the real one."""

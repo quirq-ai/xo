@@ -87,7 +87,7 @@ Things to know:
 
 ## Services
 
-One `xo login` covers three services. The xo server lists them at `/config` (no key needed); xo
+One `xo login` covers three services, plus GitHub through the GitHub CLI (`gh`). The xo server lists the three at `/config` (no key needed); xo
 ships the same list (`src/xo/services.json`) and uses its own copy when the server cannot give a
 good one. The names follow the commands: `xo` for the creates, `coder` inside it because `xo coder`
 is a subcommand, and `me` for the xo server that answers `xo me`:
@@ -106,6 +106,7 @@ is a subcommand, and `me` for the xo server that answers `xo me`:
 | `me` | the xo server: `--url`, `XO_URL`, the one `xo login` saved, else `https://xo.quirq.dev` (the `me` address in xo's own list) | your XO API key | `xo me`, `xo user-metadata` |
 | `xo` | `https://dev.xo.builders`, reached through the xo server | the same XO API key | `xo claude-code`, `xo codex`, `xo openclaw`, ... and `xo spaces` |
 | `coder` | `https://dev-coder.xo.builders` | Coder's own login, in your terminal | `xo coder github`, `xo coder list`, `ssh`, ... |
+| `github` | `https://github.com` (not in the list; always github.com) | the GitHub CLI's own login (`gh auth login`), in your browser | `gh`, and git over https if you let gh set it up |
 
 Every XO API command, creates included, goes to the xo server you logged in to: xo sends your key
 to that one address, and the server passes it on to the `xo` address with each create. xo does not
