@@ -107,8 +107,8 @@ On Linux, Coder keeps one login for whichever deployment you last logged in to, 
 deployment it is told to use. So before every Coder command, xo asks Coder (without naming a
 deployment) where it is logged in, and stops with nothing sent unless it is xo's deployment. Coder
 options that change the deployment, token or login store (`--url`, `--token`, `--global-config`,
-`--use-keyring`, `--header`, `--header-command`, `--client-tls-*`) are refused in the arguments
-after the command.
+`--use-keyring`, `--header`, `--header-command`, `--client-tls-*`) are refused anywhere in the
+arguments after the command, even after `--`.
 
 ```sh
 xo coder login

@@ -461,9 +461,16 @@ def test_pass_through_refuses_coders_root_options(runner, capsys, verb, options)
     assert runner == []  # refused before Coder is even asked where it is logged in
 
 
-def test_root_options_after_a_double_dash_belong_to_the_command(runner):
-    assert cli.main(["coder", "ssh", "my-preview", "--", "echo", "--url", "x"]) == 0
-    assert runner[1][0] == ["coder", "--url", runner.base, "ssh", "my-preview", "--", "echo", "--url", "x"]
+@pytest.mark.parametrize("argv", [["list", "--search", "--", "--url", "https://evil.example"],
+                                  ["list", "--search", "--", "--url=https://evil.example"],
+                                  ["ssh", "my-preview", "-e", "--", "--url", "https://evil.example"],
+                                  ["ssh", "my-preview", "-l", "--", "--token", "T"],
+                                  ["ssh", "my-preview", "-l", "--", "--token=T"],
+                                  ["ssh", "my-preview", "--", "echo", "--url", "x"]])
+def test_root_options_after_a_double_dash_are_refused_too(runner, capsys, argv):
+    # pflag takes "--" as the value of a flag that wants one and goes on parsing after it.
+    assert cli.main(["coder", *argv]) == 1
+    assert "nothing was sent" in capsys.readouterr()[1] and runner == []
 
 
 def test_pass_through_runs_with_the_scrubbed_environment(runner, monkeypatch):

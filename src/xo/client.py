@@ -538,8 +538,9 @@ class CoderClient(Client):
 
     def run(self, args: list[str]) -> int:
         """Run one coder command on this deployment in the terminal, after the check. Coder reads its
-        root options anywhere before `--` and the last --url wins, so ARGS may not carry them."""
-        for arg in args[:args.index("--") if "--" in args else len(args)]:
+        root options anywhere and the last --url wins, so ARGS may not carry them, even after `--`:
+        a flag that takes a value takes `--` as that value and Coder keeps parsing after it."""
+        for arg in args:
             name = arg.partition("=")[0]
             if name in CODER_ROOT_OPTIONS or name.startswith(CODER_ROOT_PREFIXES):
                 raise XoError(f"xo coder does not pass {name} to coder: it would change where Coder "

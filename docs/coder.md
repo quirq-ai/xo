@@ -56,8 +56,9 @@ Use a new `--name` for a second deployment of the same repository; an existing w
 changed. Manage existing workspaces with the Coder dashboard or `xo coder list`, `start`, `stop` and `ssh`,
 which run the coder command on the checked deployment. Their arguments may not carry Coder's
 `--url`, `--token`, `--global-config`, `--use-keyring`, `--header`, `--header-command` or
-`--client-tls-*` options (before a `--`), since those would send the token elsewhere or use another
-login; xo stops with nothing sent. xo has no delete command: delete a workspace
+`--client-tls-*` options anywhere, even after `--`, since those would send the token elsewhere or use
+another login; xo stops with nothing sent. So a remote `xo coder ssh` command that contains one of
+them is refused too; run it with `coder ssh` yourself. xo has no delete command: delete a workspace
 in the Coder dashboard.
 
 `--timeout` sets the limit for each Coder account/app URL lookup (default 30 seconds).
