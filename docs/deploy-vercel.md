@@ -76,8 +76,8 @@ If the rule already exists without `/api/core`, edit it to add that condition an
 the server passes anything under `/api/core` that looks like an API key on to XO, so without it one
 address can send XO as many requests as the per-key limit allows for each made-up key.
 
-If your plan does not offer rate limit rules, stop and tell Claude: without the rule, anyone can
-make the server spend Clerk requests (1000 Backend API calls per 10 seconds for the whole instance)
+If your plan does not offer rate limit rules, tell Claude before you go on: without the rule,
+anyone can make the server spend Clerk requests (1000 Backend API calls per 10 seconds for the whole instance)
 and, past 100,000 a month, paid key checks. Through `/me` that is the server's own Clerk instance,
 the development one on development credentials. Through `/api/core` it is XO's production
 instance whatever credentials the server holds: a request there goes on to app.xo.builders, where
@@ -171,7 +171,8 @@ not part of this setup.
 
 Do not switch to production credentials until all of these hold:
 
-1. The test script passed on development credentials, including the Firewall check.
+1. The test script passed on development credentials, including the Firewall check where your plan
+   has the rule.
 2. **A global limit, or the risk accepted in writing.** The per-IP rule does not stop a flood
    spread over many addresses, and the server's own budgets (Clerk's, and `XO_CORE_PER_SECOND` for
    requests passed on to XO) are per instance. This is not only about this switch: requests to

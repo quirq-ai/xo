@@ -65,6 +65,9 @@ and JSON back as they came. XO checks the key; the server does not ask Clerk abo
   times out answers 504 "XO did not answer in time; it may have been received, so check before you
   retry"; one XO never answered, 502. An answer over 1 MiB is not passed on: the caller gets XO's
   status and "too large to pass on".
+- **No proxy for XO.** Requests passed on to XO go straight to `XO_CORE_API_URL`; `HTTP_PROXY` and
+  `HTTPS_PROXY` are not honoured for them (Clerk calls still use them). On a machine whose only way
+  out is a proxy, `/me` works but `/api/core` answers 502.
 
 ## The status page
 

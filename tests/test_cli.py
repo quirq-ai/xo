@@ -469,6 +469,16 @@ def test_undeclared_placeholders_and_clashing_names_get_working_flags(fake, caps
     assert fake.requests[0]["body"] == {"data": "true"}
 
 
+def test_a_spec_field_named_url_does_not_clash_with_url(fake, capsys, monkeypatch, tmp_path):
+    monkeypatch.setenv("XO_SPEC", _spec(tmp_path, {"/links": {"post": {
+        "parameters": [{"name": "url", "in": "query"}],
+        "requestBody": {"content": {"application/json": {"schema": {
+            "type": "object", "properties": {"url": {"type": "string"}}}}}}}}}))
+    fake.route("POST", "/links", body={})
+    assert run(capsys, "links", "--url-param", "q", "--url-param-param", "b")[0] == 0
+    assert fake.requests[0]["query"] == "url=q" and fake.requests[0]["body"] == {"url": "b"}
+
+
 def test_own_headers_get_no_flag_and_cannot_be_passed(fake, capsys, monkeypatch, tmp_path):
     monkeypatch.setenv("XO_SPEC", _spec(tmp_path, {"/h": {"get": {"parameters": [
         {"name": "Host", "in": "header"}, {"name": "authorization ", "in": "header"},
@@ -973,6 +983,8 @@ def test_the_url_error_does_not_repeat_a_password(core, capsys):
     assert code == 1 and "hunter2" not in err and "sam" not in err
     assert err == ("xo: --url must be an https:// address (or http:// to localhost) with no query and no user "
                    "or password, not 'https://xo.example'\n")
+    code, _, err = run(capsys, "me", "--url", "https://sam:hun?ter2@xo.example")
+    assert code == 1 and "ter2" not in err and "sam" not in err and err.endswith("not 'https://xo.example'\n")
 
 
 @pytest.mark.parametrize("names", [("XO_BASE_URL",), ("XO_SERVER_URL",), ("XO_BASE_URL", "XO_SERVER_URL")])

@@ -140,6 +140,12 @@ class Config:
         parts = urllib.parse.urlsplit(core)
         if not (parts.scheme == "https" or (parts.scheme == "http" and parts.hostname in LOCAL_HOSTS)):
             raise XoError(f"{CORE_ENV} must be https:// (or http:// to localhost)")
+        try:
+            parts.port  # raises on a port that is not a number from 0 to 65535
+        except ValueError:
+            raise XoError(f"{CORE_ENV} has a port that is not a number from 1 to 65535") from None
+        if not parts.hostname or parts.port == 0:
+            raise XoError(f"{CORE_ENV} needs a host name and, if it has a port, one from 1 to 65535")
         self.core_url = core
         self.admin_ids = _list_env("XO_ADMIN_KEY_IDS")
         self.editable = {"publicMetadata": _list_env("XO_EDITABLE_PUBLIC_KEYS"),

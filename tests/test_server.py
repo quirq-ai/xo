@@ -2,6 +2,7 @@
 of a real Clerk answer; shapes follow @clerk/backend's APIKeyJSON and UserJSON."""
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import threading
@@ -934,6 +935,22 @@ def test_xo_unreachable_or_slow(xo_server, clerk, monkeypatch):
     assert time.monotonic() - started < 2
 
 
+def test_a_slow_connect_still_ends_at_the_deadline(xo_server, clerk, monkeypatch):
+    # The timer fires while connecting, when there is no socket yet to cut: the check after the
+    # connect is then all that stops the answer from taking as long as XO likes.
+    monkeypatch.setattr(server, "CORE_TIMEOUT", 0.2)
+    real = http.client.HTTPConnection.connect
+
+    def slow_connect(self):
+        time.sleep(0.4)
+        real(self)
+
+    monkeypatch.setattr(http.client.HTTPConnection, "connect", slow_connect)
+    assert call(xo_server, "GET", "/api/core/v1/spaces/s1", USER_KEY) == (504, {
+        "success": False, "error": "XO did not answer in time"})
+    assert clerk.core == []
+
+
 def test_core_requests_are_rate_limited_per_key(xo_server, clerk):
     for _ in range(server.LIMITS["core"]):
         assert call(xo_server, "GET", "/api/core/v1/spaces/s1", USER_KEY)[0] == 200
@@ -962,6 +979,14 @@ def test_the_core_routes_are_the_specs(clerk):
 def test_the_core_url_must_be_https(clerk, monkeypatch):
     monkeypatch.setenv("XO_CORE_API_URL", "http://app.xo.example/api")
     with pytest.raises(server.XoError, match="XO_CORE_API_URL must be https://"):
+        server.Config()
+
+
+@pytest.mark.parametrize("url", ["http://localhost:abc/api", "https://app.xo.example:99999/api",
+                                 "https://app.xo.example:0/api", "https:///api"])
+def test_a_bad_core_url_stops_the_server_at_start(clerk, monkeypatch, url):
+    monkeypatch.setenv("XO_CORE_API_URL", url)
+    with pytest.raises(server.XoError, match="XO_CORE_API_URL (has a port|needs a host)"):
         server.Config()
 
 
