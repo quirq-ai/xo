@@ -676,6 +676,7 @@ class App:
             lock = self._project_locks.setdefault(subject, threading.Lock())
         with lock:
             wrote, seen, first = False, [], None
+            started = time.monotonic()
             for attempt in range(PROJECT_TRIES + 1):
                 if wrote:
                     time.sleep(PROJECT_SETTLE)  # let a write racing this one land before reading again
@@ -705,7 +706,9 @@ class App:
                 wanted = [*projects, *missing, *([] if present else [name])]
                 if len(wanted) > MAX_PROJECTS:
                     raise refuse(422, f"You have {MAX_PROJECTS} projects, the most there can be; nothing was changed")
-                if attempt == PROJECT_TRIES:
+                # No retry write once a slow Clerk has used CLERK_TIMEOUT: the request would outlive the
+                # client's and the platform's deadlines. The caller gets the 503 below, never a false 200.
+                if attempt == PROJECT_TRIES or (wrote and time.monotonic() - started > CLERK_TIMEOUT):
                     break
                 seen += [p for p in [*projects, name] if p not in seen]
                 try:
