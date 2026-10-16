@@ -37,7 +37,8 @@ Configuration (environment only, so the secret never lands in shell history or t
     XO_CORE_PER_SECOND        requests passed on to XO per second for the whole process (default 10)
     XO_SERVE_MAX_CONNECTIONS  connections served at once (default 64)
     CLERK_API_URL             default https://api.clerk.com (tests point it at a fake)
-    XO_CORE_API_URL           where /api/core/v1 goes; default https://app.xo.builders/api/core/v1
+    XO_CORE_API_URL           where /api/core/v1 goes; default the xo-platform address in the
+                              services list (https://dev.xo.builders) plus /api/core/v1
 
 It listens on 127.0.0.1 by default: put it behind an HTTPS proxy before giving it any other host.
 On Vercel, the repo's root app.py serves the same routes through `wsgi_app()` (docs/deploy-vercel.md).
@@ -61,7 +62,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
-from xo import __version__, status_page
+from xo import __version__, services, status_page
 from xo.client import LOCAL_HOSTS, XoError, redact
 
 SECRET_ENV = "CLERK_SECRET_KEY"
@@ -72,8 +73,9 @@ CLERK_TIMEOUT = 10.0
 CLERK_API_VERSION = "2026-05-12"
 USER_ID = re.compile(r"user_[A-Za-z0-9]{1,64}")
 CORE_ENV = "XO_CORE_API_URL"
-DEFAULT_CORE_URL = "https://app.xo.builders/api/core/v1"
 CORE_PREFIX = "/api/core/v1"  # the client's CORE_PATH
+# XO's platform: the address in the services list (services.json), unless XO_CORE_API_URL says.
+DEFAULT_CORE_URL = services.builtin()["xo-platform"].url + CORE_PREFIX
 # XO's time for a whole forward, under the 30 seconds the CLI waits by default and the server's
 # REQUEST_DEADLINE, so the caller hears why rather than timing out itself.
 CORE_TIMEOUT = 25.0
@@ -469,6 +471,8 @@ class App:
             return {"status": "ok"}
         if path == "/status" and method in ("GET", "HEAD"):
             return self.status()
+        if path == "/config" and method in ("GET", "HEAD"):
+            return services_list()
         if path == "/me":
             if method != "GET":
                 raise _Reply(405, "Method not allowed")
@@ -591,7 +595,7 @@ def _route_name(path: str) -> str | None:
     path = urllib.parse.urlsplit(path).path.rstrip("/") or "/"
     if path in ("/", "/status"):
         return None
-    if path in ("/healthz", "/me"):
+    if path in ("/healthz", "/me", "/config"):
         return path
     if path.startswith("/user-metadata/"):
         return "/user-metadata/{userId}"
@@ -600,6 +604,24 @@ def _route_name(path: str) -> str | None:
         return next((CORE_PREFIX + (name or sub) for _, pattern, name in CORE_ROUTES if pattern.fullmatch(sub)),
                     "other")
     return "other"
+
+
+def services_list() -> dict:
+    """What /config serves: the services list shipped with xo, with xo-platform set to where this
+    server really passes /api/core/v1 on to. No key, no Clerk call; never a key or token in it."""
+    data = json.loads(json.dumps(services.SHIPPED))
+    core = (os.environ.get(CORE_ENV) or "").strip().rstrip("/")
+    if core:
+        platform = core[:-len(CORE_PREFIX)] if core.endswith(CORE_PREFIX) else core
+        try:
+            data["services"]["xo-platform"]["url"] = services.listed_url("xo-platform", platform)
+        except XoError:
+            data["services"].pop("xo-platform")  # not an address the list can name: leave it out
+    return data
+
+
+def is_config(method: str, path: str) -> bool:
+    return method in ("GET", "HEAD") and (urllib.parse.urlsplit(path).path.rstrip("/") or "/") == "/config"
 
 
 def is_page(method: str, path: str) -> bool:
@@ -660,6 +682,10 @@ def wsgi_app(make_app=None):
         if is_page(environ.get("REQUEST_METHOD", "GET"), environ.get("PATH_INFO") or "/"):
             start_response("200 OK", [*PAGE_HEADERS, ("Content-Length", str(len(status_page.PAGE)))])
             return [] if environ.get("REQUEST_METHOD") == "HEAD" else [status_page.PAGE]
+        if is_config(environ.get("REQUEST_METHOD", "GET"), environ.get("PATH_INFO") or "/"):
+            # Served before the app is built, so a server missing its Clerk secret still lists them.
+            reply = _wsgi_reply(start_response, 200, {"success": True, "data": services_list()})
+            return [] if environ.get("REQUEST_METHOD") == "HEAD" else reply
         with lock:
             if "app" not in state and "error" not in state:
                 try:

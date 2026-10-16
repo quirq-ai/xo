@@ -14,7 +14,7 @@ on to XO's core API, so the CLI needs one address.
 xo me ──────────────┐                      ┌── POST /v1/api_keys/verify
 xo user-metadata ───┤                      ├─ CLERK_SECRET_KEY ─► api.clerk.com
                     ├─ XO_API_KEY ─► xo serve └── GET /v1/users/{id}, PATCH /v1/users/{id}/metadata
-xo codex, ... ──────┘                      └── /api/core/v1/... ─ the caller's key ─► app.xo.builders
+xo codex, ... ──────┘                      └── /api/core/v1/... ─ the caller's key ─► dev.xo.builders
 ```
 
 ## Routes
@@ -24,6 +24,7 @@ xo codex, ... ──────┘                      └── /api/core/v1/
 | GET | `/healthz` | anyone | `{"status": "ok"}`, with no Clerk call |
 | GET | `/` | anyone | the status page: health, counts and the latest requests, refreshed every 5 seconds |
 | GET | `/status` | anyone | what the page shows, as JSON; no Clerk call |
+| GET | `/config` | anyone | the services list `xo login` reads (`src/xo/services.json`), with xo-platform set to where this server passes `/api/core/v1` on to; addresses only, no Clerk call; answers even when the server is missing its settings |
 | GET | `/me` | any user key | `id`, `username`, `firstName`, `lastName`, `imageUrl`, `createdAt`; never email or metadata |
 | GET | `/user-metadata/{userId}` | admin keys | `publicMetadata`, `privateMetadata` |
 | PATCH | `/user-metadata/{userId}` | admin keys | both buckets after a deep merge; `null` removes a key |
@@ -40,8 +41,13 @@ it also says in one line on stderr). A core API route answers whatever XO answer
 ## Passing the core API on
 
 The server sends a core API request on to `XO_CORE_API_URL` (default
-`https://app.xo.builders/api/core/v1`) with the caller's own key and body, and passes XO's status
+`https://dev.xo.builders/api/core/v1`, the xo-platform service) with the caller's own key and body, and passes XO's status
 and JSON back as they came. XO checks the key; the server does not ask Clerk about it.
+
+**Changed: the default moved from `https://app.xo.builders` to `https://dev.xo.builders`.** Every
+create, carrying the caller's key, goes to the new address from the first deploy of this version.
+Setting `XO_CORE_API_URL` in the server's environment (in Vercel: Settings → Environment Variables)
+overrides it; `https://app.xo.builders/api/core/v1` keeps the old one.
 
 - **Only the routes above.** Nothing else under `/api/core/v1` leaves the server: other paths,
   methods, a path with any `%` escape in it, and a space id beyond 64 letters, digits, `-` and `_`
@@ -117,7 +123,7 @@ Environment only, so the secret never lands in shell history or the process list
 | `XO_CORE_PER_SECOND` | no | requests passed on to XO per second for the whole process; default 10 |
 | `XO_SERVE_MAX_CONNECTIONS` | no | connections served at once; default 64, then 503 |
 | `CLERK_API_URL` | no | default `https://api.clerk.com`; tests point it at a fake |
-| `XO_CORE_API_URL` | no | where `/api/core/v1` goes; default `https://app.xo.builders/api/core/v1`; https only |
+| `XO_CORE_API_URL` | no | where `/api/core/v1` goes; default the xo-platform address in `src/xo/services.json` (`https://dev.xo.builders`) plus `/api/core/v1`; https only. `/config` reports it as xo-platform |
 
 ```sh
 xo serve --host 127.0.0.1 --port 8787
@@ -175,9 +181,9 @@ process apply per function instance, so the per-address limit is a Vercel Firewa
   server answers 503 without calling. Clerk allows 1000 Backend API calls per 10 seconds for the
   whole instance, shared with XO's core API, and each verification past 100,000 a month is billed,
   so this cap is what keeps made-up keys sent to `/me` from spending either. It does not cover
-  `/api/core`: a request passed on makes no call to this server's Clerk, and goes to production XO
-  (app.xo.builders) whatever credentials the server holds, where XO checks the key with its own
-  Clerk. Made-up keys sent there spend XO's production Clerk, from the day the forwarding is
+  `/api/core`: a request passed on makes no call to this server's Clerk, and goes to XO's platform
+  (`XO_CORE_API_URL`, dev.xo.builders by default) whatever credentials the server holds, where XO
+  checks the key with its own Clerk. Made-up keys sent there spend that Clerk, from the day the forwarding is
   deployed. What bounds them is `XO_CORE_PER_SECOND` per instance and the Firewall rule per
   address.
 - **Rate limits.** Per key, 60 requests a minute on `/me` and 20 on `/user-metadata`, counted
@@ -202,10 +208,10 @@ No admin key is issued yet, and nothing in this repo makes one. Until a key has 
 and only `/me` is in use.
 
 When admin keys come, keep each one apart from the everyday `XO_API_KEY` (every create on
-app.xo.builders copies the caller's key into the new space), give it a 90-day expiry, and pass it to
+XO's platform copies the caller's key into the new space), give it a 90-day expiry, and pass it to
 `xo user-metadata` with `--api-key -`.
 
-TODO(suraj): how admin keys are issued, and whether creates on app.xo.builders should refuse them.
+TODO(suraj): how admin keys are issued, and whether creates on XO's platform should refuse them.
 
 Before relying on admin keys, check once on a Clerk development instance that a key a user makes
 for themselves, with `claims` added to the request by hand, comes back with `claims: null`.

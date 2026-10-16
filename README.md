@@ -1,6 +1,6 @@
 # xo
 
-`xo` is the command line for the [XO Cloud](https://app.xo.builders) core API. Every endpoint is a
+`xo` is the command line for the [XO Cloud](https://dev.xo.builders) core API. Every endpoint is a
 command, and xo sends your XO API key on each request without ever printing it.
 
 It follows the shape of quirq's own tools (`qq fetch`, `qqsync`): one Python package, one
@@ -20,8 +20,10 @@ Python 3.11 or newer. The package is `quirq-xo`, not `xo`: PyPI's `xo` is an unr
 ## Commands
 
 ```sh
-xo login                        # asks for your XO API key (from the XO team) and saves it
+xo login                        # every service the xo server lists: your XO API key (from the
+                                # XO team) for xo-server and xo-platform, and Coder's own login
                                 # (or: export XO_API_KEY=ak_..., which wins over the saved key)
+xo status                       # each service, its address, and whether you are logged in
 
 xo --help                       # every command
 xo openclaw --help              # the flags one command takes
@@ -44,7 +46,8 @@ xo spaces --space-id 6f1c2c1e-...   # connection URLs for a space you own
 | `xo xo-cowork` | `POST /xo-cowork` | name, volume size; providers; channels |
 | `xo nebius-openclaw` | `POST /nebius-openclaw` | name, Token Factory key, Telegram token (feature flagged) |
 | `xo spaces` | `GET /spaces/{spaceId}` | none |
-| `xo login` / `logout` | checks the key with XO (a space that doesn't exist), then saves it with the address / deletes them | none |
+| `xo login [xo\|coder]` / `logout` | every listed service (or the one named): checks the XO key with XO (a space that doesn't exist) and saves it with the address, and logs Coder in / deletes the key and logs Coder out of xo's deployment | none |
+| `xo status` | each service's address and whether you are logged in; never a key | none |
 | `xo me` | `GET /me` on your xo server | none |
 | `xo user-metadata get` / `update` | `GET` / `PATCH /user-metadata/{userId}` on your xo server | publicMetadata, privateMetadata as JSON objects (admin keys only); try `--dry-run` first: a wrong `--user-id` edits another user |
 | `xo coder github URL` | Coder CLI, using your Coder login | GitHub repository and `xo-github` template parameters; see below |
@@ -53,8 +56,8 @@ Each XO core API create prints the new space, `data.id` included. Keep that id: 
 list, delete, start or stop endpoint, and `xo spaces --space-id ID` is the only way back to a space.
 `xo coder github` creates a Coder workspace separately; manage its lifecycle with Coder.
 
-The API is `https://app.xo.builders/api/core/v1`; xo reaches it through the xo server (see Server
-mode). Its spec is bundled with xo as
+The API is XO's platform, `https://dev.xo.builders/api/core/v1` (the xo-platform service); xo
+reaches it through the xo server (see Server mode and Services). Its spec is bundled with xo as
 `src/xo/openapi.json`, written from the xo-swarm source (`app/api/[[...slugs]]/route.ts` and
 `types/*-schema.ts` at 6dddd07aa) because the interactive docs sit behind a browser sign-in. To use
 another spec, pass `--spec FILE` or set `XO_SPEC=FILE`.
@@ -81,6 +84,30 @@ Things to know:
   the space without that setting; `xo api` sends any body as given.
 - If a create times out or is interrupted, the server may still have made the space: check before
   you retry.
+
+## Services
+
+One `xo login` covers three services. The xo server lists them at `/config` (no key needed); xo
+ships the same list and uses its own copy when the server cannot give a good one.
+
+| Service | Address | How you log in | Commands |
+|---|---|---|---|
+| `xo-server` | the xo server: `--url`, `XO_URL`, the one `xo login` saved, else `https://xo.quirq.dev` | your XO API key | `xo me`, `xo user-metadata` |
+| `xo-platform` | `https://dev.xo.builders`, reached through the xo server | the same XO API key | `xo claude-code`, `xo codex`, `xo openclaw`, ... and `xo spaces` |
+| `coder` | `https://dev-coder.xo.builders` | Coder's own login, in your terminal | `xo coder github`, `xo coder list`, `ssh`, ... |
+
+**Changed: XO's platform is now `https://dev.xo.builders`, not `https://app.xo.builders`.** Every
+create carries your XO API key, and it now goes to dev.xo.builders. The xo server takes the new
+address on its next deploy unless `XO_CORE_API_URL` is set in its environment (in Vercel), which
+overrides it; set `XO_CORE_API_URL=https://app.xo.builders/api/core/v1` to keep the old one.
+
+The list holds addresses only, never keys. Keys stay on your machine: the XO key in
+`~/.config/xo/credentials`, Coder's token wherever Coder keeps it. xo checks a served list: no key is
+sent for it, no redirect is followed, every address must be plain https, and unknown services are
+skipped with a line. If the list names a Coder address other than the one you last logged in to (or,
+on a first login, the one shipped with xo), `xo login` says so and asks once; without a terminal the
+answer is no. `xo login xo` or `xo login coder` does one service. `xo logout` deletes the key and
+logs Coder out only if it is logged in to xo's deployment.
 
 ## Server mode
 
@@ -186,8 +213,9 @@ xo api GET /spaces/ID                                               # any reques
 
 Through the xo server only the creates and `GET /spaces/{spaceId}` pass; any other `xo api`
 request, or an extra operation from your own `--spec`, gets the server's `HTTP 404: Not found`. To
-send one straight to XO, add `--url https://app.xo.builders` and give the key with `XO_API_KEY` or
-`--api-key -` (the key `xo login` saved is only sent to the address it was saved with).
+send one straight to XO, add `--url https://dev.xo.builders` and give the key with `XO_API_KEY` or
+`--api-key -` (the key `xo login` saved is only sent to the address it was saved with, so a one-run
+`--url` always needs one of those).
 
 `--param` fills path, query and header parameters, never `Authorization`, `Host`, `Cookie`,
 `Proxy-*` or the other headers xo and HTTP own.

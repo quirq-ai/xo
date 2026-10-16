@@ -12,7 +12,7 @@ import urllib.request
 
 import pytest
 
-from xo import cli, server
+from xo import cli, server, services
 
 SECRET = "sk_test_clerk_secret_never_printed"
 USER_KEY = "ak_user_secret_never_printed"
@@ -1001,3 +1001,29 @@ def test_a_cli_create_goes_through_the_server(xo_server, clerk, monkeypatch, cap
     assert json.loads(clerk.core[0]["body"]) == {"name": "my-codex", "volumeSize": 20}
     assert cli.main(["spaces", "--space-id", "space_1"]) == 0
     assert clerk.core[1]["path"] == "/core/spaces/space_1"
+
+
+# --- /config: the services list ---------------------------------------------------------------
+
+def test_config_lists_the_services_without_a_key_or_clerk(xo_server, clerk, monkeypatch):
+    monkeypatch.setenv("XO_CORE_API_URL", "https://dev.xo.builders/api/core/v1")
+    status, out = call(xo_server, "GET", "/config")
+    assert status == 200 and out["data"] == services.SHIPPED
+    monkeypatch.setenv("XO_CORE_API_URL", "https://platform.example/api/core/v1")
+    assert call(xo_server, "GET", "/config")[1]["data"]["services"]["xo-platform"]["url"] == "https://platform.example"
+    monkeypatch.setenv("XO_CORE_API_URL", "http://127.0.0.1:9/core")  # not an address the list may name
+    assert "xo-platform" not in call(xo_server, "GET", "/config")[1]["data"]["services"]
+
+
+def test_config_answers_even_without_the_clerk_secret(monkeypatch):
+    monkeypatch.delenv("CLERK_SECRET_KEY", raising=False)
+    monkeypatch.delenv("XO_CORE_API_URL", raising=False)
+    status, out, headers = wsgi_call(server.wsgi_app(), "GET", "/config")
+    assert status == 200 and out == {"success": True, "data": services.SHIPPED}
+    assert headers["Cache-Control"] == "no-store"
+    assert "ak_" not in json.dumps(out) and "sk_" not in json.dumps(out)
+
+
+def test_the_platform_default_is_the_listed_one():
+    assert server.DEFAULT_CORE_URL == "https://dev.xo.builders/api/core/v1"
+    assert services.SHIPPED["services"]["xo-platform"]["url"] == "https://dev.xo.builders"

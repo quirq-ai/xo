@@ -6,6 +6,7 @@ import pytest
 
 from conftest import KEY
 from xo import cli
+from xo.client import coder_url, xo_url
 
 
 def run(capsys, *argv: str) -> tuple[int, str, str]:
@@ -66,7 +67,7 @@ def test_a_sign_in_redirect_says_the_route_wants_a_browser(fake, capsys):
 
 
 @pytest.mark.parametrize("url", ["http://app.xo.builders", "ftp://x", "app.xo.builders", "https://x.dev/?a=1",
-                                 "https://u:p@x.dev"])
+                                 "https://x.dev:99999", "https://x.dev:0", "https://x.dev:abc"])
 def test_plain_http_off_this_machine_is_refused(fake, capsys, url):
     code, _, err = run(capsys, "--url", url, "call", "health")
     assert code == 1 and "--url must be an https:// address" in err
@@ -979,13 +980,20 @@ def test_the_url_must_be_https(core, capsys, monkeypatch):
     assert code == 1 and err.startswith("xo: --url must be an https:// address")
 
 
-def test_the_url_error_does_not_repeat_a_password(core, capsys):
-    code, _, err = run(capsys, "me", "--url", "https://sam:hunter2@xo.example")
-    assert code == 1 and "hunter2" not in err and "sam" not in err
-    assert err == ("xo: --url must be an https:// address (or http:// to localhost) with no query and no user "
-                   "or password, not 'https://xo.example'\n")
-    code, _, err = run(capsys, "me", "--url", "https://sam:hun?ter2@xo.example")
-    assert code == 1 and "ter2" not in err and "sam" not in err and err.endswith("not 'https://xo.example'\n")
+@pytest.mark.parametrize("url", ["https://sam:hunter2@xo.example", "https://sam:hun?ter2@xo.example",
+                                 "https://sam:hun/ter2@xo.example", "https://sam:hun#ter2@xo.example",
+                                 "https://xo.example/?a=b@c", "//sam:hunter2@xo.example", "https://u:p@x.dev"])
+def test_a_user_or_password_is_refused_and_nothing_of_the_url_is_repeated(core, capsys, url):
+    code, _, err = run(capsys, "me", "--url", url)
+    assert code == 1 and core.requests == []
+    assert err.startswith("xo: --url must ") and err.endswith("it is not shown\n")
+    assert "hunter2" not in err and "hun" not in err and "sam" not in err and "u:p" not in err
+
+
+def test_an_at_sign_in_the_path_is_fine():
+    # Coder's path-based app URLs carry @owner.
+    app = "https://coder.example/@alice/ws.main/apps/xo-cowork"
+    assert xo_url(app) == app and coder_url(app + "/") == app
 
 
 @pytest.mark.parametrize("names", [("XO_BASE_URL",), ("XO_SERVER_URL",), ("XO_BASE_URL", "XO_SERVER_URL")])
@@ -1066,6 +1074,12 @@ ME = {"success": True, "data": {"id": "user_1", "username": "sam", "firstName": 
 PROBE = "/api/core/v1/spaces/00000000-0000-0000-0000-000000000000"
 
 
+def sent(fake) -> list[dict]:
+    """What reached the fake xo server besides the keyless /config, which xo login always asks."""
+    assert all("Authorization" not in r["headers"] for r in fake.requests if r["path"] == "/config")
+    return [r for r in fake.requests if r["path"] != "/config"]
+
+
 @pytest.fixture
 def login(xs, monkeypatch):
     """xo login against the fake xo server, with no key in the environment and one typed in."""
@@ -1086,45 +1100,46 @@ def test_login_checks_the_key_then_saves_it_private(login, capsys, config_home):
     import stat
     code, out, err = run(capsys, "login")
     assert code == 0 and out == ""
-    assert [r["path"] for r in login.requests] == [PROBE, "/me"]  # XO takes the key, then whose it is
-    assert all(r["headers"]["Authorization"] == f"Bearer {KEY}" for r in login.requests)
-    assert "xo: logged in as sam (user_1)\n" in err
+    assert [r["path"] for r in sent(login)] == [PROBE, "/me"]  # XO takes the key, then whose it is
+    assert all(r["headers"]["Authorization"] == f"Bearer {KEY}" for r in sent(login))
+    assert "xo: xo-server: logged in as sam (user_1); key and URL saved to" in err
     saved = config_home / "xo" / "credentials"
     assert f"key and URL saved to {saved}" in err
     assert json.loads(saved.read_text()) == {"url": login.base, "key": KEY}
     assert stat.S_IMODE(os.stat(saved).st_mode) == 0o600
     assert stat.S_IMODE(os.stat(saved.parent).st_mode) == 0o700
-    assert [p.name for p in saved.parent.iterdir()] == ["credentials"]  # no temp file left
+    assert sorted(p.name for p in saved.parent.iterdir()) == ["credentials", "services"]  # no temp file left
+    assert stat.S_IMODE(os.stat(saved.parent / "services").st_mode) == 0o600
 
 
 def test_later_commands_use_the_saved_key(login, capsys):
     assert run(capsys, "login")[0] == 0
     login.route("GET", "/me", body=ME)
     assert run(capsys, "me")[0] == 0
-    assert login.requests[-1]["headers"]["Authorization"] == f"Bearer {KEY}"
+    assert sent(login)[-1]["headers"]["Authorization"] == f"Bearer {KEY}"
 
 
 def test_the_variable_wins_over_the_saved_key(login, capsys, monkeypatch):
     assert run(capsys, "login")[0] == 0
     monkeypatch.setenv("XO_API_KEY", "ak_from_variable")
     assert run(capsys, "me")[0] == 0
-    assert login.requests[-1]["headers"]["Authorization"] == "Bearer ak_from_variable"
+    assert sent(login)[-1]["headers"]["Authorization"] == "Bearer ak_from_variable"
 
 
 def test_login_says_when_the_variable_hides_the_saved_key(login, capsys, monkeypatch):
     monkeypatch.setenv("XO_API_KEY", "ak_from_variable")
     code, _, err = run(capsys, "login")
     assert code == 0 and "XO_API_KEY is set in this terminal and is used instead" in err
-    assert login.requests[0]["headers"]["Authorization"] == f"Bearer {KEY}"  # the typed key is checked
+    assert sent(login)[0]["headers"]["Authorization"] == f"Bearer {KEY}"  # the typed key is checked
     assert "ak_from_variable" not in err
 
 
 def test_a_refused_key_is_not_saved(login, capsys, config_home):
     login.route("GET", PROBE, status=401, body={"error": "Invalid API key"})
     code, _, err = run(capsys, "login")
-    assert code == 1 and [r["path"] for r in login.requests] == [PROBE]
-    assert err == (f"xo: logging in to {login.base}; the key will only ever be sent there\n"
-                   f"xo: GET {PROBE}: HTTP 401 (check the API key): Invalid API key; nothing saved\n")
+    assert code == 1 and [r["path"] for r in sent(login)] == [PROBE]
+    assert f"xo: logging in to {login.base}; the key will only ever be sent there\n" in err
+    assert f"xo: xo-server: failed: GET {PROBE}: HTTP 401 (check the API key): Invalid API key; nothing saved\n" in err
     assert not (config_home / "xo" / "credentials").exists()
 
 
@@ -1140,8 +1155,8 @@ def test_only_xos_space_not_found_counts_as_a_working_key(login, capsys, config_
 def test_a_server_without_the_forwarding_is_named_at_login(login, capsys):
     login.route("GET", PROBE, status=404, body={"success": False, "error": "Not found"})
     code, _, err = run(capsys, "login")
-    assert code == 1 and err.endswith(f": HTTP 404: Not found; the xo server at {login.base} does not pass the "
-                                      "core API on (is it up to date?); nothing saved\n")
+    assert code == 1 and (f": HTTP 404: Not found; the xo server at {login.base} does not pass the "
+                          "core API on (is it up to date?); nothing saved\n") in err
 
 
 def test_a_refused_key_leaves_the_old_saved_key(login, capsys, config_home):
@@ -1164,7 +1179,7 @@ def test_an_unreachable_server_saves_nothing(login, capsys, config_home, monkeyp
 def test_a_working_key_the_server_cannot_name_is_still_saved(login, capsys, config_home, status, body):
     login.route("GET", "/me", status=status, body=body)  # a development Clerk that does not know XO's key
     code, _, err = run(capsys, "login")
-    assert code == 0 and "xo: logged in; the key works with XO\n" in err
+    assert code == 0 and "xo: xo-server: logged in; the key works with XO;" in err
     assert json.loads((config_home / "xo" / "credentials").read_text())["key"] == KEY
 
 
@@ -1173,9 +1188,9 @@ def test_a_working_key_the_server_cannot_name_is_still_saved(login, capsys, conf
 def test_login_refuses_what_is_not_an_xo_key_before_sending_it(login, capsys, config_home, typed):
     login.typed(typed + "\n")
     code, _, err = run(capsys, "login")
-    assert code == 1 and login.requests == [] and typed not in err
-    assert err.endswith("xo: that is not an XO API key (those start with ak_); nothing sent or saved, "
-                        "and it is not shown\n")
+    assert code == 1 and sent(login) == [] and typed not in err
+    assert ("xo: xo-server: failed: that is not an XO API key (those start with ak_); nothing sent or saved, "
+            "and it is not shown\n") in err
     assert not (config_home / "xo").exists()
 
 
@@ -1183,25 +1198,25 @@ def test_login_refuses_what_is_not_an_xo_key_before_sending_it(login, capsys, co
 def test_login_with_nothing_typed_saves_nothing(login, capsys, config_home, text):
     login.typed(text)
     code, _, err = run(capsys, "login")
-    assert code == 1 and err.endswith("xo: no key entered; nothing saved\n") and login.requests == []
+    assert code == 1 and "xo: xo-server: failed: no key entered; nothing saved\n" in err and sent(login) == []
     assert not (config_home / "xo").exists()
 
 
 def test_login_refuses_a_bad_key_without_showing_it(login, capsys, config_home):
     login.typed("ak_bad key\"<>\n")
     code, _, err = run(capsys, "login")
-    assert code == 1 and login.requests == [] and "bad" not in err
+    assert code == 1 and sent(login) == [] and "bad" not in err
     assert "the key entered holds characters an API key cannot have" in err
     assert not (config_home / "xo").exists()
 
 
 def test_login_takes_no_key_flag(login, capsys):
     code, _, err = run(capsys, "--api-key", "ak_typed_on_the_line", "login")
-    assert code == 1 and login.requests == []
+    assert code == 1 and sent(login) == []
     assert err == "xo: xo login asks for the key itself; leave out --api-key\n"
     with pytest.raises(SystemExit):
         cli.main(["login", "--api-key", "ak_typed_on_the_line"])
-    assert "ak_typed_on_the_line" not in capsys.readouterr().err and login.requests == []
+    assert "ak_typed_on_the_line" not in capsys.readouterr().err and sent(login) == []
 
 
 def test_login_never_prints_the_key_even_in_the_name(login, capsys):
@@ -1221,7 +1236,7 @@ def test_a_saved_key_others_can_read_is_refused(login, capsys, config_home):
     saved = config_home / "xo" / "credentials"
     os.chmod(saved, 0o644)
     code, _, err = run(capsys, "me")
-    assert code == 1 and len(login.requests) == 2  # only login's checks went out
+    assert code == 1 and len(sent(login)) == 2  # only login's checks went out
     assert err == (f"xo: {saved} can be read by other users, so xo will not use it; run xo logout, "
                    "ask the XO team for a new key, then xo login\n")
 
@@ -1232,11 +1247,21 @@ def test_a_symlinked_saved_key_is_refused(login, capsys, config_home, tmp_path):
     (config_home / "xo").mkdir(parents=True)
     (config_home / "xo" / "credentials").symlink_to(other)
     code, _, err = run(capsys, "me")
-    assert code == 1 and login.requests == [] and "cannot read" in err
+    assert code == 1 and sent(login) == [] and "cannot read" in err
 
 
-def test_login_replaces_the_saved_key(login, capsys, config_home):
+def test_login_keeps_a_saved_key_that_still_works(login, capsys, config_home):
     assert run(capsys, "login")[0] == 0
+    login.typed("")  # nothing to read: it must not ask
+    code, _, err = run(capsys, "login")
+    assert code == 0 and "xo: xo-server: already logged in as sam (user_1); key saved for" in err
+    assert "logging in to" not in err
+
+
+def test_login_replaces_a_saved_key_that_stopped_working(login, capsys, config_home):
+    assert run(capsys, "login")[0] == 0
+    login.route("GET", PROBE, body=lambda r: (404, {"error": "Space not found"})
+                if r["headers"]["Authorization"] == "Bearer ak_second_key_5678" else (401, {"error": "Invalid"}))
     login.typed("ak_second_key_5678\n")
     assert run(capsys, "login")[0] == 0
     assert (config_home / "xo" / "credentials").read_text() == json.dumps({"url": login.base, "key": "ak_second_key_5678"}) + "\n"
@@ -1246,11 +1271,22 @@ def test_logout_deletes_the_saved_key(login, capsys, config_home):
     assert run(capsys, "login")[0] == 0
     saved = config_home / "xo" / "credentials"
     code, _, err = run(capsys, "logout")
-    assert code == 0 and err == f"xo: deleted {saved}\n" and not saved.exists()
+    assert code == 0 and err == f"xo: xo-server: deleted {saved}\n" and not saved.exists()
+    assert not (config_home / "xo" / "services").exists()
     code, _, err = run(capsys, "logout")
-    assert code == 0 and err == f"xo: no saved key at {saved}\n"
+    assert code == 0 and err == f"xo: xo-server: no saved key at {saved}\n"
     code, _, err = run(capsys, "me")
     assert code == 1 and "no API key: run xo login" in err
+
+
+def test_logout_deletes_the_key_even_with_a_bad_coder_address(login, capsys, config_home, monkeypatch):
+    assert run(capsys, "login")[0] == 0
+    saved = config_home / "xo" / "credentials"
+    monkeypatch.setenv("XO_CODER_URL", "http://coder.example")
+    monkeypatch.setattr(cli.shutil, "which", lambda name: "/usr/local/bin/coder")
+    code, _, err = run(capsys, "logout")
+    assert code == 1 and not saved.exists() and not (config_home / "xo" / "services").exists()
+    assert err.startswith(f"xo: xo-server: deleted {saved}\nxo: coder: failed: XO_CODER_URL must be https://")
 
 
 def test_logout_says_the_variable_is_still_set(login, capsys, monkeypatch):
@@ -1303,7 +1339,7 @@ def test_a_folder_that_cannot_be_made_is_one_line(login, capsys, config_home):
     config_home.mkdir(parents=True)
     (config_home / "xo").write_text("a file where the folder goes")
     code, _, err = run(capsys, "login")
-    assert code == 1 and err.split("\n")[1].startswith(f"xo: cannot save the key to {config_home / 'xo' / 'credentials'} (")
+    assert code == 1 and f"xo: xo-server: failed: cannot save the key to {config_home / 'xo' / 'credentials'} (" in err
 
 
 def test_a_long_name_is_cut_after_the_key_is_redacted(login, capsys):
@@ -1327,12 +1363,12 @@ def test_the_saved_key_is_never_sent_to_another_url(login, capsys, monkeypatch):
     assert run(capsys, "login")[0] == 0
     monkeypatch.setenv("XO_URL", "http://127.0.0.1:9")
     code, _, err = run(capsys, "me")
-    assert code == 1 and len(login.requests) == 2
+    assert code == 1 and len(sent(login)) == 2
     assert err == (f"xo: the key xo login saved is only sent to {login.base}, not http://127.0.0.1:9; "
                    "run xo login --url http://127.0.0.1:9 to use this address\n")
     monkeypatch.delenv("XO_URL")
     code, _, err = run(capsys, "--url", "http://localhost:9", "spaces", "--space-id", "s1")
-    assert code == 1 and "only sent to" in err and len(login.requests) == 2
+    assert code == 1 and "only sent to" in err and len(sent(login)) == 2
 
 
 def test_later_commands_use_the_saved_url(login, capsys, monkeypatch):
@@ -1340,7 +1376,7 @@ def test_later_commands_use_the_saved_url(login, capsys, monkeypatch):
     monkeypatch.delenv("XO_URL")  # nothing set now: the saved URL, not https://xo.quirq.dev
     login.route("GET", "/api/core/v1/spaces/s1", body={"success": True, "data": {}})
     assert run(capsys, "spaces", "--space-id", "s1")[0] == 0
-    assert login.requests[-1]["path"] == "/api/core/v1/spaces/s1"
+    assert sent(login)[-1]["path"] == "/api/core/v1/spaces/s1"
     assert run(capsys, "me")[0] == 0
 
 
@@ -1366,7 +1402,7 @@ def test_a_saved_file_xo_did_not_write_is_refused(login, capsys, config_home, te
     path.write_text(text)
     os.chmod(path, 0o600)
     code, _, err = run(capsys, "me")
-    assert code == 1 and login.requests == []
+    assert code == 1 and sent(login) == []
     assert err == f"xo: {path} is not a file xo login wrote; run xo logout, then xo login\n"
     assert run(capsys, "login")[0] == 0  # login replaces it
     assert json.loads(path.read_text())["key"] == KEY
@@ -1384,7 +1420,7 @@ def test_a_saved_file_another_user_owns_is_refused(login, capsys, monkeypatch):
 def test_control_characters_in_the_name_are_dropped(login, capsys):
     login.route("GET", "/me", body={"success": True, "data": {"id": "user_1", "username": "sam\x1b[31m\x07\r"}})
     err = run(capsys, "login")[2]
-    assert "logged in as sam[31m (user_1)\n" in err and "\x1b" not in err and "\x07" not in err
+    assert "logged in as sam[31m (user_1);" in err and "\x1b" not in err and "\x07" not in err
 
 
 def test_a_failed_save_leaves_no_temp_file(login, capsys, config_home, monkeypatch):
@@ -1425,3 +1461,123 @@ def test_a_strict_umask_still_leaves_a_readable_key(login, capsys, config_home):
         os.umask(old)
     assert stat.S_IMODE(os.stat(config_home / "xo" / "credentials").st_mode) == 0o600
     assert run(capsys, "me")[0] == 0
+
+
+# --- xo login across services, xo status ---------------------------------------------------------
+
+class FakeCoder:
+    """CoderClient's login and where-logged-in, without a coder binary."""
+
+    def __init__(self, monkeypatch, at=None):
+        self.at, self.logins = at, []
+        monkeypatch.setattr(cli.shutil, "which", lambda name: "/usr/bin/coder" if name == "coder" else None)
+        fake = self
+
+        def logged_in_to(client):
+            return (fake.at, "alice") if fake.at else None
+
+        def login(client, ask):
+            fake.logins.append(client.base)
+            fake.at = client.base
+            return f"logged in to {client.base} as alice"
+        monkeypatch.setattr(cli.CoderClient, "logged_in_to", logged_in_to)
+        monkeypatch.setattr(cli.CoderClient, "login", login)
+
+
+SERVED = {"success": True, "data": {"schema": "xo-services/1", "services": {
+    "xo-platform": {"url": "https://dev.xo.builders"}, "coder": {"url": "https://dev-coder.xo.builders"}}}}
+
+
+def test_one_login_covers_every_service(login, capsys, monkeypatch, config_home):
+    login.route("GET", "/config", body=SERVED)
+    coder = FakeCoder(monkeypatch)
+    code, _, err = run(capsys, "login")
+    assert code == 0
+    assert f"xo:   xo-server    {login.base}\n" in err
+    assert "xo:   xo-platform  https://dev.xo.builders (your xo key reaches it through the xo server)\n" in err
+    assert "xo:   coder        https://dev-coder.xo.builders\n" in err
+    assert "xo: xo-server: logged in as sam (user_1)" in err
+    assert "xo: coder: logged in to https://dev-coder.xo.builders as alice\n" in err
+    assert coder.logins == ["https://dev-coder.xo.builders"]
+    saved = json.loads((config_home / "xo" / "services").read_text())
+    assert saved == {"xo-server": login.base, "xo-platform": "https://dev.xo.builders",
+                     "coder": "https://dev-coder.xo.builders"}
+    assert "Authorization" not in login.requests[0]["headers"] and login.requests[0]["path"] == "/config"
+
+
+def test_login_one_service(login, capsys, monkeypatch):
+    coder = FakeCoder(monkeypatch)
+    code, _, err = run(capsys, "login", "coder")
+    assert code == 0 and "xo-server:" not in err and coder.logins and sent(login) == []
+    coder.logins.clear()
+    code, _, err = run(capsys, "login", "xo")
+    assert code == 0 and "xo: xo-server: logged in" in err and coder.logins == [] and "coder:" not in err
+
+
+def test_a_changed_coder_address_is_asked_about_once_and_no_means_no(login, capsys, monkeypatch, config_home):
+    from xo import services
+    services.save_addresses({"coder": "https://dev-coder.xo.builders"})
+    login.route("GET", "/config", body={"success": True, "data": {"schema": "xo-services/1", "services": {
+        "xo-platform": {"url": "https://dev.xo.builders"}, "coder": {"url": "https://other-coder.example"}}}})
+    coder = FakeCoder(monkeypatch)
+    asked = []
+    monkeypatch.setattr(cli, "_ask", lambda q: asked.append(q) or False)
+    code, _, err = run(capsys, "login")
+    assert code == 1 and coder.logins == [] and len(asked) == 1
+    assert "the list names https://other-coder.example for coder; you last used https://dev-coder.xo.builders" in asked[0]
+    assert "xo: coder: failed: kept https://dev-coder.xo.builders" in err
+    assert services.saved_addresses()["coder"] == "https://dev-coder.xo.builders"
+    monkeypatch.setattr(cli, "_ask", lambda q: asked.append(q) or True)
+    login.typed("")
+    assert run(capsys, "login")[0] == 0 and coder.logins == ["https://other-coder.example"]
+    assert services.saved_addresses()["coder"] == "https://other-coder.example"
+    assert run(capsys, "login")[0] == 0 and len(asked) == 2  # asked once, not on every login
+
+
+def test_a_first_login_compares_with_the_shipped_list(login, capsys, monkeypatch):
+    login.route("GET", "/config", body={"success": True, "data": {"schema": "xo-services/1", "services": {
+        "coder": {"url": "https://other-coder.example"}}}})
+    FakeCoder(monkeypatch)
+    asked = []
+    monkeypatch.setattr(cli, "_ask", lambda q: asked.append(q) or False)
+    assert run(capsys, "login")[0] == 1 and "you last used https://dev-coder.xo.builders" in asked[0]
+
+
+def test_without_a_terminal_the_answer_is_no(monkeypatch):
+    import io
+    monkeypatch.setattr("sys.stdin", io.StringIO("y\n"))
+    assert cli._ask("Use it?") is False
+
+
+def test_no_coder_cli_is_a_skip_not_a_failure(login, capsys, monkeypatch):
+    monkeypatch.setattr(cli.shutil, "which", lambda name: None)
+    code, _, err = run(capsys, "login")
+    assert code == 0 and "xo: coder: skipped: the Coder CLI is not installed" in err
+
+
+def test_a_coder_address_from_the_flag_is_not_asked_about(login, capsys, monkeypatch):
+    coder = FakeCoder(monkeypatch)
+    monkeypatch.setattr(cli, "_ask", lambda q: pytest.fail("asked"))
+    assert run(capsys, "--coder-url", "https://mine.example", "login", "coder")[0] == 0
+    assert coder.logins == ["https://mine.example"]
+
+
+def test_status_shows_each_service_and_never_a_key(login, capsys, monkeypatch):
+    FakeCoder(monkeypatch, at="https://elsewhere.example")
+    code, out, _ = run(capsys, "status")
+    assert code == 0
+    lines = out.splitlines()
+    assert lines[0].split()[:2] == ["xo-server", login.base]
+    assert "not logged in; run xo login" in lines[0]
+    assert lines[1].startswith("xo-platform  https://dev.xo.builders")
+    assert lines[2].startswith("coder        https://dev-coder.xo.builders")
+    assert "logged in to https://elsewhere.example, not this one" in lines[2]
+    assert run(capsys, "login")[0] == 0
+    out = run(capsys, "status")[1]
+    assert "key saved by xo login" in out and "logged in as alice" in out and KEY not in out
+
+
+def test_status_is_a_reserved_command():
+    from xo import commands, spec
+    op = spec.operations({"paths": {"/status": {"get": {"operationId": "syntheticOperation"}}}})[0]
+    assert commands.command_of(op) == "status-api"

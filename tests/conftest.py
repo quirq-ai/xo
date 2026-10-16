@@ -50,6 +50,8 @@ def fake(monkeypatch):
             status, body, headers = state.routes.get((self.command, path), (404, {"detail": "Not Found"}, {}))
             if callable(body):
                 body = body(state.requests[-1])
+                if isinstance(body, tuple):  # (status, body): the answer depends on the request
+                    status, body = body
             data = b"" if body is None else (body.encode() if isinstance(body, str) else json.dumps(body).encode())
             try:
                 self.send_response(status)
