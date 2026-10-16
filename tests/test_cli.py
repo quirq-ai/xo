@@ -1692,19 +1692,21 @@ def test_connect_project_and_space(xs, capsys):
     xs.route("POST", "/me/spaces/connect", body={"success": True, "data": {"space": SPACE}})
     assert run(capsys, "connect", "project:quirq-ai/xo", "space:dev", "--ref", "v1.2")[0] == 0
     assert run(capsys, "connect", "project:notes", "space:dev")[0] == 0
-    assert run(capsys, "connect", "space:sp-1", "--name", "dev")[0] == 0
+    assert run(capsys, "connect", "space:dev")[0] == 0
+    assert run(capsys, "connect", "space:old", "--id", "sp-1")[0] == 0
     assert [(r["path"], r["body"]) for r in xs.requests] == [
         ("/me/spaces/dev/projects", {"project": "quirq-ai/xo", "ref": "v1.2"}),
         ("/me/spaces/dev/projects", {"project": "notes"}),
-        ("/me/spaces/connect", {"id": "sp-1", "name": "dev"})]
+        ("/me/spaces/connect", {"name": "dev"}), ("/me/spaces/connect", {"name": "old", "id": "sp-1"})]
 
 
 @pytest.mark.parametrize("argv", [
     ["connect", "project:notes", "space:dev", "--ref", "--upload-pack=touch x"],
     ["connect", "project:notes", "space:dev", "--ref=a..b"],
     ["connect", "project:../x", "space:dev"], ["connect", "project:notes"], ["connect", "project:notes", "dev"],
-    ["connect", "space:sp-1"], ["connect", "space:../x", "--name", "dev"], ["connect", "space:sp-1", "--name", "-d"],
-    ["connect", "notes", "space:dev"], ["connect", "project:notes", "space:dev", "--name", "x"]])
+    ["connect", "space:../x"], ["connect", "space:dev", "--id", "../x"], ["connect", "space:-d"],
+    ["connect", "space:dev", "space:x"], ["connect", "space:dev", "--ref", "main"],
+    ["connect", "notes", "space:dev"], ["connect", "project:notes", "space:dev", "--id", "x"]])
 def test_connect_refuses_bad_input_before_sending(xs, capsys, argv):
     assert _refused(capsys, *argv) and xs.requests == []
 

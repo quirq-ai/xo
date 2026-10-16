@@ -17,7 +17,8 @@ verifies it with Clerk and answers:
     GET   /me/spaces                any user key: the `spaces` list in its own private metadata
     POST  /me/spaces                any user key: {"kind", "name", "body"}: create the space through
                                     XO with the caller's key, then record it in `spaces`
-    POST  /me/spaces/connect        any user key: {"id", "name"}: record a space the key can read
+    POST  /me/spaces/connect        any user key: {"name", "id"?}: a new space entry; with an id, only
+                                    for an XO space the key can read
     POST  /me/spaces/{name}/projects  any user key: {"project", "ref"}: set one project's ref in a
                                     space; the server writes only `spaces`, nothing else
     GET   /user-metadata/{userId}   admin keys only: public and private metadata
@@ -910,31 +911,35 @@ class App:
             entry = self._change_space(key["subject"], who, name, make)
         except _Reply as r:
             raise _Reply(r.status, f"XO created the space (id {space_id}) but xo could not record it: {r.error}. "
-                                   f"Run xo connect space:{space_id} --name {name} to record it", r.clerk) from None
+                                   f"Run xo connect space:{name} --id {space_id} to record it", r.clerk) from None
         return {"space": _mask_secrets(entry), "xo": _mask_secrets(made)}
 
     def _connect_space(self, headers: dict[str, str], body: bytes | None) -> dict:
-        """Record a space the caller already has, once XO confirms the caller's key can read it."""
+        """A new space entry in the caller's metadata, with no projects yet. With an id it stands for
+        an XO space the caller already has, once XO confirms the caller's key can read it; without
+        one it is an entry only, nothing on XO."""
         key, token, who = self._caller(headers, "spaces", "/me/spaces/connect")
-        sent = self._body(body, who, {"id": True, "name": True})
-        space_id, name = sent["id"], sent["name"]
-        if not names.SPACE_ID.fullmatch(space_id):
-            raise self._refuse(who, 422, "id must be an XO space id: letters, digits, _ or -")
+        sent = self._body(body, who, {"name": True, "id": False})
+        space_id, name = sent.get("id"), sent["name"]
         self._space_name(name, who)
-        status, answer = self.core.forward("GET", f"/spaces/{space_id}", token, None)
-        if status in (403, 404):
-            raise self._refuse(who, 404, "XO has no space with that id that your key can read; nothing was recorded")
-        if not 200 <= status < 300:
-            self.audit(**who, outcome=status, xo=status)
-            raise _Forwarded(status, answer)
+        if space_id is not None:
+            if not names.SPACE_ID.fullmatch(space_id):
+                raise self._refuse(who, 422, "id must be an XO space id: letters, digits, _ or -")
+            status, answer = self.core.forward("GET", f"/spaces/{space_id}", token, None)
+            if status in (403, 404):
+                raise self._refuse(who, 404, "XO has no space with that id that your key can read; nothing was "
+                                             "recorded")
+            if not 200 <= status < 300:
+                self.audit(**who, outcome=status, xo=status)
+                raise _Forwarded(status, answer)
 
         def make(current: dict | None, private: dict) -> dict:
             if current is not None:
                 raise self._refuse(who, 409, f"You already have a space named {name}; nothing was changed")
             spaces = private.get("spaces", [])
-            if any(isinstance(e, dict) and e.get("id") == space_id for e in spaces):
+            if space_id is not None and any(isinstance(e, dict) and e.get("id") == space_id for e in spaces):
                 raise self._refuse(who, 409, "That space is already recorded under another name; nothing was changed")
-            return {"name": name, "id": space_id, "rev": 1, "projects": []}
+            return {"name": name, **({"id": space_id} if space_id is not None else {}), "rev": 1, "projects": []}
 
         return {"space": _mask_secrets(self._change_space(key["subject"], who, name, make))}
 

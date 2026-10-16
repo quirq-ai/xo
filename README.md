@@ -52,7 +52,7 @@ xo spaces --space-id 6f1c2c1e-...   # connection URLs for a space you own
 | `xo projects` / `xo projects add NAME` | `GET` / `POST /me/projects` on your xo server: the `projects` list in your own private metadata; the server makes the change and writes only that list | the name only |
 | `xo create project NAME\|URL` | `POST /me/projects`, then clones `https://github.com/OWNER/REPO` here (or `git init ./NAME` for a plain name) with your own git | the name only |
 | `xo create space KIND NAME` | `POST /me/spaces` on your xo server: it creates the space through XO as `xo KIND` does, then records it in your `spaces` as NAME | the flags of `xo KIND` |
-| `xo connect project:P space:S` / `xo connect space:ID --name S` | `POST /me/spaces/S/projects` / `POST /me/spaces/connect`: a project's ref in a space, or a space you already have | `--ref` (default main) / the space id |
+| `xo connect project:P space:S` / `xo connect space:S` | `POST /me/spaces/S/projects` / `POST /me/spaces/connect`: a project's ref in a space, or a new space entry in your metadata | `--ref` (default main) / `--id` for an XO space you already have |
 | `xo list projects\|spaces` | `GET /me/projects` / `GET /me/spaces` | none |
 | `xo user-metadata get` / `update` | `GET` / `PATCH /user-metadata/{userId}` on your xo server | publicMetadata, privateMetadata as JSON objects (admin keys only); try `--dry-run` first: a wrong `--user-id` edits another user |
 | `xo coder github URL` | Coder CLI, using your Coder login | GitHub repository and `xo-github` template parameters; see below |

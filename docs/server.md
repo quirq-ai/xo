@@ -30,7 +30,7 @@ xo codex, ... ──────┘                      └── /api/core/v1/
 | POST | `/me/projects` | any user key | adds `{"name": "..."}` to that list and answers the new list; see "Projects" below |
 | GET | `/me/spaces` | any user key | `spaces`: the list in the key's own private metadata (`[]` when there is none) |
 | POST | `/me/spaces` | any user key | `{"kind", "name", "body"}`: creates the space through XO with the caller's key, then records it; see "Spaces" below |
-| POST | `/me/spaces/connect` | any user key | `{"id", "name"}`: records a space XO says the caller's key can read |
+| POST | `/me/spaces/connect` | any user key | `{"name", "id"?}`: a new space entry with no projects; with an id, only for an XO space the caller's key can read |
 | POST | `/me/spaces/{name}/projects` | any user key | `{"project", "ref"}`: sets one project's ref in that space |
 | GET | `/user-metadata/{userId}` | admin keys | `publicMetadata`, `privateMetadata` |
 | PATCH | `/user-metadata/{userId}` | admin keys | both buckets after a deep merge; `null` removes a key |
@@ -248,10 +248,12 @@ spaces: [{"name": "dev", "kind": "claude-code", "id": "<XO space id>", "rev": 2,
   (`POST /api/core/v1/{kind}`, as `/api/core` does). An XO refusal is passed back and nothing is
   recorded. Once XO answers with the new space's id, the server records `{"name", "kind", "id",
   "rev": 1, "projects": []}`. If recording then fails, the answer says XO created the space, gives
-  its id, and names the `xo connect space:ID --name NAME` that records it.
-- **`POST /me/spaces/connect`** asks XO for the space with the caller's key
-  (`GET /api/core/v1/spaces/{id}`); 403 or 404 there is a 404 here, and nothing is recorded. A
-  space already recorded, under any name, is refused (409).
+  its id, and names the `xo connect space:NAME --id ID` that records it.
+- **`POST /me/spaces/connect`** makes a new space entry, `{"name", "rev": 1, "projects": []}`,
+  with nothing created on XO. With an `id` it stands for an XO space the caller already has: the
+  server first asks XO for it with the caller's key (`GET /api/core/v1/spaces/{id}`); 403 or 404
+  there is a 404 here, and nothing is recorded. A name already taken (ignoring case), or an id
+  already recorded under another name, is refused (409).
 - **`POST /me/spaces/{name}/projects`** sets `{project: ref}` in that space. The project must be in
   the user's `projects`. One entry per project: connecting it again replaces its ref in place. A
   missing ref is `main`. A space holds at most 10 projects. Each change adds 1 to the space's

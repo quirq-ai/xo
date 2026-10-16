@@ -1544,7 +1544,7 @@ def test_create_space_says_how_to_record_a_space_it_could_not_record(clerk):
     store.update_metadata = full
     status, out = _post(_app(store), "/me/spaces", {"kind": "codex", "name": "dev"})
     assert status == 422 and "XO created the space (id sp-1)" in out["error"]
-    assert "xo connect space:sp-1 --name dev" in out["error"]
+    assert "xo connect space:dev --id sp-1" in out["error"]
 
 
 def test_create_space_refuses_an_answer_without_a_usable_id(clerk):
@@ -1552,6 +1552,15 @@ def test_create_space_refuses_an_answer_without_a_usable_id(clerk):
     status, _ = _post(_app(store, _Core(201, {"success": True, "data": {"id": "../x"}})), "/me/spaces",
                       {"kind": "codex", "name": "dev"})
     assert status == 502 and store.patches == []
+
+
+def test_connect_space_without_an_id_makes_an_entry_and_asks_xo_nothing(clerk):
+    store, core = _Store({"keep": 1}), _Core()
+    status, out = _post(_app(store, core), "/me/spaces/connect", {"name": "dev"})
+    assert status == 200 and core.calls == []
+    assert out["data"]["space"] == {"name": "dev", "rev": 1, "projects": []}
+    assert store.stored["private_metadata"] == {"keep": 1, "spaces": [{"name": "dev", "rev": 1, "projects": []}]}
+    assert _post(_app(store, core), "/me/spaces/connect", {"name": "DEV"})[0] == 409
 
 
 def test_connect_space_records_a_space_the_key_can_read(clerk):

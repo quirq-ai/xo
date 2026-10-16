@@ -38,7 +38,8 @@
     xo create space KIND NAME [flags]       create a space as `xo KIND` does (claude-code, codex, ...)
                                             and record it in your spaces as NAME.
     xo connect project:P space:S [--ref R]  set project P in space S at ref R (default main).
-    xo connect space:ID --name S            record a space you already have as S.
+    xo connect space:S [--id ID]            a new space entry S in your metadata; --id ties it to an
+                                            XO space you already have.
     xo list projects | spaces               show your projects or your spaces.
     (the xo key step:)                      ask for your API key without showing it, check it with
                                             XO through the xo server, and save it with the URL.
@@ -699,11 +700,11 @@ def _create_space(args: argparse.Namespace) -> int:
 
 
 def _connect(args: argparse.Namespace) -> int:
-    """`xo connect project:P space:S [--ref R]` or `xo connect space:ID --name S`."""
+    """`xo connect project:P space:S [--ref R]` or `xo connect space:S [--id ID]`."""
     kind, _, value = args.first.partition(":")
     if kind == "project":
         where, _, space = (args.second or "").partition(":")
-        if where != "space" or not space or args.name is not None:
+        if where != "space" or not space or args.id is not None:
             raise XoError("connect a project with: xo connect project:NAME space:NAME [--ref REF]")
         if not names.project_ok(value):
             raise XoError(names.PROJECT_RULE)
@@ -715,16 +716,17 @@ def _connect(args: argparse.Namespace) -> int:
         body = {"project": value, **({"ref": args.ref} if args.ref is not None else {})}
         data = _post_server(client, f"/me/spaces/{quote(space, safe='')}/projects", body)
     elif kind == "space":
-        if args.second is not None or args.ref is not None or not args.name:
-            raise XoError("record a space with: xo connect space:ID --name NAME")
-        if not names.SPACE_ID.fullmatch(value):
-            raise XoError("a space id is letters, digits, _ or -")
-        if not names.space_ok(args.name):
+        if args.second is not None or args.ref is not None:
+            raise XoError("make a space entry with: xo connect space:NAME [--id XO_SPACE_ID]")
+        if not names.space_ok(value):
             raise XoError(names.SPACE_RULE)
+        if args.id is not None and not names.SPACE_ID.fullmatch(args.id):
+            raise XoError("a space id is letters, digits, _ or -")
         client = _client(args, server=True)
-        data = _post_server(client, "/me/spaces/connect", {"id": value, "name": args.name})
+        data = _post_server(client, "/me/spaces/connect",
+                            {"name": value, **({"id": args.id} if args.id is not None else {})})
     else:
-        raise XoError("connect what? project:NAME space:NAME, or space:ID --name NAME")
+        raise XoError("connect what? project:NAME space:NAME, or space:NAME [--id ID]")
     print(client.scrub(_json(_answer(data, "space", "a space"))))
     return 0
 
@@ -1099,11 +1101,12 @@ def main(argv: list[str] | None = None) -> int:
                           help="create a space as `xo KIND` does, and record it in your spaces")
     space_kinds = ms.add_subparsers(dest="kind", required=True, metavar="KIND")
     cn = sub.add_parser("connect", parents=[common],
-                        help="set a project's ref in one of your spaces, or record a space you already have")
-    cn.add_argument("first", metavar="project:NAME|space:ID")
+                        help="set a project's ref in one of your spaces, or make a new space entry")
+    cn.add_argument("first", metavar="project:NAME|space:NAME")
     cn.add_argument("second", nargs="?", metavar="space:NAME", help="the space a project goes in")
     cn.add_argument("--ref", help="a branch, tag or commit sha for the project (default main)")
-    cn.add_argument("--name", help="the name to record a space you already have under")
+    cn.add_argument("--id", help="with space:NAME, an XO space you already have (XO must confirm your key "
+                                 "can read it)")
     cn.set_defaults(run=_connect)
     ls = sub.add_parser("list", parents=[common], help="show your projects or your spaces")
     ls.add_argument("what", choices=("projects", "spaces"))
