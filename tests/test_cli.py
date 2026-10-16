@@ -1838,7 +1838,27 @@ def test_connect_repo_moves_a_checkout_only_when_its_origin_is_that_repo(xs, cap
     err = _connected(xs, capsys)
     assert Path("quirq-ai/notes/.git").is_dir() is moved and Path("notes").exists() is not moved
     assert git("remote", "get-url", "origin", cwd="quirq-ai/notes" if moved else "notes") == before
-    assert ("another repository" in err) is not moved and before not in err
+    assert ("xo can confirm" in err) is not moved and before not in err
+
+
+@pytest.mark.parametrize("extra", [
+    ["remote", "set-url", "--push", "origin", "https://github.com/someone-else/notes"],
+    ["remote", "set-url", "--add", "origin", "https://github.com/someone-else/notes"]])
+def test_connect_repo_checks_every_fetch_and_push_url(xs, capsys, github, extra):
+    git("init", "-q", "notes")
+    git("remote", "add", "origin", "https://github.com/quirq-ai/notes", cwd="notes")
+    git(*extra, cwd="notes")
+    err = _connected(xs, capsys)
+    assert "not moved" in err and "xo can confirm" in err and "someone-else" not in err
+    assert Path("notes/.git").is_dir() and not Path("quirq-ai/notes").exists()
+
+
+def test_connect_repo_does_not_echo_a_login_in_the_origin(xs, capsys, github):
+    secret = "tok" + "en-" + "x" * 12  # made at runtime, never a literal
+    git("init", "-q", "notes")
+    git("remote", "add", "origin", f"https://me:{secret}@github.com/quirq-ai/notes", cwd="notes")
+    err = _connected(xs, capsys)
+    assert "xo can confirm" in err and secret not in err and Path("notes/.git").is_dir()
 
 
 def test_connect_repo_does_not_move_onto_an_existing_folder(xs, capsys, github):

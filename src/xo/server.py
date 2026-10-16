@@ -873,7 +873,7 @@ class App:
             raise self._refuse(who, 422, f"Body must be {shape} and nothing else")
         return {k: v.strip() if isinstance(v, str) else v for k, v in sent.items()}
 
-    def _change(self, subject: str, who: dict, field: str, step, what: str, busy: str) -> list:
+    def _change(self, subject: str, who: dict, field: str, step, what: str, busy, settled=None) -> list:
         """Change one list in the user's own private metadata, the way /me/projects does: read it,
         let `step` say what it should be, and send Clerk a merge that names only `field`, so every
         other key is left as it was. Clerk has no compare-and-swap, so after each write the list is
@@ -889,13 +889,16 @@ class App:
             outcome, value = step(current, private, wrote)
             return outcome, {field: value}
 
-        return self._change_keys(subject, who, keyed, what, busy)[field]
+        return self._change_keys(subject, who, keyed, what, busy, settled)[field]
 
-    def _change_keys(self, subject: str, who: dict, step, what: str, busy: str) -> dict:
+    def _change_keys(self, subject: str, who: dict, step, what: str, busy, settled=None) -> dict:
         """_change for one or more top-level keys at once: step(private metadata, wrote) answers
         ("done" | "write", {key: value}), and the merge sent to Clerk names only those keys, in one
         write, held to PRIVATE_BUDGET as a whole. A write of `shared` alone is not: a share checks
-        its own room, and a reject only makes `shared` smaller."""
+        its own room, and a reject only makes `shared` smaller.
+
+        busy is the 503 message, or a function giving it. settled(), when given, runs once the
+        change is done and before its 200 audit line, and may refuse instead."""
         with self._lock:
             lock = self._project_locks.setdefault(subject, threading.Lock())
         with lock:
@@ -935,9 +938,11 @@ class App:
                     raise reply from None
                 wrote = True
             if outcome != "done":
-                raise self._refuse(who, 503, busy)
+                raise self._refuse(who, 503, busy() if callable(busy) else busy)
         with self._lock:
             self._me_cache.pop(subject, None)
+        if settled:
+            settled()
         # Anything else that differs was changed by someone else meanwhile, not by this merge.
         others = {k: v for k, v in first.items() if k not in value} != \
             {k: v for k, v in private.items() if k not in value}
@@ -996,30 +1001,45 @@ class App:
         def same(p: Any, q: str) -> bool:
             return isinstance(p, str) and p.casefold() == q.casefold()
 
+        def naming(spaces: list, project: str) -> list[str]:
+            return sorted(e["name"] for e in spaces
+                          if any(isinstance(x, dict) and any(same(k, project) for k in x) for x in _space_projects(e)))
+
+        def back(projects: list, keep_repo: bool, missing: list) -> list:
+            """The rename undone: NAME listed again, in REPO's place unless a space names REPO too
+            (then both stay, so no space names a project missing from `projects`)."""
+            out: list = []
+            for p in projects:
+                q = name if same(p, repo) and not keep_repo else p
+                if not ((same(q, name) or same(q, repo)) and any(same(w, q) for w in out)):
+                    out.append(q)
+            out += [] if any(same(w, name) for w in out) else [name]
+            out += [repo] if keep_repo and not any(same(w, repo) for w in out) else []
+            return out + missing
+
         def step(projects: list, private: dict, wrote: bool) -> tuple[str, list]:
             has_name = any(same(p, name) for p in projects)
             has_repo = any(same(p, repo) for p in projects)
             spaces = private.get("spaces", [])
-            self._readable_spaces(spaces, who)
+            # Only the first read can say nothing was changed: by a re-read, the rename may be there.
+            self._readable_spaces(spaces, who, tail=None if not wrote else
+                                  f"run xo projects to see whether {name} is now {repo}")
             # Checked on every read: a racing `xo connect project:NAME space:S` may land at any time.
-            held = sorted(e["name"] for e in spaces
-                          if any(isinstance(x, dict) and any(same(k, name) for k in x) for x in _space_projects(e)))
+            held = naming(spaces, name)
             # Only this route removes a name from `projects` (renaming it), so anything else read
             # earlier and gone now was dropped by a racing write that started from an older list:
             # put it back.
             missing = [p for p in seen if p not in projects and not same(p, name) and not same(p, repo)]
+            if held and wrote and not undone:
+                undone[:] = held
             if undone:
                 # A space came to name the project after the rename landed: the rename is put back
                 # so that space still names a project in `projects`.
-                if has_name and not has_repo and not missing:
+                keep_repo = bool(naming(spaces, repo))
+                if has_name and has_repo == keep_repo and not missing:
                     return "done", projects
-                return "write", [name if same(p, repo) else p for p in projects
-                                 if not same(p, name)] + ([] if has_repo else [name]) + missing
+                return "write", back(projects, keep_repo, missing)
             if held:
-                if wrote:
-                    undone[:] = held
-                    return "write", [name if same(p, repo) else p for p in projects
-                                     if not same(p, name)] + ([] if has_repo else [name]) + missing
                 # TODO(suraj): rename the project inside its spaces too (one merge naming `projects`
                 # and `spaces`), so a project already in a space can get its repo.
                 raise self._refuse(who, 409, f"{name} is in space {held[0]}, which would still name it {name}; "
@@ -1044,12 +1064,20 @@ class App:
             seen.extend(p for p in projects if p not in seen and not same(p, name))
             return "write", wanted
 
-        projects = self._change(key["subject"], who, "projects", step, "projects",
-                                "Your projects changed while this ran; run xo projects to see whether "
-                                f"{repo} is there before trying again")
-        if undone:
-            raise self._refuse(who, 409, f"{name} was put in space {undone[0]} while this ran, so it keeps its "
-                                         "name; nothing was changed")
+        def busy() -> str:
+            if undone:
+                return (f"{name} was put in space {undone[0]} while this ran, and putting its name back did not "
+                        f"settle; run xo projects to see whether {name} or {repo} is listed")
+            return (f"Your projects changed while this ran; run xo projects to see whether {repo} is there before "
+                    "trying again")
+
+        def settled() -> None:
+            # One audit line per request: the put-back is a 409, never a 200 followed by a 409.
+            if undone:
+                raise self._refuse(who, 409, f"{name} was put in space {undone[0]} while this ran, so it keeps "
+                                             f"its name and was not renamed {repo}")
+
+        projects = self._change(key["subject"], who, "projects", step, "projects", busy, settled)
         return {"projects": _mask_secrets(projects)}
 
     def _project_name(self, name: str, who: dict) -> None:
@@ -1117,15 +1145,16 @@ class App:
                      "wanted before trying again")
         return written[0]
 
-    def _readable_spaces(self, spaces: Any, who: dict, nothing: str = "changed") -> None:
+    def _readable_spaces(self, spaces: Any, who: dict, nothing: str = "changed", tail: str | None = None) -> None:
         """Refuse a `spaces` xo did not write and could not write back whole: not a list, an entry
-        that is not an object with a name, or two names that differ only in case."""
+        that is not an object with a name, or two names that differ only in case. The answer ends
+        "nothing was {nothing}", or `tail` when one is given."""
+        tail = tail or f"nothing was {nothing}"
         if not isinstance(spaces, list):
-            raise self._refuse(who, 409, f"Your private metadata `spaces` is not a list; nothing was {nothing}")
+            raise self._refuse(who, 409, f"Your private metadata `spaces` is not a list; {tail}")
         if any(not isinstance(e, dict) or not isinstance(e.get("name"), str) for e in spaces) or \
                 len({e["name"].casefold() for e in spaces}) != len(spaces):
-            raise self._refuse(who, 409, "Your private metadata `spaces` holds an entry xo cannot read; "
-                                         f"nothing was {nothing}")
+            raise self._refuse(who, 409, f"Your private metadata `spaces` holds an entry xo cannot read; {tail}")
 
     def _create_space(self, headers: dict[str, str], body: bytes | None) -> dict:
         """Create a space through XO with the caller's own key, then record it in `spaces`."""

@@ -244,7 +244,10 @@ process apply per function instance, so the per-address limit is a Vercel Firewa
   already in the list (409), and P in any space (409), since the space would still name it P.
   `spaces` is checked on every read, not only the first: if a racing `xo connect project:P space:S`
   puts P in a space after the rename landed, the rename is put back (P listed again) and the answer
-  is 409. The repo is listed once whatever a racing add wrote.
+  is 409; if another space came to name `OWNER/REPO` meanwhile, both stay listed. The rename stays
+  when the put-back does not settle within the tries or the time limit (503, naming the space), or
+  when the racing connect lands after the last read (200). The repo is listed once whatever a
+  racing add wrote.
 - **A rename can bring the old name back.** Every other write puts back names a racing write
   dropped, and this is the one route that removes a name. A `xo projects add` or `xo create
   project` on another instance that read the list before the rename can therefore put P back next

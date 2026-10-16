@@ -317,7 +317,7 @@ sequenceDiagram
   Git-->>Cli: origin / move if origin matches: to ./OWNER/REPO
 ```
 
-A project made with a name gets its repo later. The name is replaced in place, through the same engine as an add. Refused while the project is in a space, since the space would still name it the old way. If `./notes` is here, it gets the origin only when it has none, and moves to `./OWNER/REPO` when its origin is that repository (https or git@ form). A folder whose origin is another repository is not moved, and xo says so.
+A project made with a name gets its repo later. The name is replaced in place, through the same engine as an add. Refused while the project is in a space, since the space would still name it the old way. If `./notes` is here, it gets the origin only when it has none, and moves to `./OWNER/REPO` when its origin is that repository (https or git@ form). A folder whose origin xo cannot confirm is that repository (every fetch and push URL) is not moved, and xo says so.
 
 #### `xo connect space:S [--id ID]`
 

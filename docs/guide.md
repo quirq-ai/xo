@@ -128,8 +128,8 @@ xo sync project:OWNER/REPO                       # git pull --rebase, then push
   `xo create space NAME KIND`.
 - A project is named after its repo. `xo connect project:P --repo URL` is refused while P is in a
   space, since the space would still name it P. It gives `./P` that origin only when it has none,
-  and leaves the folder where it is when its origin is another repository, so `xo update` never
-  pushes to the wrong place.
+  and leaves the folder where it is unless every fetch and push URL of its origin is that
+  repository, so `xo update` never pushes to the wrong place.
 - XO keeps space names in lowercase, so `xo create space MyDev codex` creates and records `mydev`,
   and says so.
 - Add `--dry-run` to `xo create space` to see the request without sending it.
