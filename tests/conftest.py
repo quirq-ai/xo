@@ -225,6 +225,9 @@ def github(tmp_path, monkeypatch):
     work = tmp_path / "here"
     work.mkdir()
     monkeypatch.chdir(work)
+    # xo's own git runs with no user or system config either, so signing or hooks there change nothing.
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
     monkeypatch.setenv("GIT_AUTHOR_NAME", "t")
     monkeypatch.setenv("GIT_AUTHOR_EMAIL", "t@example.com")
     monkeypatch.setenv("GIT_COMMITTER_NAME", "t")

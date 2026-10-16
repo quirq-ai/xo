@@ -1813,11 +1813,42 @@ def test_update_space_replaces_its_projects_only_at_the_rev_sent(clerk):
     store = _Store({"projects": ["a", "b"], "spaces": [_space("dev", rev=3, projects=[{"a": "main"}]),
                                                        _space("ops")]})
     app = _app(store)
-    status, out = _put(app, "/me/spaces/dev", {"rev": 3, "projects": [{"b": "v2"}, {"a": "feature"}]})
+    status, out = _put(app, "/me/spaces/dev", {"rev": 3, "projects": [{"b": "v2"}, {"a": "feature"}],
+                                               "base": [{"a": "main"}]})
     assert status == 200 and out["data"]["space"] == _space("dev", rev=4, projects=[{"b": "v2"}, {"a": "feature"}])
     assert store.stored["private_metadata"]["spaces"][1] == _space("ops")
-    status, out = _put(app, "/me/spaces/dev", {"rev": 3, "projects": []})
+    status, out = _put(app, "/me/spaces/dev", {"rev": 3, "projects": [], "base": [{"a": "main"}]})
     assert status == 409 and "run xo sync space:dev" in out["error"] and len(store.patches) == 1
+
+
+def test_update_space_is_refused_when_the_space_holds_other_projects_at_the_same_rev(clerk):
+    # Two writes can both get 200 at one rev; the loser's next update must not overwrite the winner.
+    store = _Store({"projects": ["a", "b"], "spaces": [_space("dev", rev=4, projects=[{"b": "v2"}])]})
+    status, out = _put(_app(store), "/me/spaces/dev", {"rev": 4, "projects": [{"b": "v3"}], "base": [{"b": "v1"}]})
+    assert status == 409 and "changed since you read it" in out["error"] and store.patches == []
+
+
+def test_update_space_with_nothing_changed_keeps_the_rev(clerk):
+    store = _Store({"projects": ["a"], "spaces": [_space("dev", rev=4, projects=[{"a": "main"}])]})
+    status, out = _put(_app(store), "/me/spaces/dev", {"rev": 4, "projects": [{"a": "main"}],
+                                                        "base": [{"a": "main"}]})
+    assert status == 200 and out["data"]["space"]["rev"] == 4
+
+
+def test_a_space_named_connect_can_be_updated(clerk):
+    store = _Store({"projects": ["a"], "spaces": [_space("connect")]})
+    status, out = _put(_app(store), "/me/spaces/connect", {"rev": 1, "projects": [{"a": "main"}], "base": []})
+    assert status == 200 and out["data"]["space"]["rev"] == 2
+
+
+def test_a_json_number_too_long_to_read_is_refused_not_a_500(clerk):
+    store = _Store({"spaces": [_space("dev")]})
+    body = b'{"rev": ' + b"9" * 5000 + b', "projects": [], "base": []}'
+    status, _ = _app(store).handle("PUT", "/me/spaces/dev", {"authorization": f"Bearer {USER_KEY}"}, body)
+    assert status == 422
+    status, _ = _app(store).handle("POST", "/me/projects", {"authorization": f"Bearer {USER_KEY}"},
+                                   b'{"name": ' + b"9" * 5000 + b"}")
+    assert status == 422
 
 
 @pytest.mark.parametrize("path, body, status", [
@@ -1833,7 +1864,7 @@ def test_update_space_replaces_its_projects_only_at_the_rev_sent(clerk):
     ("/me/spaces/dev", {"rev": 1, "projects": [{f"p{i}": "main"} for i in range(11)]}, 422)])
 def test_update_space_refuses_and_writes_nothing(clerk, path, body, status):
     store = _Store({"projects": ["a", "b"], "spaces": [_space("dev")]})
-    assert _put(_app(store), path, body)[0] == status
+    assert _put(_app(store), path, {**body, "base": []})[0] == status
     assert store.patches == []
 
 

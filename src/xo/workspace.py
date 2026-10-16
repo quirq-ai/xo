@@ -3,11 +3,13 @@ the space recorded in your private metadata.
 
     xo install space:S    ./S/<project> for each project, at its ref; ./S/.xo/state.json remembers
                           the space's rev and refs as installed
-    xo update space:S     record each checkout's branch (or commit) in the space, if the space's rev
-                          is still the one installed; refused otherwise: run xo sync
-    xo sync space:S       take the remote's changes, keep yours, stop on a project both changed,
-                          then record the result
-    xo install project:P  ./P cloned (or fetched) from GitHub
+    xo update space:S     push each checkout's branch to its upstream (refused if the remote is
+                          ahead), then record each checkout's branch (or commit) in the space, if the
+                          space is still as installed; refused otherwise: run xo sync
+    xo sync space:S       rebase each checkout's branch on its upstream and push it, take the
+                          space's changes, keep yours, stop on a project both changed, then record
+                          the result
+    xo install project:P  ./P cloned from GitHub, or fetched and fast-forwarded
     xo update project:P   git push of ./P's branch to its upstream, never forced
     xo sync project:P     git pull --rebase, then that push
 
@@ -128,9 +130,11 @@ def install(client: Client, kind: str, name: str) -> Any:
         projects = _data(client.request("GET", "/me/projects").data, "projects")
         if name not in projects:
             raise XoError(f"{name} is not in your projects (xo list projects shows them)")
-        if not _place(Path(name), name, None):
+        dest = Path(name)
+        existed = dest.exists()
+        if not _place(dest, name, None):
             raise XoError(f"{name} has no GitHub remote, so there is nothing to install")
-        _say(f"./{name}: up to date with {gitops.GITHUB}/{name}")
+        _say(f"./{name}: " + (gitops.fast_forward(dest) if existed else f"cloned from {gitops.GITHUB}/{name}"))
         return {"project": name}
     space = _space(client, name)
     pairs = _pairs(space.get("projects"), f"space {name}")
@@ -151,12 +155,15 @@ def _local(root: Path, base: list[tuple[str, str]]) -> list[tuple[str, str]]:
         if not (dest / ".git").exists():
             out.append((project, ref))
             continue
+        gitops.own_checkout(dest)
         here = gitops.current(dest)
         if gitops.branch(dest) is None:  # detached: still the installed tag or commit, if HEAD is there
             try:
                 here = ref if gitops.resolve(dest, ref)[1] == here else here
             except XoError:
                 pass
+        if not names.ref_ok(here):
+            raise XoError(f"./{dest} is on {here!r}, which is not a ref xo can record ({names.REF_RULE})")
         out.append((project, here))
     return out
 
@@ -175,11 +182,36 @@ def _published(root: Path, pairs: list[tuple[str, str]], base: dict[str, str]) -
                           "(xo update project:" + project + ")") from None
 
 
-def _record(client: Client, name: str, rev: int, pairs: list[tuple[str, str]]) -> dict:
+def _record(client: Client, name: str, rev: int, pairs: list[tuple[str, str]],
+            base: list[tuple[str, str]]) -> dict:
+    """PUT the space's new refs. The server refuses (409) unless the space is still at rev and still
+    holds base, the projects these refs were worked out from."""
     path = f"/me/spaces/{quote(name, safe='')}"
     print(f"xo: PUT {client.scrub(client.url(path))}", file=sys.stderr)
-    return _data(client.request("PUT", path, body={"rev": rev, "projects": [{p: r} for p, r in pairs]}).data,
-                 "space")
+    body = {"rev": rev, "projects": [{p: r} for p, r in pairs], "base": [{p: r} for p, r in base]}
+    return _data(client.request("PUT", path, body=body).data, "space")
+
+
+def _checkouts(root: Path, pairs: list[tuple[str, str]]) -> list[Path]:
+    """The space's projects that have a checkout here, each refused if it is not a checkout of its
+    own or holds changes not committed, before anything is changed."""
+    found = [root / p for p, _ in pairs if (root / p).exists()]
+    for dest in found:
+        gitops.own_checkout(dest)
+        if gitops.dirty(dest):
+            raise XoError(f"./{dest} has changes that are not committed; commit or stash them first. Nothing "
+                          "was changed")
+    return found
+
+
+def _git_step(dests: list[Path], rebase: bool) -> None:
+    """Each checkout on a branch with an upstream: rebased on it first when rebase, then pushed
+    (never forced, so git refuses when the remote is ahead). Tags and commits are left as they are."""
+    for dest in dests:
+        if gitops.tracking(dest):
+            if rebase:
+                gitops.pull_rebase(dest)
+            gitops.push(dest)
 
 
 def update(client: Client, kind: str, name: str) -> Any:
@@ -190,9 +222,13 @@ def update(client: Client, kind: str, name: str) -> Any:
     root = Path(name)
     state = _state(root)
     base = _pairs(state.get("projects"), str(root / STATE))
+    _git_step(_checkouts(root, base), rebase=False)
     pairs = _local(root, base)
+    if pairs == base:
+        _say(f"space {name}: your checkouts are where the space has them; nothing to record")
+        return {"space": name, "rev": state["rev"], "projects": [{p: r} for p, r in base]}
     _published(root, pairs, dict(base))
-    space = _record(client, name, state["rev"], pairs)
+    space = _record(client, name, state["rev"], pairs, base)
     _save(root, name, _rev(space), _pairs(space.get("projects"), f"space {name}"))
     return space
 
@@ -206,11 +242,21 @@ def sync(client: Client, kind: str, name: str) -> Any:
         return {"project": name}
     root = Path(name)
     state = _state(root)
-    base = dict(_pairs(state.get("projects"), str(root / STATE)))
-    local = dict(_local(root, list(base.items())))
+    installed = _pairs(state.get("projects"), str(root / STATE))
+    _git_step(_checkouts(root, installed), rebase=True)
+    base = dict(installed)
+    local = dict(_local(root, installed))
     space = _space(client, name)
     remote = _pairs(space.get("projects"), f"space {name}")
+    if _rev(space) < state["rev"]:
+        # An older copy of the space was put back (a write racing on another server instance).
+        # Its refs are not changes anyone made: keep yours and record them again.
+        _say(f"space {name} went back to rev {_rev(space)} from your rev {state['rev']}; keeping your refs")
+        base = dict(remote)
     merged, clashes = [], []
+    for project, was in base.items():  # dropped from the space while you changed it
+        if project not in dict(remote) and local.get(project, was) != was:
+            clashes.append(f"{project} (yours {local[project]}, removed from the space)")
     for project, theirs in remote:
         was, mine = base.get(project), local.get(project, base.get(project))
         if mine is None or mine == theirs or mine == was:
@@ -226,9 +272,12 @@ def sync(client: Client, kind: str, name: str) -> Any:
     for project, ref in merged:
         if local.get(project) != ref:
             _place(root / project, project, ref)
+    # The checkouts now hold the space's refs and yours: save the space as read, so that if recording
+    # fails below, the next sync still counts your refs as yours and the space's as its own.
+    _save(root, name, _rev(space), remote)
     rev = _rev(space)
     if merged != remote:
         _published(root, merged, dict(remote))
-        rev = _rev(_record(client, name, rev, merged))
+        rev = _rev(_record(client, name, rev, merged, remote))
     _save(root, name, rev, merged)
     return {"space": name, "rev": rev, "projects": [{p: r} for p, r in merged]}

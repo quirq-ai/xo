@@ -79,7 +79,10 @@ def test_update_refuses_a_branch_its_remote_does_not_have(space):
 
 
 def test_update_is_refused_when_the_space_moved_on(space):
+    space.hub.commit("o/a", "feature", "feature work")
     workspace.install(space.client, "space", "dev")
+    git("fetch", "-q", cwd="dev/o/a")
+    git("switch", "-q", "feature", cwd="dev/o/a")
     _stored(space)["rev"] = 5
     with pytest.raises(XoError, match="run xo sync space:dev"):
         workspace.update(space.client, "space", "dev")
@@ -160,6 +163,103 @@ def test_project_update_refuses_a_detached_or_dirty_checkout(space):
     git("switch", "-q", "--detach", cwd="o/a")
     with pytest.raises(XoError, match="detached"):
         workspace.update(None, "project", "o/a")
+
+
+def test_project_update_and_sync_refuse_a_folder_that_is_not_a_checkout_of_its_own(space, tmp_path):
+    git("init", "-q", "-b", "main")  # the working folder is itself a repository
+    Path("o/a").mkdir(parents=True)
+    for verb in (workspace.update, workspace.sync):
+        with pytest.raises(XoError, match="not a git checkout of its own"):
+            verb(None, "project", "o/a")
+        with pytest.raises(XoError, match="not a git checkout of its own"):
+            verb(None, "project", "o/missing")
+
+
+def test_install_project_fast_forwards_an_existing_checkout(space, capsys):
+    space.store.stored["private_metadata"]["projects"] = ["o/a"]
+    workspace.install(space.client, "project", "o/a")
+    space.hub.commit("o/a", "main", "newer")
+    workspace.install(space.client, "project", "o/a")
+    assert Path("o/a/README").read_text() == "newer" and "up to date with its upstream" in capsys.readouterr().err
+
+
+def test_project_sync_that_conflicts_leaves_the_checkout_as_it_was(space):
+    space.store.stored["private_metadata"]["projects"] = ["o/a"]
+    workspace.install(space.client, "project", "o/a")
+    space.hub.commit("o/a", "main", "theirs")
+    Path("o/a/README").write_text("mine\n")
+    git("commit", "-q", "-am", "mine", cwd="o/a")
+    with pytest.raises(XoError, match="left it as it was"):
+        workspace.sync(None, "project", "o/a")
+    assert git("branch", "--show-current", cwd="o/a") == "main" and Path("o/a/README").read_text() == "mine\n"
+
+
+def test_space_update_pushes_each_branch_and_records_nothing_when_refs_are_unchanged(space):
+    workspace.install(space.client, "space", "dev")
+    Path("dev/o/a/README").write_text("pushed\n")
+    git("commit", "-q", "-am", "pushed", cwd="dev/o/a")
+    out = workspace.update(space.client, "space", "dev")
+    assert git("log", "-1", "--format=%s", "main", cwd=space.hub.root / "o/a") == "pushed"
+    assert out["rev"] == 1 and space.store.patches == []
+
+
+def test_space_sync_rebases_each_branch_on_its_upstream_and_pushes_it(space):
+    workspace.install(space.client, "space", "dev")
+    space.hub.commit("o/a", "main", "theirs")
+    Path("dev/o/a/NEW").write_text("x")
+    git("add", "NEW", cwd="dev/o/a")
+    git("commit", "-q", "-m", "mine", cwd="dev/o/a")
+    workspace.sync(space.client, "space", "dev")
+    assert git("log", "-2", "--format=%s", "main", cwd=space.hub.root / "o/a").split("\n") == ["mine", "theirs"]
+
+
+def test_sync_keeps_your_refs_when_the_space_went_back_to_an_older_rev(space):
+    space.hub.commit("o/a", "feature", "feature work")
+    workspace.install(space.client, "space", "dev")
+    git("fetch", "-q", cwd="dev/o/a")
+    git("switch", "-q", "feature", cwd="dev/o/a")
+    assert workspace.update(space.client, "space", "dev")["rev"] == 2
+    _stored(space).update(rev=1, projects=[{"o/a": "main"}, {"o/b": "v1"}, {"notes": "main"}])  # a stale writer
+    out = workspace.sync(space.client, "space", "dev")
+    assert out["projects"][0] == {"o/a": "feature"} and git("branch", "--show-current", cwd="dev/o/a") == "feature"
+    assert _stored(space)["projects"][0] == {"o/a": "feature"}
+
+
+def test_a_sync_whose_record_is_refused_never_undoes_the_newer_write_next_time(space, monkeypatch):
+    space.hub.commit("o/a", "feature", "feature work")
+    space.hub.commit("o/b", "main", "v2 work", tag="v2")
+    workspace.install(space.client, "space", "dev")
+    _stored(space).update(rev=2, projects=[{"o/a": "feature"}, {"o/b": "v1"}, {"notes": "main"}])
+    git("switch", "-q", "--detach", "v2", cwd="dev/o/b")
+    real = workspace._record
+
+    def racing(client, name, rev, pairs, base):  # someone records o/a back at main first
+        _stored(space).update(rev=3, projects=[{"o/a": "main"}, {"o/b": "v1"}, {"notes": "main"}])
+        return real(client, name, rev, pairs, base)
+
+    monkeypatch.setattr(workspace, "_record", racing)
+    with pytest.raises(XoError, match="run xo sync"):
+        workspace.sync(space.client, "space", "dev")
+    monkeypatch.setattr(workspace, "_record", real)
+    out = workspace.sync(space.client, "space", "dev")
+    assert out["projects"][0] == {"o/a": "main"}  # the rev-3 write stands
+
+
+def test_sync_stops_when_the_space_dropped_a_project_you_changed(space):
+    space.hub.commit("o/a", "feature", "feature work")
+    workspace.install(space.client, "space", "dev")
+    git("fetch", "-q", cwd="dev/o/a")
+    git("switch", "-q", "feature", cwd="dev/o/a")
+    _stored(space).update(rev=2, projects=[{"o/b": "v1"}, {"notes": "main"}])
+    with pytest.raises(XoError, match="removed from the space"):
+        workspace.sync(space.client, "space", "dev")
+
+
+def test_update_names_the_ref_rule_for_a_branch_xo_cannot_record(space):
+    workspace.install(space.client, "space", "dev")
+    git("switch", "-q", "-c", "fix#1", cwd="dev/o/a")
+    with pytest.raises(XoError, match="not a ref xo can record"):
+        workspace.update(space.client, "space", "dev")
 
 
 @pytest.mark.parametrize("text", ["space:../x", "project:-a", "dev", "space:", "repo:o/a"])

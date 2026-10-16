@@ -54,9 +54,9 @@ xo spaces --space-id 6f1c2c1e-...   # connection URLs for a space you own
 | `xo create space KIND NAME` | `POST /me/spaces` on your xo server: it creates the space through XO as `xo KIND` does, then records it in your `spaces` as NAME | the flags of `xo KIND` |
 | `xo connect project:P space:S` / `xo connect space:S` | `POST /me/spaces/S/projects` / `POST /me/spaces/connect`: a project's ref in a space, or a new space entry in your metadata | `--ref` (default main) / `--id` for an XO space you already have |
 | `xo list projects\|spaces` | `GET /me/projects` / `GET /me/spaces` | none |
-| `xo install space:S` / `project:P` | `GET /me/spaces`, then your own git: each project cloned or fetched into `./S/OWNER/REPO` at its ref | none |
-| `xo update space:S` / `project:P` | `PUT /me/spaces/S` with the refs checked out under `./S` (refused if the space moved on) / `git push` of P's branch | none |
-| `xo sync space:S` / `project:P` | merges the space's changes with yours, then `PUT` / `git pull --rebase` and push | none |
+| `xo install space:S` / `project:P` | `GET /me/spaces`, then your own git: each project cloned or fetched into `./S/OWNER/REPO` at its ref / P cloned, or fetched and fast-forwarded | none |
+| `xo update space:S` / `project:P` | `git push` of each branch under `./S`, then `PUT /me/spaces/S` with the refs checked out (refused if the space changed) / `git push` of P's branch | none |
+| `xo sync space:S` / `project:P` | `git pull --rebase` and push of each branch, then merges the space's changes with yours and `PUT`s them / `git pull --rebase` and push | none |
 | `xo user-metadata get` / `update` | `GET` / `PATCH /user-metadata/{userId}` on your xo server | publicMetadata, privateMetadata as JSON objects (admin keys only); try `--dry-run` first: a wrong `--user-id` edits another user |
 | `xo coder github URL` | Coder CLI, using your Coder login | GitHub repository and `xo-github` template parameters; see below |
 

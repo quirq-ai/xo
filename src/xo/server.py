@@ -672,6 +672,8 @@ class App:
                 return self._create_space(headers, body)
             raise _Reply(405, "Method not allowed")
         if path == "/me/spaces/connect":
+            if method == "PUT":  # a space named connect
+                return self._update_space("connect", headers, body)
             if method != "POST":
                 raise _Reply(405, "Method not allowed")
             return self._connect_space(headers, body)
@@ -761,7 +763,7 @@ class App:
         """A JSON object holding the string fields named (True: required) and nothing else."""
         try:
             sent = json.loads(body or b"")
-        except (json.JSONDecodeError, UnicodeDecodeError, RecursionError):
+        except (ValueError, RecursionError):  # ValueError: bad JSON, bad UTF-8, an int past 4300 digits
             raise self._refuse(who, 422, "Body is not JSON") from None
         shape = "{" + ", ".join(f'"{k}": "..."' for k in fields) + "}"
         if (not isinstance(sent, dict) or set(sent) - set(fields)
@@ -1020,18 +1022,21 @@ class App:
 
     def _update_space(self, name: str, headers: dict[str, str], body: bytes | None) -> dict:
         """Replace a space's projects and refs with the caller's, if nobody changed the space since
-        the caller last read it: `rev` must be the space's rev now. Each project must be in the
-        caller's `projects`; the answer is the space with its rev one higher."""
+        the caller last read it: `rev` must be the space's rev now, and `base`, the projects the
+        caller's change starts from, must be its projects now (two writes can both get 200 at one rev,
+        so the rev alone cannot tell). Each project must be in the caller's `projects`; the answer is
+        the space with its rev one higher."""
         key, _, who = self._caller(headers, "spaces", "/me/spaces/{name}", method="PUT")
         try:
             sent = json.loads(body or b"")
-        except (json.JSONDecodeError, UnicodeDecodeError, RecursionError):
+        except (ValueError, RecursionError):  # ValueError: bad JSON, bad UTF-8, an int past 4300 digits
             raise self._refuse(who, 422, "Body is not JSON") from None
-        rev, entries = (sent.get("rev"), sent.get("projects")) if isinstance(sent, dict) else (None, None)
-        if (not isinstance(sent, dict) or set(sent) != {"rev", "projects"} or not isinstance(rev, int)
-                or isinstance(rev, bool) or not isinstance(entries, list)):
-            raise self._refuse(who, 422, 'Body must be {"rev": N, "projects": [{"PROJECT": "REF"}, ...]} '
-                                         "and nothing else")
+        rev, entries, base = ((sent.get("rev"), sent.get("projects"), sent.get("base")) if isinstance(sent, dict)
+                              else (None, None, None))
+        if (not isinstance(sent, dict) or set(sent) != {"rev", "projects", "base"} or not isinstance(rev, int)
+                or isinstance(rev, bool) or not isinstance(entries, list) or not isinstance(base, list)):
+            raise self._refuse(who, 422, 'Body must be {"rev": N, "projects": [{"PROJECT": "REF"}, ...], "base": '
+                                         '[the projects as you read them]} and nothing else')
         self._space_name(name, who)
         wanted, seen = [], set()
         for e in entries:
@@ -1056,13 +1061,17 @@ class App:
             if current is None:
                 raise self._refuse(who, 404, f"You have no space named {name}")
             if _rev(current) != rev:
-                raise self._refuse(who, 409, f"Space {name} is at rev {_rev(current)}, not your rev {rev}: it changed since "
-                                             f"you read it; run xo sync space:{name} first")
+                raise self._refuse(who, 409, f"Space {name} is at rev {_rev(current)}, not your rev {rev}: it changed "
+                                             f"since you read it; run xo sync space:{name} first")
+            if _space_projects(current) != base:
+                raise self._refuse(who, 409, f"Space {name} changed since you read it; run xo sync space:{name} first")
             projects = private.get("projects", [])
             missing = [p for p in seen if not isinstance(projects, list) or p not in projects]
             if missing:
                 raise self._refuse(who, 404, f"{missing[0]} is not in your projects; add it with xo create project "
                                              "first")
+            if wanted == base:  # nothing changed: no new rev, which would send everyone else to xo sync
+                return current
             return {**current, "projects": wanted, "rev": rev + 1}
 
         return {"space": _shown_space(self._change_space(key["subject"], who, name, make))}
@@ -1155,7 +1164,7 @@ class App:
             return _Reply(422, error)
         try:
             changes = json.loads(body or b"")
-        except (json.JSONDecodeError, UnicodeDecodeError, RecursionError):
+        except (ValueError, RecursionError):  # ValueError: bad JSON, bad UTF-8, an int past 4300 digits
             raise bad("Body is not JSON") from None
         if not isinstance(changes, dict) or not changes:
             raise bad("Body must be an object with publicMetadata, privateMetadata or both")
