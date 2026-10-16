@@ -103,10 +103,15 @@ and when each request (admin metadata reads and writes included) happened and ho
   metadata. The user is the one Clerk ties the key to, never an id from the request. The key is
   verified with Clerk on every request and never cached, so a revoked key stops at once. Under a
   metadata name that reads like a credential (token, secret, password, credential, cookie, key,
-  `apiKey`, `accessKey`, `privateKey` and the like, at any depth), `/me` shows only the last 4
-  characters of a value 12 characters or longer, and `(hidden)` for anything else. Admin rights
-  never come from metadata, so a user reading their own does not learn anything that grants them.
-  Metadata values are never written to the log or the status page.
+  `apiKey`, `accessKey`, `privateKey`, auth, session, jwt and the like, at any depth), `/me` shows
+  only the last 4 characters of a string 12 characters or longer, and `(hidden)` for any other
+  value but null and the empty string. Under a password-like name (password, passphrase, pin, otp
+  and the like) it shows `(hidden)` whatever the length. A string that looks like a credential
+  under any name (`sk-`, `ghp_`, `ak_`, `AKIA`, a JWT, a PEM private key, a URL with a password,
+  `Bearer ...` and the like) is masked the same way. Admin rights never come from metadata, so a
+  user reading their own does not learn anything that grants them. Metadata values are never
+  written to the log or the status page. To show users only some of their private metadata, list
+  its top-level keys in `XO_ME_PRIVATE_KEYS`; unset, `/me` shows all of it.
 - **An admin key** is a Clerk API key that has the claim `xo_admin: true` **and** whose id is in
   `XO_ADMIN_KEY_IDS`. A key with the claim but not on the list is refused, and the refusal is
   logged with `claimedAdmin: true`, since that is what a forged key would look like.
@@ -125,6 +130,7 @@ Environment only, so the secret never lands in shell history or the process list
 | `XO_ADMIN_KEY_IDS` | for metadata | comma-separated Clerk API key ids (`ak_...`) that may act as admin |
 | `XO_EDITABLE_PUBLIC_KEYS` | for edits | comma-separated top-level public metadata keys PATCH may change |
 | `XO_EDITABLE_PRIVATE_KEYS` | for edits | the same for private metadata |
+| `XO_ME_PRIVATE_KEYS` | no | comma-separated top-level private metadata keys `/me` shows its user; unset, all of them |
 | `XO_CLERK_PER_SECOND` | no | calls to Clerk per second for the whole process; default 20 |
 | `XO_CORE_PER_SECOND` | no | requests passed on to XO per second for the whole process; default 10 |
 | `XO_SERVE_MAX_CONNECTIONS` | no | connections served at once; default 64, then 503 |
@@ -206,7 +212,9 @@ process apply per function instance, so the per-address limit is a Vercel Firewa
   `xo budget` (the server's own Clerk budget). Never values or keys, so a key removed with `null`
   cannot be restored from the log.
 - **No secrets in metadata.** Never store API keys, tokens or passwords in private metadata: an
-  admin key reads every user's private metadata in full.
+  admin key reads every user's private metadata in full, and each user reads their own through
+  `/me` (masked where it looks like a credential, and only the keys in `XO_ME_PRIVATE_KEYS` when
+  that is set). Anything kept there on the assumption that the user cannot see it can be seen.
 
 ## The admin key
 

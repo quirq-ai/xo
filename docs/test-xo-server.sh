@@ -81,17 +81,19 @@ if [ -n "$bad" ]; then
 fi
 pass "your key's format is one xo accepts"
 
-# 4. xo me shows the key's own account, and no email or metadata.
+# 4. xo me shows the key's own profile: its account, email and both metadata buckets.
 if XO_API_KEY="$key" xo me >"$work/me.json" 2>"$work/me.err"; then
   if "$python" -I - "$work/me.json" <<'PY'
 import json, sys
-data = json.load(open(sys.argv[1]))["data"]
+data = json.load(open(sys.argv[1]))["xo"]
 assert str(data.get("id", "")).startswith("user_"), "no user id"
-assert set(data) == {"id", "username", "firstName", "lastName", "imageUrl", "createdAt"}, sorted(data)
+assert set(data) == {"id", "username", "firstName", "lastName", "imageUrl", "createdAt", "email",
+                     "public_data", "private_data"}, sorted(data)
+assert isinstance(data["public_data"], dict) and isinstance(data["private_data"], dict), "metadata is not an object"
 print("      id %s, username %s" % (data["id"], data.get("username")))
 PY
-  then pass "xo me shows your account, and only the six fields"
-  else fail "xo me answered, but not with the six fields"
+  then pass "xo me shows your profile: account, email and both metadata buckets"
+  else fail "xo me answered, but not with the profile fields"
   fi
 else
   fail "xo me: $(head -c 300 "$work/me.err")"

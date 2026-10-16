@@ -5,10 +5,14 @@ from __future__ import annotations
 import http.client
 import json
 import os
+import re
+import subprocess
+import sys
 import threading
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 import pytest
 
@@ -217,6 +221,86 @@ def test_me_masks_secret_looking_metadata_at_any_depth(xo_server, monkeypatch):
     assert out["publicMetadata"] == {"session_cookie": "\u2026WXYZ"}
     text = json.dumps(out)
     assert "ghp_abcdefghijkl" not in text and "sk-live" not in text and "AKIAABCD" not in text
+
+
+@pytest.mark.parametrize("value", [
+    "sk-proj-abcdefghijklmnopWXYZ", "sk-ant-api03-abcdefghWXYZ", "ghp_abcdefghijklmnopWXYZ", "ak_abcdefghijWXYZ",
+    "sk_live_abcdefghijWXYZ", "AKIAABCDEFGHIJKLWXYZ", "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sigWXYZ",
+    "-----BEGIN RSA PRIVATE KEY-----\nMIIBWXYZ", "xoxb-1234-5678-abcdWXYZ", "postgres://u:pw@db.example/xoWXYZ",
+    "Bearer abcdefghijklWXYZ", "github_pat_abcdefghijWXYZ"])
+def test_me_masks_credential_looking_values_under_any_name(xo_server, monkeypatch, value):
+    monkeypatch.setitem(USERS["user_alice"], "public_metadata", {"openai": value, "plan": "free"})
+    out = call(xo_server, "GET", "/me", USER_KEY)[1]["data"]["publicMetadata"]
+    assert out == {"openai": "\u2026WXYZ", "plan": "free"}
+
+
+@pytest.mark.parametrize("name", ["sk", "pat", "jwt", "bearer", "auth", "authorization", "sessionId", "sid",
+                                  "creds", "dsn", "webhookUrl", "hmac", "githubPAT", "mnemonic", "seedPhrase"])
+def test_me_masks_more_credential_names(xo_server, monkeypatch, name):
+    monkeypatch.setitem(USERS["user_alice"], "private_metadata", {name: "plain-looking-valueWXYZ", "stripeId": "cus_1"})
+    out = call(xo_server, "GET", "/me", USER_KEY)[1]["data"]["privateMetadata"]
+    assert out == {name: "\u2026WXYZ", "stripeId": "cus_1"}
+
+
+@pytest.mark.parametrize("name", ["password", "dbPasswd", "pwd", "passphrase", "pass", "passcode", "pin", "otp",
+                                  "totpCode"])
+def test_me_shows_nothing_of_a_password_however_long(xo_server, monkeypatch, name):
+    monkeypatch.setitem(USERS["user_alice"], "private_metadata", {name: "correct-horse-battery-staple"})
+    assert call(xo_server, "GET", "/me", USER_KEY)[1]["data"]["privateMetadata"] == {name: "(hidden)"}
+
+
+def test_me_private_keys_narrow_what_a_user_sees(xo_server, monkeypatch):
+    monkeypatch.setitem(USERS["user_alice"], "private_metadata", {"stripeId": "cus_1", "fraudFlag": True})
+    xo_server.app.cfg.me_private = frozenset({"stripeId"})
+    out = call(xo_server, "GET", "/me", USER_KEY)[1]["data"]
+    assert out["privateMetadata"] == {"stripeId": "cus_1"} and out["publicMetadata"] == {"plan": "free"}
+
+
+def test_me_private_keys_fail_closed_on_odd_metadata(xo_server, monkeypatch):
+    monkeypatch.setitem(USERS["user_alice"], "private_metadata", ["fraud"])
+    xo_server.app.cfg.me_private = frozenset({"stripeId"})
+    assert call(xo_server, "GET", "/me", USER_KEY)[1]["data"]["privateMetadata"] == {}
+
+
+@pytest.mark.parametrize("raw, expected", [("", None), (" , ", None), ("stripeId, plan", {"stripeId", "plan"})])
+def test_me_private_keys_come_from_the_environment(clerk, monkeypatch, raw, expected):
+    monkeypatch.setenv("XO_ME_PRIVATE_KEYS", raw)
+    assert server.Config().me_private == (frozenset(expected) if expected else None)
+
+
+@pytest.mark.parametrize("addresses", [7, True, "a@b", {"id": "idn_2"}, None])
+def test_me_survives_odd_email_shapes(xo_server, monkeypatch, addresses):
+    monkeypatch.setitem(USERS["user_alice"], "email_addresses", addresses)
+    status, out = call(xo_server, "GET", "/me", USER_KEY)
+    assert status == 200 and out["data"]["email"] is None
+
+
+def test_the_me_cache_drops_expired_entries(xo_server, monkeypatch):
+    app = xo_server.app
+    monkeypatch.setattr(server, "ME_CACHE_PRUNE_AT", 3)
+    app._me_cache = {f"user_old{i}": (app.clock() - server.ME_CACHE_SECONDS - 1, {}) for i in range(3)}
+    assert call(xo_server, "GET", "/me", USER_KEY)[0] == 200
+    assert list(app._me_cache) == ["user_alice"]
+
+
+def test_the_deploy_scripts_me_check_accepts_what_xo_me_prints(xo_server, monkeypatch, capfd, tmp_path):
+    """docs/test-xo-server.sh step 4 parses `xo me`: run that very parser on the real output."""
+    script = (Path(__file__).parent.parent / "docs" / "test-xo-server.sh").read_text()
+    step = script[script.index("# 4. xo me"):script.index("# 5. ")]
+    parser = re.search(r"<<'PY'\n(.*?)\nPY\n", step, re.S).group(1)
+    monkeypatch.setenv("XO_URL", xo_server.url)
+    monkeypatch.setenv("XO_API_KEY", USER_KEY)
+    capfd.readouterr()
+    assert cli.main(["me"]) == 0
+    (tmp_path / "me.json").write_text(capfd.readouterr().out)
+    result = subprocess.run([sys.executable, "-I", "-", str(tmp_path / "me.json")], input=parser,
+                            capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+    assert "id user_alice, username alice" in result.stdout
+    (tmp_path / "old.json").write_text(json.dumps({"success": True, "data": {"id": "user_1"}}))
+    result = subprocess.run([sys.executable, "-I", "-", str(tmp_path / "old.json")], input=parser,
+                            capture_output=True, text=True, check=False)
+    assert result.returncode != 0
 
 
 def test_me_metadata_never_reaches_the_audit_log_or_status(xo_server, clerk, capfd):

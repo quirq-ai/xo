@@ -34,6 +34,8 @@ Configuration (environment only, so the secret never lands in shell history or t
     XO_ADMIN_KEY_IDS          comma-separated Clerk API key ids (ak_...) treated as admin
     XO_EDITABLE_PUBLIC_KEYS   comma-separated top-level keys PATCH may change in public metadata
     XO_EDITABLE_PRIVATE_KEYS  the same for private metadata
+    XO_ME_PRIVATE_KEYS        comma-separated top-level private metadata keys /me shows a user
+                              (unset: all of them)
     XO_CLERK_PER_SECOND       calls to Clerk per second for the whole process (default 20)
     XO_CORE_PER_SECOND        requests passed on to XO per second for the whole process (default 10)
     XO_SERVE_MAX_CONNECTIONS  connections served at once (default 64)
@@ -98,6 +100,7 @@ MAX_BODY = 32 * 1024  # two 8KB buckets with room for JSON overhead
 LIMITS = {"me": 60, "user-metadata": 20, "core": 30}
 MAX_TRACKED = 10_000  # tokens remembered for rate limiting; the least recently seen go first
 ME_CACHE_SECONDS = 60
+ME_CACHE_PRUNE_AT = 1000  # cached /me answers kept before the expired ones are dropped
 ACTIVITY_KEPT = 100  # recent requests the status page lists, per process
 # The status is "degraded" when a request to a route that calls Clerk (/me, /user-metadata) failed
 # with a 5xx within the last DEGRADED_SECONDS. Failures are kept apart from other requests, so no
@@ -161,6 +164,8 @@ class Config:
         self.admin_ids = _list_env("XO_ADMIN_KEY_IDS")
         self.editable = {"publicMetadata": _list_env("XO_EDITABLE_PUBLIC_KEYS"),
                          "privateMetadata": _list_env("XO_EDITABLE_PRIVATE_KEYS")}
+        # Top-level private metadata keys /me shows its user; unset or blank shows them all.
+        self.me_private = _list_env("XO_ME_PRIVATE_KEYS") or None
         self.clerk_per_second = _int_env("XO_CLERK_PER_SECOND", 20)
         self.core_per_second = _int_env("XO_CORE_PER_SECOND", 10)
         self.max_connections = _int_env("XO_SERVE_MAX_CONNECTIONS", 64)
@@ -258,15 +263,27 @@ class Clerk:
 
 # Metadata names that read like a credential: their values are masked in /me, which hands a user's
 # metadata back over a long-lived API key. /user-metadata (admin keys) shows values as stored.
-_SECRET_WORDS = {"token", "tokens", "secret", "secrets", "password", "passwd", "pwd", "credential",
-                 "credentials", "cookie", "cookies", "key", "keys", "apikey", "passphrase"}
-_SECRET_PARTS = ("token", "secret", "passw", "credential", "apikey", "privatekey", "accesskey")
+_SECRET_WORDS = {"token", "tokens", "secret", "secrets", "credential", "credentials", "creds", "cookie",
+                 "cookies", "key", "keys", "apikey", "auth", "authorization", "bearer", "jwt", "session",
+                 "sid", "sk", "pat", "mnemonic", "seed", "dsn", "hmac", "webhook"}
+_SECRET_PARTS = ("token", "secret", "credential", "apikey", "privatekey", "accesskey")
+# Names whose values show nothing at all, however long: a password's last 4 characters are too many.
+_HIDDEN_WORDS = {"password", "passwd", "pwd", "passphrase", "pass", "passcode", "pin", "otp", "totp"}
+# Values that look like a credential whatever they are stored under.
+_SECRET_VALUE = re.compile(r"\A\s*(?:(?:sk|rk|pk)[-_]|ak_|gh[pousr]_|github_pat_|glpat-|xox[abprs]-|hf_|AKIA|ASIA"
+                           r"|AIza|ya29\.|npm_|pypi-|Bearer\s|eyJ[\w-]*\.[\w-]+\.)"
+                           r"|-----BEGIN [A-Z ]*PRIVATE KEY-----|://[^/\s:@]+:[^/\s@]+@")
 
 
-def _secret_name(name: str) -> bool:
+def _secret_name(name: str) -> str | None:
+    """"hidden" for a password-like name, "secret" for another credential-like one, else None."""
     words = {w.lower() for w in re.findall(r"[A-Z]?[a-z]+|[A-Z]+(?![a-z])|[0-9]+", name)}
     flat = re.sub(r"[^a-z0-9]", "", name.lower())
-    return bool(words & _SECRET_WORDS) or any(part in flat for part in _SECRET_PARTS)
+    if words & _HIDDEN_WORDS or "passw" in flat:
+        return "hidden"
+    if words & _SECRET_WORDS or any(part in flat for part in _SECRET_PARTS):
+        return "secret"
+    return None
 
 
 def _mask(value: Any) -> str:
@@ -277,20 +294,30 @@ def _mask(value: Any) -> str:
 
 
 def _mask_secrets(value: Any, depth: int = 0) -> Any:
-    """A copy with the value under every secret-looking name masked, at any depth."""
+    """A copy with every value under a secret-looking name, and every string that looks like a
+    credential, masked, at any depth. Null and empty strings stay as they are: they hold nothing."""
     if depth > 32:
         return "(hidden)"
     if isinstance(value, dict):
-        return {k: (_mask(v) if isinstance(k, str) and _secret_name(k) and v not in (None, "")
-                    else _mask_secrets(v, depth + 1)) for k, v in value.items()}
+        out = {}
+        for k, v in value.items():
+            kind = _secret_name(k) if isinstance(k, str) else None
+            if kind is None or v in (None, ""):
+                out[k] = _mask_secrets(v, depth + 1)
+            else:
+                out[k] = "(hidden)" if kind == "hidden" else _mask(v)
+        return out
     if isinstance(value, list):
         return [_mask_secrets(v, depth + 1) for v in value]
+    if isinstance(value, str) and _SECRET_VALUE.search(value):
+        return _mask(value)
     return value
 
 
 def _primary_email(u: dict) -> str | None:
     primary = u.get("primary_email_address_id")
-    for e in u.get("email_addresses") or []:
+    addresses = u.get("email_addresses")
+    for e in addresses if isinstance(addresses, list) else []:
         if isinstance(e, dict) and primary is not None and e.get("id") == primary:
             return e.get("email_address")
     return None
@@ -569,10 +596,21 @@ class App:
                 # The key's own user only (the subject Clerk verified, never an id from the request).
                 # Admin rights come from the key's claim and $XO_ADMIN_KEY_IDS, not from metadata.
                 "publicMetadata": _mask_secrets(u.get("public_metadata") or {}),
-                "privateMetadata": _mask_secrets(u.get("private_metadata") or {})}
+                "privateMetadata": _mask_secrets(self._shown_private(u.get("private_metadata")))}
         with self._lock:
+            if len(self._me_cache) >= ME_CACHE_PRUNE_AT:  # entries hold metadata: drop the expired ones
+                self._me_cache = {s: e for s, e in self._me_cache.items() if now - e[0] < ME_CACHE_SECONDS}
             self._me_cache[subject] = (now, data)
         return data
+
+    def _shown_private(self, private: Any) -> Any:
+        """The private metadata /me shows its user: all of it, or only $XO_ME_PRIVATE_KEYS."""
+        private = private or {}
+        if self.cfg.me_private is None:
+            return private
+        if not isinstance(private, dict):
+            return {}
+        return {k: v for k, v in private.items() if k in self.cfg.me_private}
 
     def _metadata(self, method: str, user_id: str, headers: dict[str, str], body: bytes | None) -> dict:
         target = user_id if USER_ID.fullmatch(user_id) else "<invalid>"
