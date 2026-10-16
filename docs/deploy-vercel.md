@@ -41,12 +41,14 @@ Clerk instance: a key from another instance is refused as "Invalid API key".
    is hosted.
 3. Wait for **Valid Configuration** and the certificate.
 
-## 3. Add the rate limit rule (required)
+## 3. Add the rate limit rule (recommended, where your plan has it)
 
-The server limits calls to Clerk (`XO_CLERK_PER_SECOND`, default 20 a second) and requests per key,
-but on Vercel each function instance keeps its own counts, and Vercel can run many instances at
-once. So these limits slow a flood down; they do not stop it. The per-address limit has to be
-Vercel's:
+The server limits calls to Clerk (`XO_CLERK_PER_SECOND`, default 20 a second), requests passed on
+to XO (`XO_CORE_PER_SECOND`, default 10 a second) and requests per key, but on Vercel each function
+instance keeps its own counts, and Vercel can run many instances at once. So these limits slow a
+flood down; they do not stop it. A per-address limit can only be Vercel's. Add it if your plan
+offers rate limit rules under **Firewall**; without it the server's own limits are all there is,
+and the test script's last check fails:
 
 1. **Firewall → Rules → New rule**, named `xo per-IP limit`:
    - **If** Request Path **starts with** `/me`, **or** Request Path **starts with** `/user-metadata`,
@@ -74,10 +76,13 @@ If the rule already exists without `/api/core`, edit it to add that condition an
 the server passes anything under `/api/core` that looks like an API key on to XO, so without it one
 address can send XO as many requests as the per-key limit allows for each made-up key.
 
-If your plan does not offer rate limit rules, stop and tell Claude: without the rule, anyone can
-make the server spend Clerk requests (1000 Backend API calls per 10 seconds for the whole instance)
-and, past 100,000 a month, paid key checks. On development credentials that is the development
-instance only.
+If your plan does not offer rate limit rules, tell Claude before you go on: without the rule,
+anyone can make the server spend Clerk requests (1000 Backend API calls per 10 seconds for the whole instance)
+and, past 100,000 a month, paid key checks. Through `/me` that is the server's own Clerk instance,
+the development one on development credentials. Through `/api/core` it is XO's production
+instance whatever credentials the server holds: a request there goes on to app.xo.builders, where
+XO checks the key with its own Clerk. So the `/api/core` condition matters from the day the
+forwarding is deployed, not only once the server holds production credentials.
 
 ## 4. How it deploys
 
@@ -123,6 +128,7 @@ checks:
 | a string that is not a Clerk key | 401, without a call to Clerk |
 | `xo user-metadata get` with your key | 403 (no admin keys yet) |
 | up to 130 requests to `/me` with no key | refused (429, or 403 for a Deny rule) after about 60, or up to 120 if the rule's minute ends mid-burst; any other answer is a FAIL. This holds your address back for up to a minute |
+| then one request to `/api/core/v1/spaces/0000…` with no key | 429 or 403: the same rule covers `/api/core`. A 401 means the `/api/core` condition is missing or not published. This assumes Vercel counts one rule's paths together for an address, which has not been checked against Vercel |
 
 It prints PASS or FAIL per line and ends with "All checks passed." The key is never printed, saved,
 put on a command line or exported; only the `xo` calls that need it get it. If the format check
@@ -136,10 +142,11 @@ missing or refused; the project's **Logs** say which.
 |---|---|
 | The Secret Key | only in Vercel's environment; never printed, logged or returned |
 | Who can read or edit metadata | nobody until an admin key exists (403) |
-| Junk tokens | refused without a Clerk call, and never passed on to XO |
+| Tokens that are not `ak_` keys | refused without a Clerk call, and never passed on to XO. A made-up `ak_` token is passed on: XO refuses it, but only the limits below bound how many reach XO |
 | What reaches XO | only the creates and `GET /spaces/{id}` under `/api/core/v1`, with an `ak_` key; anything else there is a 404 from the server |
 | Big bodies | over 32KB refused (413) |
 | Requests per address | the Firewall rule in step 3, once published |
+| Requests to XO per instance | `XO_CORE_PER_SECOND` (default 10 a second), then 503 |
 | **Not protected** | a flood from many addresses spread over many instances; only Clerk's and XO's own limits stop it |
 | **Changed for XO** | every xo user now reaches app.xo.builders from Vercel's addresses, not their own, so a per-address limit on XO's side would count all of them together |
 | **Not rate limited** | `/` (the status page), `/status` and `/healthz`: public, one function invocation each, never a Clerk call. An open status page tab polls `/status` every 5 seconds while it is visible (about 17,000 invocations a day per tab left open) and stops while hidden. To cap them too, add a second rule of its own (Request Path **starts with** `/status`, 60 requests per 60 seconds per IP, so `/status/` is capped too); the page stays well under that. Do not add `/status` to the rule in step 3: it would share one per-address budget with `/me`, and an open status tab could then make the test script's Firewall check fail. |
@@ -154,8 +161,9 @@ not part of this setup.
 
 ## Limits
 
-- Each request makes at most two Clerk calls, each with a 10-second timeout, or one call to XO with
-  a 25-second timeout (a create that takes longer answers 504 and may still have happened). Vercel's
+- Each request makes at most two Clerk calls, each with a 10-second timeout, or one call to XO
+  that gets 25 seconds in all, however slowly XO sends (a create that takes longer answers 504 and
+  may still have happened). Vercel's
   function time and request size limits are not checked here; 25 seconds and 32KB (the server's
   body cap) are small, but confirm them for your plan.
 
@@ -163,9 +171,12 @@ not part of this setup.
 
 Do not switch to production credentials until all of these hold:
 
-1. The test script passed on development credentials, including the Firewall check.
+1. The test script passed on development credentials, including the Firewall check where your plan
+   has the rule.
 2. **A global limit, or the risk accepted in writing.** The per-IP rule does not stop a flood
-   spread over many addresses, and the server's own Clerk budget is per instance. Either add a
+   spread over many addresses, and the server's own budgets (Clerk's, and `XO_CORE_PER_SECOND` for
+   requests passed on to XO) are per instance. This is not only about this switch: requests to
+   `/api/core` already reach XO's production Clerk on development credentials. Either add a
    limit that counts all requests together (one option is a second rate limit rule on the same
    paths keyed by the `host` header, since every request has the same host; whether Vercel counts
    it globally is not verified), or write down that XO accepts the risk: such a flood could use up

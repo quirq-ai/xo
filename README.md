@@ -118,6 +118,11 @@ xo call create_codex --field name=x --field volumeSize=20 --dry-run # print the 
 xo api GET /spaces/ID                                               # any request, spec or not
 ```
 
+Through the xo server only the creates and `GET /spaces/{spaceId}` pass; any other `xo api`
+request, or an extra operation from your own `--spec`, gets the server's `HTTP 404: Not found`. To
+send one straight to XO, add `--url https://app.xo.builders` and give the key with `XO_API_KEY` or
+`--api-key -` (the key `xo login` saved is only sent to the address it was saved with).
+
 `--param` fills path, query and header parameters, never `Authorization`, `Host`, `Cookie`,
 `Proxy-*` or the other headers xo and HTTP own.
 `--field` values are JSON when they parse (`false`, `5`, `["a"]`) and plain strings otherwise.
@@ -130,7 +135,7 @@ Responses print as JSON on stdout. Any problem exits 1 with one line on stderr.
 | Setting | Variable | Flag | Default |
 |---|---|---|---|
 | API key | `XO_API_KEY` | `--api-key -` (asks without echo on a terminal, else reads one line from stdin) | the key `xo login` saved in `$XDG_CONFIG_HOME/xo/credentials` (`~/.config/xo/credentials`); required for every call but a dry run |
-| Address | `XO_URL` | `--url` | the one `xo login` saved, then `https://xo.quirq.dev`; the core API is under its `/api/core/v1` |
+| Address | `XO_URL` | `--url` | the one `xo login` saved, then `https://xo.quirq.dev`; the core API is under its `/api/core/v1`. The flag wins over the variable. `XO_BASE_URL` and `XO_SERVER_URL` are no longer read: xo stops with a line saying so while either is set, unless `--url` or `XO_URL` is given |
 | Spec | `XO_SPEC` | `--spec` | the copy bundled with xo |
 
 `--api-key KEY` also works, but the key then lands in your shell history and in the process list
