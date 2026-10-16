@@ -111,7 +111,7 @@ class GhClient:
             raise XoError(f"gh auth login needs a terminal; run xo login github in one (it logs in to {HOST})")
         if unsure and not ask(f"{unsure.split(';')[0]}; log gh in to {HOST} again, replacing that login?"):
             raise XoError(f"kept gh's login as it is; nothing changed ({unsure})")
-        print("xo: github: gh will ask \"Authenticate Git with your GitHub credentials?\". Yes (its default) "
+        print("xo: github: gh may ask \"Authenticate Git with your GitHub credentials?\". Yes (its default) "
               "makes gh git's login for github.com, which changes ~/.gitconfig or the github.com login your "
               "system keeps for git; answer n to leave git as it is.", file=sys.stderr, flush=True)
         try:
@@ -135,7 +135,7 @@ class GhClient:
         try:
             who = self.logged_in_as()
         except GhUnsure:
-            who = "an account GitHub no longer accepts"
+            who = "a login GitHub did not accept or could not check"
         if who is None:
             return "not logged in"
         if not ask(f"Log gh out of {HOST} ({who})? git over https on this machine may use the same login"):

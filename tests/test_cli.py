@@ -1264,7 +1264,10 @@ def test_login_replaces_a_saved_key_that_stopped_working(login, capsys, config_h
     login.route("GET", PROBE, body=lambda r: (404, {"error": "Space not found"})
                 if r["headers"]["Authorization"] == "Bearer ak_second_key_5678" else (401, {"error": "Invalid"}))
     login.typed("ak_second_key_5678\n")
-    assert run(capsys, "login")[0] == 0
+    code, _, err = run(capsys, "login")
+    assert code == 0 and err.count("xo: checking ") == 2
+    assert err.index(f"xo: checking the saved key with XO through {login.base} ...") < err.index(
+        f"xo: checking the key with XO through {login.base} ...")
     assert (config_home / "xo" / "credentials").read_text() == json.dumps({"url": login.base, "key": "ak_second_key_5678"}) + "\n"
 
 

@@ -595,3 +595,20 @@ def test_a_pass_through_verb_reached_through_argparse_fails_cleanly(runner, caps
     assert cli.main(["coder", "list"]) == 1
     err = capsys.readouterr()[1]
     assert "put coder's own arguments after it" in err and "unexpected" not in err and runner == []
+
+
+
+def test_a_real_coder_on_path_is_never_found(monkeypatch, tmp_path):
+    """The no_real_coder guard in conftest: xo finds no coder outside the temp folder, and a
+    directory holding one counts as real unless it is in the temp folder."""
+    import os
+    import shutil
+    import tempfile
+    from conftest import _coder_dirs
+    found = shutil.which("coder")
+    assert found is None or os.path.realpath(found).startswith(os.path.realpath(tempfile.gettempdir()) + os.sep)
+    (tmp_path / "coder").write_text("#!/bin/sh\nexit 0\n")
+    (tmp_path / "coder").chmod(0o700)
+    assert _coder_dirs(str(tmp_path)) == []
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path / "elsewhere"))
+    assert _coder_dirs(str(tmp_path)) == [str(tmp_path)]
