@@ -365,25 +365,26 @@ html { scroll-behavior: smooth; }
 		<table class="tokens">
 			<thead><tr><th>Command</th><th>Goes to</th><th>What it does</th></tr></thead>
 			<tbody>
-				<tr><td>xo claude-code</td><td>server, then XO</td><td><code>POST /claude-code</code>: name, volume size (20 to 100 GB), Anthropic provider</td></tr>
-				<tr><td>xo codex</td><td>server, then XO</td><td><code>POST /codex</code>: name, volume size</td></tr>
-				<tr><td>xo antigravity</td><td>server, then XO</td><td><code>POST /antigravity</code>: name, volume size</td></tr>
-				<tr><td>xo hermes</td><td>server, then XO</td><td><code>POST /hermes</code>: providers; Telegram or Slack</td></tr>
-				<tr><td>xo openclaw</td><td>server, then XO</td><td><code>POST /openclaw</code>: at least one provider and one channel</td></tr>
-				<tr><td>xo xo-cowork</td><td>server, then XO</td><td><code>POST /xo-cowork</code>: providers, channels</td></tr>
-				<tr><td>xo nebius-openclaw</td><td>server, then XO</td><td><code>POST /nebius-openclaw</code>: feature flagged, 404 when off</td></tr>
-				<tr><td>xo spaces</td><td>server, then XO</td><td><code>GET /spaces/{spaceId}</code>: connection URLs; they carry a session token</td></tr>
+				<tr><td>xo claude-code --name N --volume-size GB</td><td>server, then XO</td><td><code>POST /claude-code</code>: volume 20 to 100 GB; add <code>--providers-anthropic-api-key -</code> for the Anthropic provider</td></tr>
+				<tr><td>xo codex --name N --volume-size GB</td><td>server, then XO</td><td><code>POST /codex</code></td></tr>
+				<tr><td>xo antigravity --name N --volume-size GB</td><td>server, then XO</td><td><code>POST /antigravity</code></td></tr>
+				<tr><td>xo hermes --name N --volume-size GB</td><td>server, then XO</td><td><code>POST /hermes</code>: plus a provider key (<code>--providers-anthropic-api-key</code>, <code>openai</code>, <code>openrouter</code>) and a Telegram or Slack bot token</td></tr>
+				<tr><td>xo openclaw --name N --volume-size GB</td><td>server, then XO</td><td><code>POST /openclaw</code>: plus at least one provider key and one channel (Telegram, WhatsApp or Slack)</td></tr>
+				<tr><td>xo xo-cowork --name N --volume-size GB</td><td>server, then XO</td><td><code>POST /xo-cowork</code>: providers and channels optional</td></tr>
+				<tr><td>xo nebius-openclaw --name N --token-factory-api-key K --telegram-bot-token T</td><td>server, then XO</td><td><code>POST /nebius-openclaw</code>: feature flagged, 404 when off</td></tr>
+				<tr><td>xo spaces --space-id ID</td><td>server, then XO</td><td><code>GET /spaces/{spaceId}</code>: connection URLs; they carry a session token</td></tr>
 				<tr><td>xo me</td><td>server only</td><td>Your profile, primary email and both metadata buckets, printed as <code>{"xo": {..., "public_data", "private_data"}}</code>; credential-looking values masked</td></tr>
 				<tr><td>xo projects [add NAME]</td><td>server only</td><td>Read or append to the <code>projects</code> list in your private metadata</td></tr>
 				<tr><td>xo create project NAME|URL</td><td>server, then git</td><td>Adds the project, then clones <code>OWNER/REPO</code> here or runs <code>git init</code> for a plain name</td></tr>
-				<tr><td>xo create space KIND NAME</td><td>server, then XO</td><td>Creates the space as <code>xo KIND</code> would, then records it in your <code>spaces</code> as NAME</td></tr>
-				<tr><td>xo connect project:P space:S</td><td>server only</td><td>Sets P in space S at <code>--ref</code> (default <code>main</code>)</td></tr>
+				<tr><td>xo create space KIND NAME --name N --volume-size GB</td><td>server, then XO</td><td>Creates the space as <code>xo KIND</code> would (same flags; <code>--name</code> is XO's name), then records it in your <code>spaces</code> as NAME</td></tr>
+				<tr><td>xo connect project:P space:S [--ref R]</td><td>server only</td><td>Sets P in space S at <code>--ref</code> (default <code>main</code>)</td></tr>
 				<tr><td>xo connect space:S [--id ID]</td><td>server, then XO</td><td>Records a space entry; <code>--id</code> ties it to an XO space your key can read</td></tr>
 				<tr><td>xo list projects | spaces</td><td>server only</td><td>Shows either list</td></tr>
 				<tr><td>xo install project:P | space:S</td><td>server, git</td><td>Clones or fetches P here; for a space, each project into <code>./S/</code> at its ref</td></tr>
 				<tr><td>xo update project:P | space:S</td><td>git, server</td><td>Pushes P (never forced); for a space, records the refs checked out under <code>./S/</code></td></tr>
 				<tr><td>xo sync project:P | space:S</td><td>git, server</td><td><code>pull --rebase</code> and push P; for a space, merges its changes with yours, then records</td></tr>
-				<tr><td>xo user-metadata get · update</td><td>server only</td><td>Admin keys only; <code>update</code> deep merges into allow-listed keys</td></tr>
+				<tr><td>xo user-metadata get --user-id ID</td><td>server only</td><td>Admin keys only: both metadata buckets</td></tr>
+				<tr><td>xo user-metadata update --user-id ID --private-metadata JSON</td><td>server only</td><td>Admin keys only; deep merges into allow-listed keys (also <code>--public-metadata</code>); try <code>--dry-run</code> first</td></tr>
 				<tr><td>xo login [xo|me|coder|github]</td><td>server, Coder, gh</td><td>Reads <code>/config</code>, checks and saves the XO key, runs Coder's and gh's logins</td></tr>
 				<tr><td>xo logout</td><td>local, Coder, gh</td><td>Deletes the saved key and addresses; asks before logging Coder and gh out</td></tr>
 				<tr><td>xo status</td><td>local, Coder, gh</td><td>Each service, its address, whether you are logged in; never a key</td></tr>
@@ -399,7 +400,8 @@ html { scroll-behavior: smooth; }
 	</div>
 	<ul class="facts">
 		<li><strong>Every non-GET prints a warning line first</strong>, and creates that copy your key into the new space say so on a second line.</li>
-		<li><strong><code>--dry-run</code></strong> needs no key, sends nothing and shows provider keys as <code>&lt;hidden&gt;</code>.</li>
+		<li><strong><code>--dry-run</code></strong> needs no key, sends nothing and shows provider keys as <code>&lt;hidden&gt;</code>. Every invocation in this table passes it on main.</li>
+		<li><strong>Give a secret as <code>-</code></strong> to type it without echo; only one <code>-</code> works per command.</li>
 		<li><strong>No list, delete, start or stop for spaces</strong> exists in the API. Keep the <code>data.id</code> a create prints.</li>
 	</ul>
 </section>
