@@ -1,6 +1,6 @@
 # xo quickstart
 
-Use this to set up `xo`, the command line for XO Cloud, on your own Mac or Linux machine. It works the same for every user.
+Use this to set up `xo`, the command line for XO Cloud, on your own Mac or Linux machine. It works the same for every user. Once it is set up, the [user guide](guide.md) lists the commands.
 
 You need:
 - Python 3.11 or newer. Check with `python3 --version`. Stock macOS ships Python 3.9, which is too old: install 3.11 or newer from python.org, or run `brew install python@3.13` and use `python3.13` in place of `python3` below.
@@ -15,7 +15,7 @@ Using bash? Before you paste, change `~/.zshrc` (twice) in the block to `~/.bash
 
 ```sh
 python3 -m venv ~/.xo \
-  && ~/.xo/bin/pip install "quirq-xo @ git+https://github.com/quirq-ai/xo@ebc2ae89f462018dd1f606b392bde9ad6e41489b" \
+  && ~/.xo/bin/pip install "quirq-xo @ git+https://github.com/quirq-ai/xo@0a294da169ef9b78014c62f0e323ac0bf53bd8a1" \
   && { grep -qxF 'export PATH="$HOME/.xo/bin:$PATH"' ~/.zshrc 2>/dev/null || echo 'export PATH="$HOME/.xo/bin:$PATH"' >> ~/.zshrc; } \
   && export PATH="$HOME/.xo/bin:$PATH" \
   && xo --version
@@ -31,7 +31,7 @@ The install is pinned to the reviewed commit of xo. The pin covers xo's own code
 xo login
 ```
 
-xo first prints the address it logs in to (`https://xo.quirq.dev`). Paste your key at the `XO API key:` prompt and press Enter. Nothing shows while you type, and the key stays out of your shell history. xo refuses anything that isn't an XO API key (those start with `ak_`) without sending it anywhere. Then it checks the key with XO, through that address, and saves the key and the address in `~/.config/xo/credentials`, which only you can read. If the check fails, nothing is saved. It also prints the account the key belongs to, when the xo server can tell.
+xo first prints the services it logs in to: the xo server (`https://xo.quirq.dev`), XO's platform (`https://dev.xo.builders`, reached through the xo server with the same key) and Coder (`https://dev-coder.xo.builders`). Paste your key at the `XO API key:` prompt and press Enter. Nothing shows while you type, and the key stays out of your shell history. xo refuses anything that isn't an XO API key (those start with `ak_`) without sending it anywhere. Then it checks the key with XO, through that address, and saves the key and the address in `~/.config/xo/credentials`, which only you can read. If the check fails, nothing is saved. It also prints the account the key belongs to, when the xo server can tell. If the [Coder CLI](https://coder.com/docs/install/cli) is installed, `xo login` then runs Coder's own sign-in in your browser; without it, that step says `skipped`. `xo status` shows where you are logged in.
 
 Every later XO API command, in any terminal, uses the saved key and sends it only to the saved address. To use a different key, run `xo login` again. `xo logout` deletes the saved key. A key in `XO_API_KEY` wins over the saved one, so a terminal where you set that variable uses it instead.
 
@@ -77,9 +77,8 @@ xo spaces --space-id THE_ID
 ## The commands
 
 To deploy a GitHub repository through Coder instead of the XO core API, see
-[Deploy a GitHub repository](coder.md). `xo coder github URL` uses a separate Coder login and
-needs no XO API key. It requires a revision of xo that includes the command; the install pin
-above predates it.
+[Deploy a GitHub repository](coder.md). `xo coder github URL` uses Coder's own login (`xo login
+coder`) and needs no XO API key.
 
 | Command | Creates |
 |---|---|
