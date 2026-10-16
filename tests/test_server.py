@@ -1006,6 +1006,24 @@ def test_a_malformed_upstream_address_stops_the_server_with_a_clear_message(cler
         server.Config()
 
 
+@pytest.mark.parametrize("name, value", [
+    ("XO_CORE_API_URL", " https://app.xo.example/api"), ("XO_CORE_API_URL", "\nhttps://app.xo.example/api"),
+    ("XO_CORE_API_URL", "https://app.xo.example/api\n"), ("XO_CORE_API_URL", "https://app.xo.example/api\r\n"),
+    ("XO_CORE_API_URL", "https://app.xo.example/api\t"), ("CLERK_API_URL", " https://clerk.example"),
+    ("CLERK_API_URL", "https://clerk.example\n")])
+def test_whitespace_at_either_end_of_an_upstream_address_is_ignored(clerk, monkeypatch, name, value):
+    """A value pasted into the deploy settings often carries a trailing newline: it must not take the API down."""
+    monkeypatch.setenv(name, value)
+    cfg = server.Config()
+    assert (cfg.core_url if name == "XO_CORE_API_URL" else cfg.clerk_url) == value.strip()
+
+
+def test_config_names_no_platform_for_a_malformed_core_address(monkeypatch):
+    monkeypatch.setenv("XO_CORE_API_URL", "https://[::1/api/core/v1")
+    data = server.services_list()
+    assert data["xo"]["url"] is None and data["xo"]["coder"]["url"]
+
+
 def test_a_cli_create_goes_through_the_server(xo_server, clerk, monkeypatch, capfd):
     monkeypatch.setenv("XO_URL", xo_server.url)
     monkeypatch.setenv("XO_API_KEY", USER_KEY)

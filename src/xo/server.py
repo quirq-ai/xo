@@ -130,7 +130,7 @@ def _int_env(name: str, default: int) -> int:
 def _upstream(name: str, url: str) -> str:
     """An https:// address (or http:// to this machine) for a server setting, checked once at startup
     so a malformed one stops the server with a clear message instead of failing on every request."""
-    url = url.rstrip("/")
+    url = url.strip().rstrip("/")  # a pasted value often ends in a newline; only whitespace inside is refused
     try:
         if any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in url):
             raise ValueError
@@ -629,7 +629,7 @@ def services_list() -> dict:
         platform = core[:-len(CORE_PREFIX)] if core.endswith(CORE_PREFIX) else core
         try:
             data["xo"]["url"] = services.listed_url("xo", platform)
-        except XoError:
+        except (XoError, ValueError):  # ValueError: a malformed bracketed host
             data["xo"]["url"] = None  # not an address the list can name: say so, keep coder
     return data
 
