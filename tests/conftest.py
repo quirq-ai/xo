@@ -77,21 +77,26 @@ def no_real_gh():
         yield
 
 
-def _coder_dirs(path=None):
-    """The PATH directories holding a coder that is not a test's own fake (those live in a temp folder)."""
+_BASETEMP = None  # pytest's temp root, where every tmp_path lives; set by no_real_coder
+
+
+def _coder_dirs(path=None, base=None):
+    """The PATH directories holding a coder that is not a test's own fake (those live under pytest's
+    temp root, not merely anywhere in /tmp). An empty entry is the current folder, as in POSIX."""
     import os
-    import tempfile
-    tmp = os.path.realpath(tempfile.gettempdir())
+    base = os.path.realpath(base or _BASETEMP)
     dirs = (path if path is not None else os.environ.get("PATH", "")).split(os.pathsep)
-    return [d for d in dirs if d and os.access(os.path.join(d, "coder"), os.X_OK)
-            and not os.path.realpath(d).startswith(tmp + os.sep)]
+    return [d for d in dirs if os.access(os.path.join(d or os.curdir, "coder"), os.X_OK)
+            and not os.path.realpath(d or os.curdir).startswith(base + os.sep)]
 
 
 @pytest.fixture(autouse=True)
-def no_real_coder():
+def no_real_coder(tmp_path_factory):
     """No test runs the real Coder CLI, which keeps a session token and sends it to any --url: the
     PATH directories that hold one are dropped. A test may still put its own fake coder on PATH."""
     import os
+    global _BASETEMP
+    _BASETEMP = str(tmp_path_factory.getbasetemp())
     with pytest.MonkeyPatch.context() as mp:
         path = os.environ.get("PATH", "")
         drop = set(_coder_dirs(path))
