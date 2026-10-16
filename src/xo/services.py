@@ -1,10 +1,12 @@
 """The list of services one `xo login` covers, and the addresses xo last logged in to.
 
 The xo server serves the list at /config, without a key. It never holds keys, tokens or passwords:
-only an address and a line about each service. The xo server itself is not in the list: it is
-always the server the list was fetched from. xo ships the same file (services.json), checks a
-served list exactly as it checks its own copy, and uses its own copy when the server cannot give
-a good one.
+only an address and a line about each service. Names follow the commands: "xo" is XO's platform
+(the creates and xo spaces), with "coder" nested inside it because `xo coder` is a subcommand, and
+"me" is the xo server that answers `xo me` and `xo user-metadata`. Every XO API command still goes
+to the xo server xo logged in to (the "me" address in xo's own copy is its default); the server
+passes creates on to the "xo" address. xo ships the same file (services.json), checks a served list
+exactly as it checks its own copy, and uses its own copy when the server cannot give a good one.
 """
 from __future__ import annotations
 
@@ -24,8 +26,13 @@ from pathlib import Path
 from xo import __version__
 from xo.client import Client, XoError, _private, credentials_path, xo_url
 
-SCHEMA = "xo-services/1"
-KNOWN = ("xo-platform", "coder")  # in the order xo logs in to them, after the xo server
+SCHEMA = "xo-services/2"
+KNOWN = ("me", "xo", "coder")
+# Where each entry sits in the list, and the keys an entry may hold besides nested services.
+_PLACES = {"me": ("me",), "xo": ("xo",), "coder": ("xo", "coder")}
+_FIELDS = ("url", "about")
+# Names the addresses file used before xo-services/2, read once and written under the new names.
+_OLD_NAMES = {"xo-server": "me", "xo-platform": "xo"}
 MAX_LIST = 64 * 1024
 _HOST = re.compile(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*")
 
@@ -62,18 +69,34 @@ def _clean(text: object) -> str:
 def parse(data: object) -> tuple[dict[str, Service], list[str]]:
     """The known services in a list, and a line for each one skipped. Raises XoError when the list
     as a whole is not one xo can use."""
-    if not (isinstance(data, dict) and data.get("schema") == SCHEMA and isinstance(data.get("services"), dict)):
+    if not (isinstance(data, dict) and data.get("schema") == SCHEMA):
         raise XoError(f"it is not an {SCHEMA} list")
     found: dict[str, Service] = {}
     notes: list[str] = []
-    for name, entry in data["services"].items():
-        if name not in KNOWN:
-            shown = _clean(name)[:40] if re.fullmatch(r"[a-z0-9-]{1,40}", str(name)) else "one"
-            notes.append(f"skipped the {shown} service: this xo does not know it (an update may)")
+
+    def skip(where: tuple[str, ...], key: object) -> None:
+        shown = _clean(key)[:40] if re.fullmatch(r"[a-z0-9-]{1,40}", str(key)) else "one"
+        notes.append(f"skipped the {' '.join((*where, shown))} service: this xo does not know it (an update may)")
+
+    for key in data:
+        if key not in ("schema", "me", "xo"):
+            skip((), key)
+    for name in KNOWN:
+        entry: object = data
+        for step in _PLACES[name]:
+            entry = entry.get(step) if isinstance(entry, dict) else None
+        if entry is None:
             continue
         if not isinstance(entry, dict):
             raise XoError(f"its entry for {name} is not an object")
-        found[name] = Service(name, listed_url(name, entry.get("url")), _clean(entry.get("about")))
+        if entry.get("url") is None:
+            notes.append(f"the list gives no address for {name}")
+        else:
+            found[name] = Service(name, listed_url(name, entry.get("url")), _clean(entry.get("about")))
+        nested = {"xo": ("coder",)}.get(name, ())
+        for key in entry:
+            if key not in _FIELDS and key not in nested:
+                skip(_PLACES[name], key)
     return found, notes
 
 
@@ -116,7 +139,12 @@ def fetch(server: str, timeout: float) -> tuple[dict[str, Service], list[str]]:
     for name in KNOWN:
         if name not in found:
             found[name] = own[name]
-            notes.append(f"the server's list has no {name}; using xo's own address for it")
+            if name == "xo":
+                # The server names where it passes creates on to; without it, xo's own copy is a guess.
+                note = "the server's list gives no address for xo; showing xo's own, which may not be where it sends creates"
+            else:
+                note = f"the server's list has no {name}; using xo's own address for it"
+            notes = [n for n in notes if n != f"the list gives no address for {name}"] + [note]
     return {name: found[name] for name in KNOWN}, notes
 
 
@@ -145,15 +173,18 @@ def saved_addresses() -> dict[str, str]:
         os.close(fd)
     if not isinstance(data, dict):
         return {}
+    for old, new in _OLD_NAMES.items():
+        if old in data and new not in data:
+            data[new] = data[old]
     out = {}
-    for name in KNOWN:
+    for name in ("xo", "coder"):
         try:
             out[name] = listed_url(name, data.get(name))
         except XoError:
             pass
-    if isinstance(data.get("xo-server"), str):
+    if isinstance(data.get("me"), str):
         try:
-            out["xo-server"] = xo_url(data["xo-server"])
+            out["me"] = xo_url(data["me"])  # the xo server may be http:// to this machine
         except XoError:
             pass
     return out

@@ -24,7 +24,7 @@ xo codex, ... ──────┘                      └── /api/core/v1/
 | GET | `/healthz` | anyone | `{"status": "ok"}`, with no Clerk call |
 | GET | `/` | anyone | the status page: health, counts and the latest requests, refreshed every 5 seconds |
 | GET | `/status` | anyone | what the page shows, as JSON; no Clerk call |
-| GET | `/config` | anyone | the services list `xo login` reads (`src/xo/services.json`), with xo-platform set to where this server passes `/api/core/v1` on to; addresses only, no Clerk call; answers even when the server is missing its settings |
+| GET | `/config` | anyone | the services list `xo login` reads (`src/xo/services.json`), with `xo.url` set to where this server passes `/api/core/v1` on to (null when that is not a plain https address); addresses only, no Clerk call; answers even when the server is missing its settings |
 | GET | `/me` | any user key | `id`, `username`, `firstName`, `lastName`, `imageUrl`, `createdAt`; never email or metadata |
 | GET | `/user-metadata/{userId}` | admin keys | `publicMetadata`, `privateMetadata` |
 | PATCH | `/user-metadata/{userId}` | admin keys | both buckets after a deep merge; `null` removes a key |
@@ -41,7 +41,7 @@ it also says in one line on stderr). A core API route answers whatever XO answer
 ## Passing the core API on
 
 The server sends a core API request on to `XO_CORE_API_URL` (default
-`https://dev.xo.builders/api/core/v1`, the xo-platform service) with the caller's own key and body, and passes XO's status
+`https://dev.xo.builders/api/core/v1`, the `xo` service) with the caller's own key and body, and passes XO's status
 and JSON back as they came. XO checks the key; the server does not ask Clerk about it.
 
 **Changed: the default moved from `https://app.xo.builders` to `https://dev.xo.builders`.** Every
@@ -123,7 +123,7 @@ Environment only, so the secret never lands in shell history or the process list
 | `XO_CORE_PER_SECOND` | no | requests passed on to XO per second for the whole process; default 10 |
 | `XO_SERVE_MAX_CONNECTIONS` | no | connections served at once; default 64, then 503 |
 | `CLERK_API_URL` | no | default `https://api.clerk.com`; tests point it at a fake |
-| `XO_CORE_API_URL` | no | where `/api/core/v1` goes; default the xo-platform address in `src/xo/services.json` (`https://dev.xo.builders`) plus `/api/core/v1`; https only. `/config` reports it as xo-platform |
+| `XO_CORE_API_URL` | no | where `/api/core/v1` goes; default the `xo` address in `src/xo/services.json` (`https://dev.xo.builders`) plus `/api/core/v1`; https only. `/config` reports it as `xo.url` |
 
 ```sh
 xo serve --host 127.0.0.1 --port 8787

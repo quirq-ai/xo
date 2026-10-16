@@ -23,11 +23,11 @@
                                             and passes the creates and GET /spaces/{id} on to XO's
                                             core API.
     xo login [xo|coder] [--url URL]         log in to every service the xo server lists (or the one
-                                            named): xo-server and xo-platform take your API key,
+                                            named): me (the xo server) and xo take your API key,
                                             asked for without showing it unless a saved key still
                                             works; coder runs Coder's own login in this terminal.
     xo status                               each service, its address, and whether you are logged in.
-    (the xo-server step:)                   ask for your API key without showing it, check it with
+    (the xo key step:)                      ask for your API key without showing it, check it with
                                             XO through the xo server, and save it with the URL.
     xo logout                               delete the saved key, URL and addresses, and log Coder
                                             out if it is logged in to xo's deployment.
@@ -462,6 +462,10 @@ def _endpoint(args: argparse.Namespace) -> int:
 PROBE_SPACE = "00000000-0000-0000-0000-000000000000"
 
 
+# `xo login NAME` for the XO key: the list's names, and the names before xo-services/2.
+KEY_SERVICES = ("xo", "me", "xo-server", "xo-platform")
+
+
 def _login(args: argparse.Namespace) -> int:
     """Log in to every service in the xo server's list (or the one named), one line each."""
     if args.api_key is not None:
@@ -472,22 +476,23 @@ def _login(args: argparse.Namespace) -> int:
         saved = None  # a file xo cannot use is replaced
     url = xo_url(args.url, saved.url if saved else None)
     listed, notes = services.fetch(url, args.timeout)
-    platform, coder_at = listed["xo-platform"].url, listed["coder"].url
+    platform, coder_at = listed["xo"].url, listed["coder"].url
     print(f"xo: services from the xo server at {url}:", file=sys.stderr)
-    print(f"xo:   xo-server    {url}", file=sys.stderr)
-    print(f"xo:   xo-platform  {platform} (your xo key reaches it through the xo server)", file=sys.stderr)
-    print(f"xo:   coder        {coder_at}", file=sys.stderr)
+    print(f"xo:   me     {url} (the xo server; your XO key is only sent here)", file=sys.stderr)
+    print(f"xo:   xo     {platform} (creates and xo spaces; your key reaches it through the xo server)",
+          file=sys.stderr)
+    print(f"xo:   coder  {coder_at}", file=sys.stderr)
     for note in notes:
         print(f"xo: {spec.clean(note)}", file=sys.stderr)
     last = services.saved_addresses()
     before = dict(last)
     results: list[tuple[str, str | None, str]] = []  # (service, error or None, line)
-    if args.service in (None, "xo", "xo-server", "xo-platform"):
+    if args.service in (None, *KEY_SERVICES):
         try:
-            results.append(("xo-server", None, _login_xo(args, url, saved)))
-            last["xo-server"], last["xo-platform"] = url, platform
+            results.append(("xo", None, _login_xo(args, url, saved)))
+            last["me"], last["xo"] = url, platform
         except XoError as e:
-            results.append(("xo-server", str(e), ""))
+            results.append(("xo", str(e), ""))
     if args.service in (None, "coder"):
         try:
             line, where = _login_coder(args, coder_at, last)
@@ -506,14 +511,14 @@ def _login(args: argparse.Namespace) -> int:
         text = f"failed: {error}" if error else line
         print(f"xo: {name}: {spec.clean(_redacted(text, _Parser.argv, getattr(args, 'resolved_key', None)))}",
               file=sys.stderr)
-    if os.environ.get(KEY_ENV, "").strip() and args.service in (None, "xo", "xo-server", "xo-platform"):
+    if os.environ.get(KEY_ENV, "").strip() and args.service in (None, *KEY_SERVICES):
         print(f"xo: {KEY_ENV} is set in this terminal and is used instead; run unset {KEY_ENV} to use the saved key",
               file=sys.stderr)
     return 1 if any(error for _, error, _ in results) else 0
 
 
 def _login_xo(args: argparse.Namespace, url: str, saved: Login | None) -> str:
-    """The xo-server step: reuse a saved key that still works for this URL, else ask for one, check
+    """The xo key step: reuse a saved key that still works for this URL, else ask for one, check
     it with XO through the server, and save it with the URL."""
     if saved is not None and saved.url == url:
         args.client = Client(url, saved.key, timeout=args.timeout)
@@ -592,7 +597,7 @@ def _logout(args: argparse.Namespace) -> int:
     """Delete the saved key and addresses; log Coder out only of the deployment xo logged it in to."""
     # The XO key goes first, whatever else is wrong (a bad XO_CODER_URL must not keep it saved).
     path = forget_login()
-    print(f"xo: xo-server: deleted {path}" if path else f"xo: xo-server: no saved key at {credentials_path()}",
+    print(f"xo: xo: deleted {path}" if path else f"xo: xo: no saved key at {credentials_path()}",
           file=sys.stderr)
     coder_default = services.coder_default()
     services.forget_addresses()
@@ -628,7 +633,7 @@ def _status(args: argparse.Namespace) -> int:
         state = f"not logged in here; the saved key is for {saved.url}"
     else:
         state = "not logged in; run xo login"
-    platform = last.get("xo-platform") or services.builtin()["xo-platform"].url
+    platform = last.get("xo") or services.builtin()["xo"].url
     coder_at = coder_url(args.coder_url, default=services.coder_default())
     if not shutil.which("coder"):
         coder_state = "the Coder CLI is not installed"
@@ -640,10 +645,10 @@ def _status(args: argparse.Namespace) -> int:
                            else f"logged in to {found[0]}, not this one; run xo login coder")
         except XoError as e:
             coder_state = str(e)
-    rows = [("xo-server", url, state), ("xo-platform", platform, "uses your xo key, through the xo server"),
+    rows = [("me", url, state), ("xo", platform, "uses the same key, through the xo server (me)"),
             ("coder", coder_at, coder_state)]
     for name, where, what in rows:
-        print(spec.clean(f"{name:<12} {where:<34} {what}"))
+        print(spec.clean(f"{name:<6} {where:<34} {what}"))
     return 0
 
 
@@ -879,10 +884,11 @@ def main(argv: list[str] | None = None) -> int:
 
     keyless = _common(key=False)
     li = sub.add_parser("login", parents=[keyless],
-                        help="log in to every service the xo server lists (xo-server and xo-platform with "
-                             "your XO API key, coder with Coder's login), or to the one named")
-    li.add_argument("service", nargs="?", choices=("xo", "xo-server", "xo-platform", "coder"),
-                    help="only this one (xo, xo-server and xo-platform all mean the XO API key)")
+                        help="log in to every service the xo server lists (me and xo with your XO API key, "
+                             "coder with Coder's login), or to the one named")
+    li.add_argument("service", nargs="?", choices=(*KEY_SERVICES, "coder"),
+                    help="only this one (xo and me both mean the XO API key; xo-server and xo-platform "
+                         "are their old names)")
     li.set_defaults(run=_login)
     lo = sub.add_parser("logout", parents=[keyless],
                         help="delete the key and addresses xo login saved, and log Coder out of xo's deployment")

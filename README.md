@@ -21,7 +21,7 @@ Python 3.11 or newer. The package is `quirq-xo`, not `xo`: PyPI's `xo` is an unr
 
 ```sh
 xo login                        # every service the xo server lists: your XO API key (from the
-                                # XO team) for xo-server and xo-platform, and Coder's own login
+                                # XO team) for me and xo, and Coder's own login
                                 # (or: export XO_API_KEY=ak_..., which wins over the saved key)
 xo status                       # each service, its address, and whether you are logged in
 
@@ -56,7 +56,7 @@ Each XO core API create prints the new space, `data.id` included. Keep that id: 
 list, delete, start or stop endpoint, and `xo spaces --space-id ID` is the only way back to a space.
 `xo coder github` creates a Coder workspace separately; manage its lifecycle with Coder.
 
-The API is XO's platform, `https://dev.xo.builders/api/core/v1` (the xo-platform service); xo
+The API is XO's platform, `https://dev.xo.builders/api/core/v1` (the `xo` service); xo
 reaches it through the xo server (see Server mode and Services). Its spec is bundled with xo as
 `src/xo/openapi.json`, written from the xo-swarm source (`app/api/[[...slugs]]/route.ts` and
 `types/*-schema.ts` at 6dddd07aa) because the interactive docs sit behind a browser sign-in. To use
@@ -88,13 +88,28 @@ Things to know:
 ## Services
 
 One `xo login` covers three services. The xo server lists them at `/config` (no key needed); xo
-ships the same list and uses its own copy when the server cannot give a good one.
+ships the same list (`src/xo/services.json`) and uses its own copy when the server cannot give a
+good one. The names follow the commands: `xo` for the creates, `coder` inside it because `xo coder`
+is a subcommand, and `me` for the xo server that answers `xo me`:
+
+```json
+{
+  "schema": "xo-services/2",
+  "xo": { "url": "https://dev.xo.builders", "about": "...",
+          "coder": { "url": "https://dev-coder.xo.builders", "about": "..." } },
+  "me": { "url": "https://xo.quirq.dev", "about": "..." }
+}
+```
 
 | Service | Address | How you log in | Commands |
 |---|---|---|---|
-| `xo-server` | the xo server: `--url`, `XO_URL`, the one `xo login` saved, else `https://xo.quirq.dev` | your XO API key | `xo me`, `xo user-metadata` |
-| `xo-platform` | `https://dev.xo.builders`, reached through the xo server | the same XO API key | `xo claude-code`, `xo codex`, `xo openclaw`, ... and `xo spaces` |
+| `me` | the xo server: `--url`, `XO_URL`, the one `xo login` saved, else `https://xo.quirq.dev` (the `me` address in xo's own list) | your XO API key | `xo me`, `xo user-metadata` |
+| `xo` | `https://dev.xo.builders`, reached through the xo server | the same XO API key | `xo claude-code`, `xo codex`, `xo openclaw`, ... and `xo spaces` |
 | `coder` | `https://dev-coder.xo.builders` | Coder's own login, in your terminal | `xo coder github`, `xo coder list`, `ssh`, ... |
+
+Every XO API command, creates included, still goes to the xo server you logged in to, and the
+server passes creates on to the `xo` address, so your key is sent to one address. A served list's
+`me` address is shown for information; it never changes where xo sends the key.
 
 **Changed: XO's platform is now `https://dev.xo.builders`, not `https://app.xo.builders`.** Every
 create carries your XO API key, and it now goes to dev.xo.builders. The xo server takes the new
@@ -106,7 +121,8 @@ The list holds addresses only, never keys. Keys stay on your machine: the XO key
 sent for it, no redirect is followed, every address must be plain https, and unknown services are
 skipped with a line. If the list names a Coder address other than the one you last logged in to (or,
 on a first login, the one shipped with xo), `xo login` says so and asks once; without a terminal the
-answer is no. `xo login xo` or `xo login coder` does one service. `xo logout` deletes the key and
+answer is no. `xo login xo` (or `me`) or `xo login coder` does one service; `xo-server` and
+`xo-platform`, the names before `xo-services/2`, still work. `xo logout` deletes the key and
 logs Coder out only if it is logged in to xo's deployment.
 
 ## Server mode

@@ -37,7 +37,7 @@ Configuration (environment only, so the secret never lands in shell history or t
     XO_CORE_PER_SECOND        requests passed on to XO per second for the whole process (default 10)
     XO_SERVE_MAX_CONNECTIONS  connections served at once (default 64)
     CLERK_API_URL             default https://api.clerk.com (tests point it at a fake)
-    XO_CORE_API_URL           where /api/core/v1 goes; default the xo-platform address in the
+    XO_CORE_API_URL           where /api/core/v1 goes; default the xo address in the
                               services list (https://dev.xo.builders) plus /api/core/v1
 
 It listens on 127.0.0.1 by default: put it behind an HTTPS proxy before giving it any other host.
@@ -75,7 +75,7 @@ USER_ID = re.compile(r"user_[A-Za-z0-9]{1,64}")
 CORE_ENV = "XO_CORE_API_URL"
 CORE_PREFIX = "/api/core/v1"  # the client's CORE_PATH
 # XO's platform: the address in the services list (services.json), unless XO_CORE_API_URL says.
-DEFAULT_CORE_URL = services.builtin()["xo-platform"].url + CORE_PREFIX
+DEFAULT_CORE_URL = services.builtin()["xo"].url + CORE_PREFIX
 # XO's time for a whole forward, under the 30 seconds the CLI waits by default and the server's
 # REQUEST_DEADLINE, so the caller hears why rather than timing out itself.
 CORE_TIMEOUT = 25.0
@@ -607,16 +607,16 @@ def _route_name(path: str) -> str | None:
 
 
 def services_list() -> dict:
-    """What /config serves: the services list shipped with xo, with xo-platform set to where this
+    """What /config serves: the services list shipped with xo, with xo's address set to where this
     server really passes /api/core/v1 on to. No key, no Clerk call; never a key or token in it."""
     data = json.loads(json.dumps(services.SHIPPED))
     core = (os.environ.get(CORE_ENV) or "").strip().rstrip("/")
     if core:
         platform = core[:-len(CORE_PREFIX)] if core.endswith(CORE_PREFIX) else core
         try:
-            data["services"]["xo-platform"]["url"] = services.listed_url("xo-platform", platform)
+            data["xo"]["url"] = services.listed_url("xo", platform)
         except XoError:
-            data["services"].pop("xo-platform")  # not an address the list can name: leave it out
+            data["xo"]["url"] = None  # not an address the list can name: say so, keep coder
     return data
 
 

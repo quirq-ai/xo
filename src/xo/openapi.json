@@ -3,7 +3,7 @@
   "info": {
     "title": "XO Swarm Core API",
     "version": "v1",
-    "description": "Hand-written from xo-swarm app/api/[[...slugs]]/route.ts and types/*-schema.ts at 6dddd07aa (2026-10-09), checked against https://app.xo.builders on 2026-10-15. Paths are relative to the xo-platform service's /api/core/v1 (https://dev.xo.builders/api/core/v1 by default), reached through the xo server."
+    "description": "Hand-written from xo-swarm app/api/[[...slugs]]/route.ts and types/*-schema.ts at 6dddd07aa (2026-10-09), checked against https://app.xo.builders on 2026-10-15. Paths are relative to the xo service's /api/core/v1 (https://dev.xo.builders/api/core/v1 by default), reached through the xo server."
   },
   "servers": [
     {

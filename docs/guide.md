@@ -4,8 +4,8 @@
 
 | Service | Address | What it does | You log in with |
 |---|---|---|---|
-| xo-server | `https://xo.quirq.dev` | answers `xo me`, holds the list of services, passes creates on to the platform | your XO API key (`ak_...`) |
-| xo-platform | `https://dev.xo.builders` | XO Cloud: creates spaces (Claude Code, Codex, OpenClaw, ...) | the same key, through xo-server |
+| me | `https://xo.quirq.dev` | the xo server: answers `xo me`, holds the list of services, passes creates on to the platform | your XO API key (`ak_...`) |
+| xo | `https://dev.xo.builders` | XO Cloud: creates spaces (Claude Code, Codex, OpenClaw, ...) | the same key, through me |
 | coder | `https://dev-coder.xo.builders` | Coder workspaces: GitHub previews, ssh | Coder's own login, in your browser |
 
 xo saves your keys only on your machine; the xo server stores none. Your XO key is still sent to
@@ -23,24 +23,23 @@ service, also install the [Coder CLI](https://coder.com/docs/install/cli).
 
 ```sh
 xo login          # all services
-xo login xo       # only the XO key (xo-server and xo-platform)
+xo login xo       # only the XO key (me and xo)
 xo login coder    # only Coder
 xo status         # each service, its address, and whether you are logged in
 xo logout         # deletes your XO key; logs Coder out of xo's deployment (asks first)
 ```
 
 `xo login` prints the three addresses first. Then:
-- **xo-server / xo-platform:** paste your XO API key at the prompt (nothing shows while you type).
+- **me / xo:** paste your XO API key at the prompt (nothing shows while you type).
   If a key you saved before still works, it says "already logged in" and doesn't ask.
 - **coder:** Coder opens its sign-in page in your browser; paste back the token it shows. If Coder is
   already logged in to xo's deployment, it says "already logged in". If Coder is logged in somewhere
   else, xo asks before replacing that login.
 
-xo-server and coder each end with one line: logged in, already logged in, skipped (no Coder CLI),
-or failed and why. xo-platform uses the same key, so it has no line of its own. One failure does
-not stop the others.
+The key and coder each end with one line (`xo: xo: ...` and `xo: coder: ...`): logged in, already
+logged in, skipped (no Coder CLI), or failed and why. One failure does not stop the other.
 
-## Create spaces (xo-platform)
+## Create spaces (xo)
 
 ```sh
 xo --help                                        # every command
@@ -96,9 +95,9 @@ with `--api-key -`.
 Each step says what you should see. Nothing here creates anything until step 5.
 
 1. `xo --version` prints `xo 0.1.0`.
-2. `xo login` prints the three addresses, then `xo-server: logged in as ...` and
+2. `xo login` prints the three addresses, then `xo: logged in as ...` and
    `coder: logged in to https://dev-coder.xo.builders as ...` (or `skipped` without the Coder CLI).
-3. `xo status` shows three lines: xo-server `key saved by xo login`, xo-platform, coder
+3. `xo status` shows three lines: me `key saved by xo login`, xo, coder
    `logged in as ...`.
 4. `xo spaces --space-id 00000000-0000-0000-0000-000000000000` ends with `HTTP 404: Space not found`:
    your key reaches the platform at dev.xo.builders, and its `/api/core/v1` is there (step 2 checks
