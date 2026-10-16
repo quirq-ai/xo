@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
 
 from conftest import KEY
 from xo import cli
-from xo.client import coder_url, xo_url
+from xo.client import XoError, coder_url, xo_url
 
 
 def run(capsys, *argv: str) -> tuple[int, str, str]:
@@ -1728,8 +1729,10 @@ def test_list_spaces_and_projects(xs, capsys):
 
 def _git(*args, cwd=None):
     import subprocess
-    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", *args], cwd=cwd, check=True,
-                   capture_output=True)
+    # The user's own git config stays out (a contributor who signs commits must still pass).
+    env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false",
+                    *args], cwd=cwd, check=True, capture_output=True, env=env)
 
 
 @pytest.fixture
@@ -1740,6 +1743,7 @@ def github(tmp_path, monkeypatch):
     monkeypatch.setattr(gitops, "GITHUB", f"file://{root}")
     monkeypatch.setattr(gitops, "SAFE", [a.replace("protocol.allow=never", "protocol.file.allow=always")
                                           for a in gitops.SAFE])
+    monkeypatch.setattr(gitops, "ALLOWED_PROTOCOLS", "https:file")
     work = tmp_path / "here"
     work.mkdir()
     monkeypatch.chdir(work)
@@ -1792,3 +1796,27 @@ def test_git_never_gets_xos_or_anyone_elses_tokens(monkeypatch):
     env = gitops.environment()
     assert "HOME" in env and not {"XO_API_KEY", "GH_TOKEN", "GITHUB_TOKEN", "CODER_SESSION_TOKEN",
                                   "CLERK_SECRET_KEY"} & set(env)
+
+
+def test_git_is_kept_to_https_and_to_the_repository_xo_names(monkeypatch, tmp_path):
+    from xo import gitops
+    monkeypatch.setenv("GIT_ALLOW_PROTOCOL", "ext:file")
+    for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY"):
+        monkeypatch.setenv(name, str(tmp_path / "other"))
+    env = gitops.environment()
+    assert env["GIT_ALLOW_PROTOCOL"] == "https"
+    assert not {"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY"} & set(env)
+    gitops.init(tmp_path / "notes")  # an inherited GIT_DIR would have sent this to "other"
+    assert (tmp_path / "notes" / ".git").is_dir() and not (tmp_path / "other").exists()
+
+
+def test_git_refuses_a_file_remote_even_when_the_users_config_allows_it(monkeypatch, tmp_path):
+    from xo import gitops
+    src = tmp_path / "src"
+    _git("init", "-q", "-b", "main", str(src))
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "protocol.file.allow")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "always")
+    with pytest.raises(XoError):
+        gitops.run("clone", "--end-of-options", f"file://{src}", str(tmp_path / "dest"))
+    assert not (tmp_path / "dest").exists()

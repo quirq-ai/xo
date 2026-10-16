@@ -205,7 +205,8 @@ process apply per function instance, so the per-address limit is a Vercel Firewa
   (starting with a letter or digit) nor a GitHub `OWNER/REPO` (each part within GitHub's own rules,
   not `.`, `..` or ending in `.git`), a name that looks like a credential (`sk-`, `ghp_`, `ak_`,
   `AKIA` and the like, which `/me` would show masked), a name already in the list (ignoring case), a
-  list already holding 30, a `projects` that exists but is not a list (409: it is never
+  list already holding 30 (a user who has more from before this limit keeps them but can add no
+  more), a `projects` that exists but is not a list (409: it is never
   overwritten), and a write that would take the user's whole private metadata past 6KB (422).
   Clerk keeps 8KB per bucket and XO's own keys share it, so xo stops at 6KB; a user already past
   6KB cannot add a project until something else is smaller.
@@ -243,17 +244,21 @@ spaces: [{"name": "dev", "kind": "claude-code", "id": "<XO space id>", "rev": 2,
 - **The server builds every change, and writes only `spaces`.** The client sends a name, a kind,
   an id or a project and ref; never metadata. The merge sent to Clerk names `spaces` and nothing
   else.
-- **`POST /me/spaces`** checks the name and that the user has no space by that name (ignoring
-  case) and fewer than 10, then passes the create's own body to XO's core API with the caller's key
-  (`POST /api/core/v1/{kind}`, as `/api/core` does). An XO refusal is passed back and nothing is
-  recorded. Once XO answers with the new space's id, the server records `{"name", "kind", "id",
-  "rev": 1, "projects": []}`. If recording then fails, the answer says XO created the space, gives
-  its id, and names the `xo connect space:NAME --id ID` that records it.
+- **`POST /me/spaces`** first checks everything recording will need: the name, that the user has
+  no space by that name (ignoring case) and fewer than 10, that `spaces` is readable, and that the
+  new entry fits in 6KB. Only then does it pass the create's own body to XO's core API with the
+  caller's key (`POST /api/core/v1/{kind}`, as `/api/core` does). An XO refusal is passed back and
+  nothing is recorded. Once XO answers with the new space's id, the server records `{"name",
+  "kind", "id", "rev": 1, "projects": []}`. If recording then fails, the answer says XO created the
+  space and gives its id. When the failure was a race or a busy Clerk (409, 429 or 503), it also
+  names the `xo connect space:NAME --id ID` that records it.
 - **`POST /me/spaces/connect`** makes a new space entry, `{"name", "rev": 1, "projects": []}`,
   with nothing created on XO. With an `id` it stands for an XO space the caller already has: the
   server first asks XO for it with the caller's key (`GET /api/core/v1/spaces/{id}`); 403 or 404
-  there is a 404 here, and nothing is recorded. A name already taken (ignoring case), or an id
-  already recorded under another name, is refused (409).
+  there is a 404 here, and nothing is recorded. An id given for an entry made without one is
+  added to that entry (its `rev` goes up by 1); an entry that already has an id keeps it. Any other
+  name already taken (ignoring case), or an id already recorded under another name, is refused
+  (409).
 - **`POST /me/spaces/{name}/projects`** sets `{project: ref}` in that space. The project must be in
   the user's `projects`. One entry per project: connecting it again replaces its ref in place. A
   missing ref is `main`. A space holds at most 10 projects. Each change adds 1 to the space's
@@ -261,14 +266,21 @@ spaces: [{"name": "dev", "kind": "claude-code", "id": "<XO space id>", "rev": 2,
 - **Names and refs.** A space name is 1 to 64 letters, digits, `_ . -`, starting with a letter or
   digit (it becomes a folder). A ref is a branch, tag or commit sha: letters, digits and `. _ / -`,
   starting with a letter or digit, never holding `..`, `//`, `/.` or `@{`, never ending in `/`, `.`
-  or `.lock`. The CLI checks the same rules before sending, and again before git sees a value.
+  or `.lock`. A ref or XO id that looks like a credential (`sk-`, `ghp_`, `ak_` and the like) is
+  refused. The CLI checks the same rules before sending, and again before git sees a value.
 - **As atomic as Clerk allows.** As for projects: one change per user at a time on an instance, a
   0.3-second settle and a re-read after each write, at most 3 writes, the same 10-second stop, and
   the same 6KB limit. Writing `spaces` replaces the whole list, so a write racing this one can drop
   or revert a space. Every other space is put back at the highest `rev` read, and this one is
   written again if it is missing or back as it was first read. If it holds anything else, someone
   changed it meanwhile: 409, and nothing more is written. A `spaces` that is not a list of objects
-  with a `name` is never overwritten (409).
+  with a `name`, holds two names that differ only in case, or a project entry that is not one
+  `{project: ref}`, is never overwritten (409). An admin removing a space through `/user-metadata`
+  while a change runs can see it put back.
+- **Masked as `/me` is**, by setting name and by value, except each space's `projects`: its keys
+  are project names (a repository called `auth-service` is not a secret), so its refs are shown as
+  stored. The `xo` part of a `POST /me/spaces` answer, XO's own answer, is masked too, where
+  `xo KIND` shows XO's answer as it came.
 - **Audited and limited** like `/me/projects`: one JSON line per change with the key id, the caller,
   the outcome and the list's length (never a name, id, ref or other value), 30 requests a minute
   per key, under the Firewall rule's `/me` prefix.

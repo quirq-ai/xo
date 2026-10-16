@@ -1538,13 +1538,34 @@ def test_create_space_passes_xos_refusal_back_and_records_nothing(clerk):
 def test_create_space_says_how_to_record_a_space_it_could_not_record(clerk):
     store = _Store({})
 
+    def busy(*args):
+        raise server.ClerkError(429, "too_many_requests", seen=429)
+
+    store.update_metadata = busy
+    status, out = _post(_app(store), "/me/spaces", {"kind": "codex", "name": "dev"})
+    assert status == 429 and "XO created the space (id sp-1)" in out["error"]
+    assert "xo connect space:dev --id sp-1" in out["error"]
+
+
+def test_create_space_gives_no_recovery_hint_that_could_not_work(clerk):
+    store = _Store({})
+
     def full(*args):
         raise server.ClerkError(422, "form_param_value_invalid")
 
     store.update_metadata = full
     status, out = _post(_app(store), "/me/spaces", {"kind": "codex", "name": "dev"})
     assert status == 422 and "XO created the space (id sp-1)" in out["error"]
-    assert "xo connect space:dev --id sp-1" in out["error"]
+    assert "xo connect" not in out["error"]
+
+
+def test_create_space_checks_what_recording_needs_before_xo_creates_anything(clerk):
+    for private, status in (({"xo": "x" * 6080}, 422), ({"spaces": {}}, 409), ({"spaces": ["dev"]}, 409),
+                            ({"spaces": [{"name": "a"}, {"name": "A"}]}, 409), ("nope", 409)):
+        store, core = _Store(private), _Core(200, {"success": True, "data": {"id": "sp-1"}})
+        got, out = _post(_app(store, core), "/me/spaces", {"kind": "codex", "name": "dev"})
+        assert got == status and "nothing was created" in out["error"], (private, out)
+        assert core.calls == [] and store.patches == []
 
 
 def test_create_space_refuses_an_answer_without_a_usable_id(clerk):
@@ -1664,6 +1685,48 @@ def test_spaces_that_are_not_a_list_of_entries_are_never_overwritten(clerk):
         store = _Store({"projects": ["notes"], "spaces": value})
         assert _post(_app(store), "/me/spaces/connect", {"id": "sp-1", "name": "a"})[0] == 409
         assert store.patches == []
+
+
+def test_spaces_with_a_case_duplicate_or_a_project_entry_xo_did_not_write_are_never_overwritten(clerk):
+    store = _Store({"projects": ["notes"], "spaces": [_space("dev"), _space("Dev")]})
+    assert _post(_app(store), "/me/spaces/connect", {"name": "a"})[0] == 409
+    store = _Store({"projects": ["notes", "p2"], "spaces": [_space("dev", projects=[{"p2": "main", "notes": "v1"}])]})
+    assert _post(_app(store), "/me/spaces/dev/projects", {"project": "notes"})[0] == 409
+    assert store.patches == []
+
+
+def test_refs_and_ids_that_look_like_credentials_are_refused(clerk):
+    store = _Store({"projects": ["notes"], "spaces": [_space("dev")]})
+    assert _post(_app(store), "/me/spaces/dev/projects", {"project": "notes", "ref": "ghp_" + "a" * 36})[0] == 422
+    assert _post(_app(store, _Core(200, {})), "/me/spaces/connect", {"name": "b", "id": "sk-abc"})[0] == 422
+    store2, core = _Store({}), _Core(200, {"success": True, "data": {"id": "ak_" + "b" * 20}})
+    assert _post(_app(store2, core), "/me/spaces", {"kind": "codex", "name": "dev"})[0] == 502
+    assert store.patches == [] and store2.patches == []
+
+
+def test_project_refs_are_shown_as_stored_whatever_the_project_is_called(clerk):
+    sha = "0123456789abcdef0123456789abcdef01234567"
+    projects = [{"huggingface/tokenizers": "main"}, {"acme/auth-service": sha}, {"next-auth": "v4"}]
+    store = _Store({"projects": ["huggingface/tokenizers", "acme/auth-service", "next-auth"],
+                    "spaces": [_space("dev", projects=projects, apiToken="tok-12345678901234")]})
+    app = _app(store)
+    status, out = app.handle("GET", "/me/spaces", {"authorization": f"Bearer {USER_KEY}"}, None)
+    shown = out["data"]["spaces"][0]
+    assert status == 200 and shown["projects"] == projects and shown["apiToken"] == "\u20261234"
+    status, out = app.handle("GET", "/me", {"authorization": f"Bearer {USER_KEY}"}, None)
+    assert out["data"]["privateMetadata"]["spaces"][0]["projects"] == projects
+    status, out = _post(app, "/me/spaces/dev/projects", {"project": "next-auth", "ref": "v5"})
+    assert out["data"]["space"]["projects"][1] == {"acme/auth-service": sha}
+
+
+def test_connect_space_with_an_id_gives_an_entry_made_without_one_its_id(clerk):
+    store, core = _Store({"spaces": [{"name": "dev", "rev": 1, "projects": [{"a": "main"}]}]}), _Core(200, {})
+    status, out = _post(_app(store, core), "/me/spaces/connect", {"name": "DEV", "id": "sp-9"})
+    assert status == 200 and core.calls == [("GET", "/spaces/sp-9", USER_KEY, None)]
+    assert store.stored["private_metadata"]["spaces"] == [
+        {"name": "dev", "rev": 2, "projects": [{"a": "main"}], "id": "sp-9"}]
+    assert _post(_app(store, core), "/me/spaces/connect", {"name": "dev", "id": "sp-8"})[0] == 409  # once only
+    assert _post(_app(store, core), "/me/spaces/connect", {"name": "dev"})[0] == 409
 
 
 def test_spaces_lists_and_routes_show_on_the_status_page(xo_server, alice):

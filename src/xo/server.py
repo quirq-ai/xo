@@ -338,6 +338,31 @@ def _mask_secrets(value: Any, depth: int = 0) -> Any:
     return value
 
 
+def _mask_values(value: Any, depth: int = 0) -> Any:
+    """Like _mask_secrets, but by value only: for maps whose keys are project names, not settings."""
+    if depth > 32:
+        return "(hidden)"
+    if isinstance(value, dict):
+        return {k: _mask_values(v, depth + 1) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_mask_values(v, depth + 1) for v in value]
+    if isinstance(value, str) and _SECRET_VALUE.search(value):
+        return _mask(value)
+    return value
+
+
+def _shown_space(entry: Any) -> Any:
+    """A space as answered: masked like other metadata, except its {project: ref} list, whose keys
+    are project names (a repository called auth-service or tokenizers is not a secret)."""
+    if not isinstance(entry, dict):
+        return _mask_secrets(entry)
+    return {k: _mask_values(v) if k == "projects" else _mask_secrets({k: v})[k] for k, v in entry.items()}
+
+
+def _shown_spaces(spaces: Any) -> Any:
+    return [_shown_space(e) for e in spaces] if isinstance(spaces, list) else _mask_secrets(spaces)
+
+
 def _primary_email(u: dict) -> str | None:
     primary = u.get("primary_email_address_id")
     addresses = u.get("email_addresses")
@@ -668,7 +693,7 @@ class App:
                 # The key's own user only (the subject Clerk verified, never an id from the request).
                 # Admin rights come from the key's claim and $XO_ADMIN_KEY_IDS, not from metadata.
                 "publicMetadata": _mask_secrets(u.get("public_metadata") or {}),
-                "privateMetadata": _mask_secrets(self._shown_private(u.get("private_metadata")))}
+                "privateMetadata": self._masked_private(u.get("private_metadata"))}
         with self._lock:
             if len(self._me_cache) >= ME_CACHE_PRUNE_AT:  # entries hold metadata: drop the expired ones
                 self._me_cache = {s: e for s, e in self._me_cache.items() if now - e[0] < ME_CACHE_SECONDS}
@@ -796,7 +821,7 @@ class App:
                 raise self._refuse(who, 409, f"{name} is already in your projects; nothing was changed")
             wanted = [*projects, *missing, *([] if present else [name])]
             if len(wanted) > MAX_PROJECTS:
-                raise self._refuse(who, 422, f"You have {MAX_PROJECTS} projects, the most there can be; "
+                raise self._refuse(who, 422, f"You have {MAX_PROJECTS} or more projects, the most there can be; "
                                              "nothing was changed")
             seen.extend(p for p in [*projects, name] if p not in seen)
             return "write", wanted
@@ -825,7 +850,7 @@ class App:
         u = self._user(key["subject"])
         private = u.get("private_metadata")
         spaces = private.get("spaces") if isinstance(private, dict) else None
-        return {"spaces": _mask_secrets([] if spaces is None else spaces)}
+        return {"spaces": _shown_spaces([] if spaces is None else spaces)}
 
     def _change_space(self, subject: str, who: dict, name: str, make) -> dict:
         """Write one space, by name (ignoring case), and leave every other space as it was.
@@ -841,12 +866,8 @@ class App:
         original: list = []  # the space as first read (None when it was not there)
 
         def step(spaces: list, private: dict, wrote: bool) -> tuple[str, list]:
-            if any(not isinstance(e, dict) or not isinstance(e.get("name"), str) for e in spaces):
-                raise self._refuse(who, 409, "Your private metadata `spaces` holds an entry xo cannot read; "
-                                             "nothing was changed")
-            by: dict[str, dict] = {}
-            for e in spaces:
-                by.setdefault(e["name"].casefold(), e)
+            self._readable_spaces(spaces, who)
+            by = {e["name"].casefold(): e for e in spaces}
             for k, e in by.items():
                 if k != target and (k not in best or _rev(e) >= _rev(best[k])):
                     best[k] = e
@@ -875,6 +896,16 @@ class App:
                      "wanted before trying again")
         return written[0]
 
+    def _readable_spaces(self, spaces: Any, who: dict, nothing: str = "changed") -> None:
+        """Refuse a `spaces` xo did not write and could not write back whole: not a list, an entry
+        that is not an object with a name, or two names that differ only in case."""
+        if not isinstance(spaces, list):
+            raise self._refuse(who, 409, f"Your private metadata `spaces` is not a list; nothing was {nothing}")
+        if any(not isinstance(e, dict) or not isinstance(e.get("name"), str) for e in spaces) or \
+                len({e["name"].casefold() for e in spaces}) != len(spaces):
+            raise self._refuse(who, 409, "Your private metadata `spaces` holds an entry xo cannot read; "
+                                         f"nothing was {nothing}")
+
     def _create_space(self, headers: dict[str, str], body: bytes | None) -> dict:
         """Create a space through XO with the caller's own key, then record it in `spaces`."""
         key, token, who = self._caller(headers, "spaces", "/me/spaces")
@@ -885,20 +916,30 @@ class App:
         self._space_name(name, who)
         if not isinstance(create, dict):
             raise self._refuse(who, 422, "body must be a JSON object: the create's own body")
-        spaces = self._user(key["subject"]).get("private_metadata") or {}
-        spaces = spaces.get("spaces") if isinstance(spaces, dict) else None
-        if isinstance(spaces, list):  # checked before XO creates anything; checked again when recording
-            if any(isinstance(e, dict) and str(e.get("name", "")).casefold() == name.casefold() for e in spaces):
-                raise self._refuse(who, 409, f"You already have a space named {name}; nothing was created")
-            if len(spaces) >= MAX_SPACES:
-                raise self._refuse(who, 422, f"You have {MAX_SPACES} spaces, the most there can be; nothing was created")
+        # Every refusal recording could make is checked before XO creates anything (and again when
+        # recording), so a refusal never leaves a space on XO that xo has no record of.
+        private = self._user(key["subject"]).get("private_metadata")
+        private = {} if private is None else private
+        if not isinstance(private, dict):
+            raise self._refuse(who, 409, "Your private metadata is not an object; nothing was created")
+        spaces = private.get("spaces", [])
+        self._readable_spaces(spaces, who, "created")
+        if any(e["name"].casefold() == name.casefold() for e in spaces):
+            raise self._refuse(who, 409, f"You already have a space named {name}; nothing was created")
+        if len(spaces) >= MAX_SPACES:
+            raise self._refuse(who, 422, f"You have {MAX_SPACES} spaces, the most there can be; nothing was created")
+        widest = {"name": name, "kind": kind, "id": "x" * names.SPACE_ID_MAX, "rev": 1, "projects": []}
+        if _size({**private, "spaces": [*spaces, widest]}) > PRIVATE_BUDGET:
+            raise self._refuse(who, 422, f"Recording it would take your private metadata past "
+                                         f"{PRIVATE_BUDGET // 1024}KB (Clerk keeps 8KB, and XO needs the rest); "
+                                         "nothing was created")
         status, answer = self.core.forward("POST", f"/{kind}", token, json.dumps(create).encode())
         if not 200 <= status < 300:
             self.audit(**who, outcome=status, xo=status)
             raise _Forwarded(status, answer)
         made = answer.get("data") if isinstance(answer.get("data"), dict) else {}
         space_id = made.get("id")
-        if not isinstance(space_id, str) or not names.SPACE_ID.fullmatch(space_id):
+        if not isinstance(space_id, str) or not names.SPACE_ID.fullmatch(space_id) or _SECRET_VALUE.search(space_id):
             raise self._refuse(who, 502, "XO created the space but its answer had no id xo can use; nothing was "
                                          "recorded")
 
@@ -910,9 +951,11 @@ class App:
         try:
             entry = self._change_space(key["subject"], who, name, make)
         except _Reply as r:
-            raise _Reply(r.status, f"XO created the space (id {space_id}) but xo could not record it: {r.error}. "
-                                   f"Run xo connect space:{name} --id {space_id} to record it", r.clerk) from None
-        return {"space": _mask_secrets(entry), "xo": _mask_secrets(made)}
+            # A race or a busy Clerk can pass; the refusals checked above cannot, so no hint for them.
+            hint = f". Run xo connect space:{name} --id {space_id} to record it" if r.status in (409, 429, 503) else ""
+            raise _Reply(r.status, f"XO created the space (id {space_id}) but xo could not record it: {r.error}{hint}",
+                         r.clerk) from None
+        return {"space": _shown_space(entry), "xo": _mask_secrets(made)}
 
     def _connect_space(self, headers: dict[str, str], body: bytes | None) -> dict:
         """A new space entry in the caller's metadata, with no projects yet. With an id it stands for
@@ -923,8 +966,8 @@ class App:
         space_id, name = sent.get("id"), sent["name"]
         self._space_name(name, who)
         if space_id is not None:
-            if not names.SPACE_ID.fullmatch(space_id):
-                raise self._refuse(who, 422, "id must be an XO space id: letters, digits, _ or -")
+            if not names.SPACE_ID.fullmatch(space_id) or _SECRET_VALUE.search(space_id):
+                raise self._refuse(who, 422, f"id must be an XO space id: 1 to {names.SPACE_ID_MAX} letters, digits, _ or -")
             status, answer = self.core.forward("GET", f"/spaces/{space_id}", token, None)
             if status in (403, 404):
                 raise self._refuse(who, 404, "XO has no space with that id that your key can read; nothing was "
@@ -934,14 +977,17 @@ class App:
                 raise _Forwarded(status, answer)
 
         def make(current: dict | None, private: dict) -> dict:
-            if current is not None:
-                raise self._refuse(who, 409, f"You already have a space named {name}; nothing was changed")
             spaces = private.get("spaces", [])
-            if space_id is not None and any(isinstance(e, dict) and e.get("id") == space_id for e in spaces):
+            if space_id is not None and any(e is not current and e.get("id") == space_id for e in spaces):
                 raise self._refuse(who, 409, "That space is already recorded under another name; nothing was changed")
-            return {"name": name, **({"id": space_id} if space_id is not None else {}), "rev": 1, "projects": []}
+            if current is None:
+                return {"name": name, **({"id": space_id} if space_id is not None else {}), "rev": 1, "projects": []}
+            # An entry made without an id can be given one, once; nothing else about it changes.
+            if space_id is None or current.get("id") is not None:
+                raise self._refuse(who, 409, f"You already have a space named {name}; nothing was changed")
+            return {**current, "id": space_id, "rev": _rev(current) + 1}
 
-        return {"space": _mask_secrets(self._change_space(key["subject"], who, name, make))}
+        return {"space": _shown_space(self._change_space(key["subject"], who, name, make))}
 
     def _connect_project(self, name: str, headers: dict[str, str], body: bytes | None) -> dict:
         """Set one project's ref in one of the caller's spaces: added, or replaced if it is there."""
@@ -952,10 +998,15 @@ class App:
         self._project_name(project, who)
         if not names.ref_ok(ref):
             raise self._refuse(who, 422, names.REF_RULE[0].upper() + names.REF_RULE[1:])
+        if _SECRET_VALUE.search(ref):
+            raise self._refuse(who, 422, "That ref looks like a credential (sk-, ghp_, ak_ and the like); "
+                                         "nothing was changed")
 
         def make(current: dict | None, private: dict) -> dict:
             if current is None:
                 raise self._refuse(who, 404, f"You have no space named {name}")
+            if any(not isinstance(p, dict) or len(p) != 1 for p in _space_projects(current)):
+                raise self._refuse(who, 409, f"Space {name} holds a project entry xo cannot read; nothing was changed")
             projects = private.get("projects", [])
             if not isinstance(projects, list) or project not in projects:
                 raise self._refuse(who, 404, f"{project} is not in your projects; add it with xo create project first")
@@ -969,7 +1020,14 @@ class App:
             entries.insert(at, {project: ref})
             return {**current, "projects": entries, "rev": _rev(current) + 1}
 
-        return {"space": _mask_secrets(self._change_space(key["subject"], who, name, make))}
+        return {"space": _shown_space(self._change_space(key["subject"], who, name, make))}
+
+    def _masked_private(self, private: Any) -> Any:
+        shown = self._shown_private(private)
+        masked = _mask_secrets(shown)
+        if isinstance(shown, dict) and "spaces" in shown:
+            masked["spaces"] = _shown_spaces(shown["spaces"])
+        return masked
 
     def _shown_private(self, private: Any) -> Any:
         """The private metadata /me shows its user: all of it, or only $XO_ME_PRIVATE_KEYS."""

@@ -17,7 +17,8 @@ _REPO = re.compile(r"[A-Za-z0-9_.][A-Za-z0-9_.-]{0,99}")
 _SPACE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
 # A branch, tag or 40-character commit sha; git's ref rules, never starting with "-".
 _REF = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,199}")
-SPACE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,99}")
+SPACE_ID_MAX = 64  # what the server forwards in GET /spaces/{id}
+SPACE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,%d}" % (SPACE_ID_MAX - 1))
 GITHUB_URL = re.compile(r"https://github\.com/([^/\s]+)/([^/\s]+?)(?:\.git)?/?")
 
 PROJECT_RULE = ("a project name is 1 to 64 letters, digits, spaces, _ . or - starting with a letter or "

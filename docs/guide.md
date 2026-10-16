@@ -73,11 +73,13 @@ xo create space claude-code dev --name my-cc --volume-size 20 --providers-anthro
                                                  # create it as `xo claude-code` does, record it as dev
 xo connect project:OWNER/REPO space:dev --ref main   # put a project in a space, at a branch, tag or sha
 xo connect space:dev                             # a new space entry in your metadata, no XO space
-xo connect space:old --id THE_ID                 # an entry for an XO space you already have
+xo connect space:old --id THE_ID                 # an entry for an XO space you already have, or
+                                                 # the id for an entry made without one
 xo list spaces                                   # your spaces, with their projects and refs
 ```
 
-- Add `--dry-run` to any create to see the request without sending it.
+- Add `--dry-run` to `xo KIND` or `xo create space` to see the request without sending it.
+  `xo create project` and `xo connect` have no `--dry-run`.
 - `-` makes xo ask for a key or token without showing it. Only one `-` works per command; put any
   other secret in a JSON file and pass it with `--data @FILE`. The file holds part of the request
   body, and the flags you give are added to it. For example, `body.json` holding

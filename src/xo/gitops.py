@@ -1,9 +1,10 @@
 """The git xo runs for projects: the user's own git, with their own login, never a token of xo's.
 
-Every call is `git` with options that keep it to plain https (no ssh, file or ext transports, no
-submodules) and `--end-of-options` before anything that came from a name or a ref, so a value can
-never be read as an option. Keys and tokens xo or its services use are left out of git's
-environment. xo never reads, stores or prints a git credential.
+Every call is `git` with GIT_ALLOW_PROTOCOL=https in its environment, which overrides any protocol
+setting or insteadOf in the user's config (no ssh, file or ext transports), no submodules, and
+`--end-of-options` before anything that came from a name or a ref, so a value can never be read as
+an option. Keys and tokens xo or its services use, and any variable that points git at another
+repository, are left out of git's environment. xo never reads, stores or prints a git credential.
 """
 from __future__ import annotations
 
@@ -20,10 +21,20 @@ GIT_TIMEOUT = 600.0
 # Never handed to git: the XO key, the server's Clerk secret, Coder's and gh's tokens.
 _DROPPED = {"XO_API_KEY", "CODER_SESSION_TOKEN", "GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN",
             "GITHUB_ENTERPRISE_TOKEN"}
+# Never inherited: these point git at another repository than the one xo names (git rev-parse
+# --local-env-vars, less the user's own config settings).
+_ELSEWHERE = {"GIT_DIR", "GIT_WORK_TREE", "GIT_IMPLICIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+              "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR", "GIT_GRAFT_FILE", "GIT_NO_REPLACE_OBJECTS",
+              "GIT_REPLACE_REF_BASE", "GIT_PREFIX", "GIT_SHALLOW_FILE", "GIT_NAMESPACE", "GIT_CONFIG"}
+# The only transports git may use; it beats every protocol.* setting and insteadOf.
+ALLOWED_PROTOCOLS = "https"
 
 
 def environment() -> dict[str, str]:
-    return {k: v for k, v in os.environ.items() if k not in _DROPPED and not k.startswith("CLERK_")}
+    env = {k: v for k, v in os.environ.items()
+           if k not in _DROPPED and k not in _ELSEWHERE and not k.startswith("CLERK_")}
+    env["GIT_ALLOW_PROTOCOL"] = ALLOWED_PROTOCOLS
+    return env
 
 
 def run(*args: str, cwd: Path | None = None) -> str:
