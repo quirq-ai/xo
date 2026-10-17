@@ -1761,7 +1761,7 @@ def services_list() -> dict:
         try:
             data["xo"]["url"] = services.listed_url("xo", platform)
         except (XoError, ValueError):  # ValueError: a malformed bracketed host
-            data["xo"]["url"] = None  # not an address the list can name: say so, keep coder
+            data["xo"]["url"] = None  # not an address the list can name: say so
     return data
 
 

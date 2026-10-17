@@ -1142,7 +1142,7 @@ def test_whitespace_at_either_end_of_an_upstream_address_is_ignored(clerk, monke
 def test_config_names_no_platform_for_a_malformed_core_address(monkeypatch):
     monkeypatch.setenv("XO_CORE_API_URL", "https://[::1/api/core/v1")
     data = server.services_list()
-    assert data["xo"]["url"] is None and data["xo"]["coder"]["url"]
+    assert data["xo"]["url"] is None and data["xo"]["about"] == services.SHIPPED["xo"]["about"]
 
 
 def test_a_cli_core_create_goes_through_the_server(xo_server, clerk, monkeypatch, capfd):
@@ -1169,7 +1169,7 @@ def test_config_lists_the_services_without_a_key_or_clerk(xo_server, clerk, monk
     assert call(xo_server, "GET", "/config")[1]["data"]["xo"]["url"] == "https://platform.example"
     monkeypatch.setenv("XO_CORE_API_URL", "http://127.0.0.1:9/core")  # not an address the list may name
     listed = call(xo_server, "GET", "/config")[1]["data"]
-    assert listed["xo"]["url"] is None and listed["xo"]["coder"] == services.SHIPPED["xo"]["coder"]
+    assert listed["xo"]["url"] is None and listed["xo"]["about"] == services.SHIPPED["xo"]["about"]
 
 
 def test_config_answers_even_without_the_clerk_secret(monkeypatch):

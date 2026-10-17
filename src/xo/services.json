@@ -2,11 +2,7 @@
   "schema": "xo-services/2",
   "xo": {
     "url": "https://dev.xo.builders",
-    "about": "XO Cloud: the creates (xo claude-code, xo codex, ...) and xo spaces, passed on by the xo server",
-    "coder": {
-      "url": "https://dev-coder.xo.builders",
-      "about": "Coder workspaces: xo coder github, list, ssh, ..."
-    }
+    "about": "XO Cloud: the creates (xo create space NAME KIND) and xo spaces, passed on by the xo server"
   },
   "me": {
     "url": "https://xo.quirq.dev",

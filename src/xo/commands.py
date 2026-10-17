@@ -19,7 +19,7 @@ from typing import Any, Callable, NamedTuple
 from xo.spec import Operation, clean, known_params
 
 # Built-in command names, and names argparse or a reader would take for something else.
-RESERVED = {"ops", "call", "api", "serve", "login", "logout", "status", "coder", "projects", "help",
+RESERVED = {"ops", "call", "api", "serve", "login", "logout", "status", "projects", "help",
             "version", "create", "connect", "share", "accept", "reject", "install", "update", "sync",
             "list"}
 
@@ -124,7 +124,7 @@ def add_operation(p: argparse.ArgumentParser, op: Operation, add_send: Callable[
 def _operation(p: argparse.ArgumentParser, op: Operation, add_send: Callable[[argparse.ArgumentParser], None],
                run: Callable[[argparse.Namespace], int], skip: set[str] = frozenset()) -> None:
     flags: list[Flag] = []
-    taken = {"data", "field", "dry-run", "show-secrets", "yes", "api-key", "url", "coder-url", "spec", "timeout",
+    taken = {"data", "field", "dry-run", "show-secrets", "yes", "api-key", "url", "spec", "timeout",
              "help"}
     for prm in known_params(op).values():
         flag = _unique(kebab(prm.name), taken)
