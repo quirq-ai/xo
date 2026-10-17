@@ -5,7 +5,7 @@ Vercel at `xo.quirq.dev` through `app.py`), which holds the Clerk Secret Key so 
 it. Standard library only. Setup is in [quickstart.md](quickstart.md); the server's settings in
 [server.md](server.md).
 
-This describes main as of this change: through #40.
+This describes main as of this change: through #42.
 Every command has its own sequence diagram in section 3. [architecture.html](architecture.html) is the same doc as a page with drawn diagrams;
 GitHub shows it as source, so open it locally or from a static host.
 
@@ -78,12 +78,12 @@ flowchart LR
 | `xo connect project:P --repo URL` | server, then git | a project made with a name only gets its repo and is recorded as `OWNER/REPO` (refused while P is in a space); `./P` gets that origin only if it has none, and moves to `./REPO` only if its origin is that repo |
 | `xo connect space:S [--id ID]` | server, then XO | record a space entry; `--id` ties it to an XO space your key can read |
 | `xo list projects\|spaces\|shared` | server only | show your projects, your spaces, or the invites shared with you (each with an id) |
-| `xo share space:S\|project:REPO USERNAME` | server only | an invite in that user's `shared`: a space's name and GitHub projects, or one GitHub project |
+| `xo share space:S\|project:P USERNAME` | server only | an invite in that user's `shared`: a space's name and GitHub projects, or one GitHub project |
 | `xo accept ID [--as NAME \| --space S [--ref R]] [--yes]` | server only | show the invite and ask, then add a shared space as your own (`--as` renames it), or a shared project to your space S at R |
 | `xo reject ID` | server only | take the invite off your `shared`; its sender can share again |
-| `xo install project:P\|space:S` | server, git | clone, or fetch and fast-forward, P; for a space, each project into `./S/` at its ref |
-| `xo update project:P\|space:S` | git, server | push P (never forced); for a space, push each branch, then record the refs under `./S/` |
-| `xo sync project:P\|space:S` | git, server | `pull --rebase` and push P; for a space, rebase and push each branch, merge refs, record |
+| `xo install project:P\|space:S` | server, git | look P up, then clone, or fetch and fast-forward, it into `./REPO`; for a space, each project into `./S/` at its ref |
+| `xo update project:P\|space:S` | server, git | look P up, then push its checkout (never forced); for a space, push each branch, then record the refs under `./S/` |
+| `xo sync project:P\|space:S` | server, git | look P up, then `pull --rebase` and push its checkout; for a space, rebase and push each branch, merge refs, record |
 | `xo user-metadata get --user-id ID` | server only | admin keys only: both metadata buckets |
 | `xo user-metadata update --user-id ID --private-metadata JSON` | server only | admin keys only; deep merges into allow-listed keys (also `--public-metadata`) |
 | `xo login [xo\|me\|github]` | server, gh | reads `/config`, checks and saves the key, runs gh's login |
@@ -193,7 +193,7 @@ Admin needs two locks, and none is issued yet. Until a key has the claim and its
 
 ### Spaces on XO
 
-Every space is created one way, `xo create space NAME KIND`, and recorded in your spaces. The old `xo claude-code`, `xo codex`, ... commands are gone and say so.
+Every space on XO is created one way, `xo create space NAME KIND`, and recorded in your spaces. With no KIND, `xo create space NAME` records a space here only, with nothing on XO. The old `xo claude-code`, `xo codex`, ... commands are gone and say so.
 
 #### `xo create space NAME KIND`
 
@@ -215,6 +215,25 @@ sequenceDiagram
 ```
 
 One name, on XO and in your spaces. KIND is `claude-code`, `codex`, `antigravity`, `hermes`, `openclaw`, `xo-cowork` or `nebius-openclaw`; NAME is 1 to 32 letters, digits or hyphens. XO lowercases space names, so xo lowercases NAME before it sends it and says so when that changes it. Everything recording needs is checked before XO is called. Every kind but `nebius-openclaw` stores your key inside the new space, and xo says so first.
+
+#### `xo create space NAME`
+
+```mermaid
+sequenceDiagram
+  participant Cli as You · xo CLI
+  participant Srv as xo server
+  participant Clerk as Clerk
+  Note over Cli: xo create space dev: no KIND
+  Note over Cli: lowercase NAME: ./dev here? refuse
+  Cli->>Srv: name / POST /me/spaces/connect: ("name") only
+  Srv->>Clerk: verify / verify, read user: name free?
+  Clerk-->>Srv: user / new entry: no projects, rev 1
+  Srv->>Clerk: write / merge (spaces): nothing on XO
+  Clerk-->>Srv: written / read back: after 0.3 s
+  Srv-->>Cli: 200 / make ./dev: .xo/state.json, rev 1
+```
+
+A space here only: the same entry `xo connect space:S` makes, and nothing on XO. xo lowercases NAME, as XO does, and refuses a kind word (`codex`, ...), `new` or `create`, and a `./NAME` that is already here, before anything is sent. Then it makes `./NAME/.xo/state.json` at rev 1 with no projects, so the space counts as installed. If the entry is written but the folder is not made, xo says to run `xo install space:NAME`; a name already taken (409) gets the hint that `xo install space:NAME` makes the folder.
 
 #### `xo claude-code | codex | ... (removed)`
 
@@ -275,14 +294,16 @@ sequenceDiagram
   participant Git as git · GitHub
   Note over Cli: xo create project N: or a URL, or both
   Note over Cli: name the project: a repo: OWNER/REPO
+  Cli->>Srv: key / GET /me/projects: your projects now
+  Srv-->>Cli: projects / pick the folder: ./REPO or ./OWNER/REPO
   Cli->>Srv: name / POST /me/projects: the same add as above
   Srv->>Clerk: write / verify, read, merge: (projects), then read back
   Clerk-->>Srv: written / listed
-  Srv-->>Cli: 200 / make ./NAME
+  Srv-->>Cli: 200 / make the folder
   Cli->>Git: runs git / clone or git init: OWNER/REPO: clone into ./REPO
 ```
 
-A project is named after its repo. Give a name (`git init ./notes`), a GitHub URL (recorded as `OWNER/REPO`, cloned into `./REPO` and called `REPO` in every command), or both when they name the same repository; a different name with a URL is refused before anything is sent. Record first, then make the folder. When two of your projects share a repo name, each is called by its `OWNER/REPO`, and the second cannot be cloned while the first's folder is here.
+A project is named after its repo. Give a name (`git init ./notes`), a GitHub URL (recorded as `OWNER/REPO`, cloned into `./REPO` and called `REPO` in every command), or both when they name the same repository; a different name with a URL is refused before anything is sent. xo reads your projects first to pick the folder: `./REPO`, or `./OWNER/REPO` when another of your projects is called `REPO` or the repo is called `.xo` (a space's own state folder). Record next, then make the folder; a folder already there is refused before anything is recorded. When two of your projects share a repo name, each is called by its `OWNER/REPO`. A typed name that matches a project exactly wins: a plain project `headscale` is called `headscale`, and `juanfont/headscale` is then called by its `OWNER/REPO`.
 
 #### `xo connect project:P --repo URL`
 
@@ -334,6 +355,8 @@ sequenceDiagram
   participant Srv as xo server
   participant Clerk as Clerk
   Note over Cli: xo connect project:P: space:S --ref R
+  Cli->>Srv: if P is plain / GET /me/projects: your projects
+  Srv-->>Cli: projects / P is which project?: exact name, else its repo
   Cli->>Srv: P, ref / POST spaces/S/projects: ("project", "ref")
   Srv->>Clerk: verify / verify, read user: P must be in projects
   Clerk-->>Srv: user / set P at R: rev + 1
@@ -342,7 +365,7 @@ sequenceDiagram
   Srv-->>Cli: 200 / print the space
 ```
 
-One project, one ref, one more rev. A missing ref is `main`. Connecting P again replaces its ref in place; a space holds at most 10 projects.
+One project, one ref, one more rev. A plain P is looked up in your projects first, so `headscale` sends `juanfont/headscale`. A missing ref is `main`. Connecting P again replaces its ref in place; a space holds at most 10 projects.
 
 #### `xo list projects | spaces | shared`
 
@@ -360,14 +383,16 @@ sequenceDiagram
 
 A read, masked as `/me` is. Project names and refs are not masked: a repository called `auth-service` is not a secret. `xo list shared` shows each invite with its id and its sender's username now, which the server looks up in one more Clerk call.
 
-#### `xo share space:S|project:OWNER/REPO USERNAME`
+#### `xo share space:S|project:P USERNAME`
 
 ```mermaid
 sequenceDiagram
   participant Cli as You · xo CLI
   participant Srv as xo server
   participant Clerk as Clerk
-  Note over Cli: xo share space:dev bob: or project:OWNER/REPO
+  Note over Cli: xo share space:dev bob: or project:P
+  Cli->>Srv: if P is plain / GET /me/projects: your projects
+  Srv-->>Cli: projects / P is which project?: exact name, else its repo
   Cli->>Srv: item, to / POST /me/share: ("item", "to")
   Srv->>Clerk: verify / verify, read you: your item, your username
   Clerk-->>Srv: you / build the invite: name + GitHub projects
@@ -380,7 +405,7 @@ sequenceDiagram
   Srv-->>Cli: 200 / print the invite: to, item, projects
 ```
 
-The one write to another user, and only to their `shared`. The invite holds a space's name and its GitHub projects at their refs, never its id, kind or rev; a space's local projects are left out. Everything about the recipient (no such username, a full list, no room) is the same 404 "Could not share ITEM with USERNAME", and every answer takes at least 1.5 seconds. At most 20 invites wait on anyone, 5 from one sender.
+The one write to another user, and only to their `shared`. A plain P is looked up in your projects first, and only a GitHub project can be shared. The invite holds a space's name and its GitHub projects at their refs, never its id, kind or rev; a space's local projects are left out. Everything about the recipient (no such username, a full list, no room) is the same 404 "Could not share ITEM with USERNAME", and every answer takes at least 1.5 seconds. At most 20 invites wait on anyone, 5 from one sender.
 
 #### `xo accept ID · xo reject ID`
 
@@ -426,7 +451,7 @@ sequenceDiagram
   Git-->>Cli: done / save state.json: rev N and refs
 ```
 
-The installed rev and refs are the base for later updates. A project with no GitHub remote is left as it is. A branch that has moved on from its remote is refused, never merged.
+The installed rev and refs are the base for later updates. A project with no GitHub remote is left as it is. A branch that has moved on from its remote is refused, never merged. Each GitHub project goes in `./S/REPO`, or `./S/OWNER/REPO` when another project in the space has that name, and an existing checkout is used only if its origin is that repo. `./S/.xo/state.json` is never written through a link, and a `./S/.xo` that is a link or a checkout is refused.
 
 #### `xo install project:P`
 
@@ -440,13 +465,14 @@ sequenceDiagram
   Cli->>Srv: key / GET /me/projects
   Srv->>Clerk: verify / verify, read user
   Clerk-->>Srv: user / the list
-  Srv-->>Cli: projects / P listed?: ./P here?
+  Srv-->>Cli: projects / P is which project?: ./REPO or ./OWNER/REPO
+  Note over Cli: a checkout there?: origin must be P's repo
   Cli->>Git: runs git / clone, or fetch: over https
   Note over Git: fast-forward: never a merge
   Git-->>Cli: done / print: cloned or moved on
 ```
 
-Clone once, then only fast-forward. If your branch and its upstream have both moved on, xo stops and points you to `xo sync project:P`.
+P is the project a typed name means: an exact match first, else the one GitHub project whose repo is called that (two are refused: say which by `OWNER/REPO`). Its checkout is looked for in `./REPO` and `./OWNER/REPO`, and used only if its origin, every fetch and push URL, is that repo; a folder whose origin is another repo is refused, never fetched. Clone once, then only fast-forward. If your branch and its upstream have both moved on, xo stops and points you to `xo sync project:P`.
 
 #### `xo update space:S`
 
@@ -477,14 +503,17 @@ Push, then record, only if nobody moved the space. The server refuses with 409 "
 ```mermaid
 sequenceDiagram
   participant Cli as You · xo CLI
+  participant Srv as xo server
   participant Git as git · GitHub
   Note over Cli: xo update project:P
-  Note over Cli: check upstream: own, on a branch, clean
+  Cli->>Srv: key / GET /me/projects
+  Srv-->>Cli: projects / P is which project?: its checkout here?
+  Note over Cli: origin is P's repo?: else refuse
   Cli->>Git: push / push to upstream: never forced
   Git-->>Cli: done / pushed: remote ahead: xo sync
 ```
 
-A plain push, never forced. It goes to the branch's upstream remote, not a `pushRemote`, and needs a branch, not a detached HEAD.
+P is looked up in your projects as for install, and needs a checkout here whose origin is P's repo; one whose origin is another repo is refused, never pushed. A plain push, never forced. It goes to the branch's upstream remote, not a `pushRemote`, and needs a branch, not a detached HEAD.
 
 #### `xo sync space:S`
 
@@ -516,14 +545,18 @@ A three-way merge of refs, per project. If you and the space both changed one pr
 ```mermaid
 sequenceDiagram
   participant Cli as You · xo CLI
+  participant Srv as xo server
   participant Git as git · GitHub
   Note over Cli: xo sync project:P
+  Cli->>Srv: key / GET /me/projects
+  Srv-->>Cli: projects / P is which project?: its checkout here?
+  Note over Cli: origin is P's repo?: else refuse
   Cli->>Git: rebase / pull --rebase: undone on conflict
   Note over Git: push: never forced
   Git-->>Cli: done / print: rebased, pushed
 ```
 
-Rebase on the upstream, then push. On a conflict xo runs `git rebase --abort`, so the checkout is as it was.
+P and its checkout are found as for update. Rebase on the upstream, then push. On a conflict xo runs `git rebase --abort`, so the checkout is as it was.
 
 ### Lower level
 
@@ -632,7 +665,7 @@ sequenceDiagram
 | `POST /me/spaces/connect` | `xo connect space:S [--id]`, `xo create space NAME` (no KIND) | new entry; with an id, only after XO confirms your key can read it |
 | `POST /me/spaces/{name}/projects` | `xo connect project:P space:S` | set one project's ref |
 | `PUT /me/spaces/{name}` | `xo update`, `xo sync` | replace projects and refs if the space is still at `rev` holding `base`, else 409 "run xo sync" |
-| `GET /me/projects`, `GET /me/spaces` | `xo projects`, `xo list` | read, masked as `/me` is (refs shown as stored) |
+| `GET /me/projects`, `GET /me/spaces` | `xo projects`, `xo list`; `GET /me/projects` also for `xo create project`, `xo install`, `xo update` and `xo sync project:P`, and a plain P in `xo connect` and `xo share` | read, masked as `/me` is (refs shown as stored) |
 | `POST /me/share` | `xo share` | `{item, to}`: the caller's invite into user `to`'s `shared`, and nothing else of theirs; anything about the recipient is the same 404 |
 | `GET /me/shared` | `xo list shared`, `xo accept` | the caller's invites, each with an id and its sender's username now |
 | `POST /me/shared/accept` | `xo accept` | `{id, as?}` or `{id, space, ref?}`: one write of `spaces`, `projects` and `shared` (the invite off) |
@@ -657,8 +690,9 @@ flowchart LR
 - `xo sync` keeps the space's change, or yours, per project, and stops on a project both changed
   (or one the space dropped while you changed it).
 - A ref is recorded only if it is on the project's remote; a checkout with uncommitted changes is never touched.
-- Single projects use git only: install clones, or fetches and fast-forwards; update pushes (never
-  forced); sync runs `pull --rebase` then pushes.
+- Single projects: xo looks P up in your projects (`GET /me/projects`), then uses git: install clones,
+  or fetches and fast-forwards; update pushes (never forced); sync runs `pull --rebase` then pushes.
+  An existing checkout is used only if its origin is P's repo.
 - git runs with `GIT_ALLOW_PROTOCOL=https`, no submodules, `--end-of-options` before names and refs, and without XO, Clerk or gh tokens in its environment.
 - Two updates on different instances that both read rev N within the 0.3 s settle can both get 200;
   the later write stands and the other client's next update is refused, since the space no longer

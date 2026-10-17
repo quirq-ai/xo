@@ -1657,22 +1657,46 @@ def test_create_space_says_a_name_field_comes_from_the_command_line(core, capsys
 
 
 def test_create_space_with_no_kind_makes_it_here_only(xs, capsys, github):
-    made = {**SPACE, "name": "My.Space", "kind": None, "id": None, "rev": 1}
+    made = {**SPACE, "name": "my.space", "kind": None, "id": None, "rev": 1}
     xs.route("POST", "/me/spaces/connect", body={"success": True, "data": {"space": made}})
     code, out, err = run(capsys, "create", "space", "My.Space")
     assert code == 0 and json.loads(out) == made and "a new space with no projects" in err
+    assert "lowercase, as on XO, so this space is my.space" in err
     assert [(r["method"], r["path"], r["body"]) for r in xs.requests] == [
-        ("POST", "/me/spaces/connect", {"name": "My.Space"})]
-    state = json.loads(Path("My.Space/.xo/state.json").read_text())
-    assert state == {"space": "My.Space", "rev": 1, "projects": []}
+        ("POST", "/me/spaces/connect", {"name": "my.space"})]
+    state = json.loads(Path("my.space/.xo/state.json").read_text())
+    assert state == {"space": "my.space", "rev": 1, "projects": []}
 
 
-@pytest.mark.parametrize("name", ["../x", "-x", "a b", ".hidden"])
+@pytest.mark.parametrize("name", ["../x", "-x", "a b", ".hidden", "codex", "New", "/abs", "a/b"])
 def test_create_space_with_no_kind_refuses_a_bad_name_or_a_folder_here(xs, capsys, github, name):
     assert _refused(capsys, "create", "space", name) and xs.requests == []
     Path("dev").mkdir()
     code, _, err = run(capsys, "create", "space", "dev")
     assert code == 1 and "./dev already exists here; nothing was changed" in err and xs.requests == []
+
+
+def test_create_space_with_no_kind_says_how_to_finish_when_the_folder_fails(xs, capsys, github, monkeypatch):
+    xs.route("POST", "/me/spaces/connect", body={"success": True, "data": {"space": {**SPACE, "rev": 1}}})
+
+    def refuse(name, space):
+        raise PermissionError(13, "Permission denied")
+    monkeypatch.setattr(cli.workspace, "made", refuse)
+    code, _, err = run(capsys, "create", "space", "dev")
+    assert code == 1 and "space dev is in your spaces, but ./dev was not made (Permission denied); run xo install " \
+                         "space:dev" in err
+    xs.route("POST", "/me/spaces/connect", status=409, body={"success": False,
+                                                             "error": "You already have a space named dev"})
+    code, _, err = run(capsys, "create", "space", "dev")
+    assert code == 1 and "xo install space:dev makes it" in err
+
+
+def test_connect_repo_renames_a_folder_whose_name_differs_only_in_case(xs, capsys, github):
+    xs.route("POST", "/me/projects/connect", body={"success": True, "data": {"projects": ["quirq-ai/notes"]}})
+    git("init", "-q", "Notes")
+    code, _, err = run(capsys, "connect", "project:Notes", "--repo", "https://github.com/quirq-ai/notes")
+    assert code == 0 and "./Notes renamed ./notes" in err
+    assert sorted(p.name for p in Path(".").iterdir() if p.name.lower() == "notes") == ["notes"]
 
 
 def test_connect_project_and_space(xs, capsys):
@@ -1696,14 +1720,6 @@ def test_connect_asks_which_project_when_two_repos_share_a_name(xs, capsys):
         "projects": ["juanfont/headscale", "alice/headscale"]}})
     code, _, err = run(capsys, "connect", "project:headscale", "space:dev")
     assert code == 1 and "headscale could be juanfont/headscale or alice/headscale" in err
-    assert [r["method"] for r in xs.requests] == ["GET"]
-
-
-def test_connect_refuses_a_project_whose_folder_the_space_already_uses(xs, capsys):
-    xs.route("GET", "/me/spaces", body={"success": True, "data": {"spaces": [
-        {**SPACE, "projects": [{"alice/headscale": "main"}]}]}})
-    code, _, err = run(capsys, "connect", "project:juanfont/headscale", "space:dev")
-    assert code == 1 and "already holds alice/headscale" in err and "nothing was changed" in err
     assert [r["method"] for r in xs.requests] == ["GET"]
 
 
@@ -1745,36 +1761,50 @@ def test_lists_show_a_github_project_by_its_repo_name_with_the_repo_beside_it(xs
 
 def test_create_project_from_a_github_url_records_it_and_clones_it(xs, capsys, github):
     github.repo("quirq-ai/xo")
+    xs.route("GET", "/me/projects", body={"success": True, "data": {"projects": []}})
     xs.route("POST", "/me/projects", body={"success": True, "data": {"projects": ["quirq-ai/xo"]}})
     code, out, err = run(capsys, "create", "project", "https://github.com/quirq-ai/xo.git")
     from xo import gitops
     assert code == 0 and json.loads(out) == [{"name": "xo", "repo": f"{gitops.GITHUB}/quirq-ai/xo"}]
-    assert xs.requests[0]["body"] == {"name": "quirq-ai/xo"}
+    assert [(r["method"], r["body"]) for r in xs.requests] == [("GET", None), ("POST", {"name": "quirq-ai/xo"})]
     assert Path("xo/README").read_text() == "hi\n" and not Path("quirq-ai").exists()
     assert "./xo: cloned" in err
 
 
-def test_create_project_refuses_a_second_repo_whose_folder_is_here(xs, capsys, github):
+def test_create_project_puts_a_second_repo_of_one_name_under_its_owner(xs, capsys, github):
     github.repo("juanfont/headscale")
     github.repo("alice/headscale")
+    xs.route("GET", "/me/projects", body={"success": True, "data": {"projects": []}})
     xs.route("POST", "/me/projects", body={"success": True, "data": {"projects": ["juanfont/headscale"]}})
     assert run(capsys, "create", "project", "https://github.com/juanfont/headscale")[0] == 0
-    code, _, err = run(capsys, "create", "project", "https://github.com/alice/headscale")
-    assert code == 1 and "./headscale already exists here; nothing was changed" in err
-    assert len(xs.requests) == 1
-
-
-def test_create_project_says_how_to_call_a_repo_whose_name_another_project_has(xs, capsys, github):
-    github.repo("alice/headscale")
+    xs.route("GET", "/me/projects", body={"success": True, "data": {"projects": ["juanfont/headscale"]}})
     xs.route("POST", "/me/projects", body={"success": True, "data": {
         "projects": ["juanfont/headscale", "alice/headscale"]}})
     code, out, err = run(capsys, "create", "project", "https://github.com/alice/headscale")
-    assert code == 0 and Path("headscale/.git").is_dir()
+    assert code == 0 and "./alice/headscale: cloned" in err
     assert "call this one alice/headscale in xo commands" in err
+    assert git("remote", "get-url", "origin", cwd="headscale").endswith("/juanfont/headscale")
+    assert git("remote", "get-url", "origin", cwd="alice/headscale").endswith("/alice/headscale")
     assert [p["name"] for p in json.loads(out)] == ["juanfont/headscale", "alice/headscale"]
 
 
+def test_a_plain_project_keeps_its_name_beside_a_repo_called_the_same(xs, capsys, github):
+    github.repo("juanfont/headscale")
+    xs.route("GET", "/me/projects", body={"success": True, "data": {"projects": ["headscale"]}})
+    xs.route("POST", "/me/projects", body={"success": True, "data": {"projects": ["headscale", "juanfont/headscale"]}})
+    xs.route("GET", "/me/spaces", body={"success": True, "data": {"spaces": [SPACE]}})
+    xs.route("POST", "/me/spaces/dev/projects", body={"success": True, "data": {"space": SPACE}})
+    code, out, err = run(capsys, "create", "project", "https://github.com/juanfont/headscale")
+    assert code == 0 and Path("juanfont/headscale/.git").is_dir() and not Path("headscale").exists()
+    assert "call this one juanfont/headscale in xo commands" in err
+    assert [p["name"] for p in json.loads(out)] == ["headscale", "juanfont/headscale"]
+    xs.route("GET", "/me/projects", body={"success": True, "data": {"projects": ["headscale", "juanfont/headscale"]}})
+    assert run(capsys, "connect", "project:headscale", "space:dev")[0] == 0
+    assert xs.requests[-1]["body"] == {"project": "headscale"}
+
+
 def test_create_project_with_a_plain_name_makes_an_empty_repository(xs, capsys, github):
+    xs.route("GET", "/me/projects", body={"success": True, "data": {"projects": []}})
     xs.route("POST", "/me/projects", body={"success": True, "data": {"projects": ["notes"]}})
     assert run(capsys, "create", "project", "notes")[0] == 0
     assert Path("notes/.git").is_dir()
@@ -1791,26 +1821,28 @@ def test_create_project_refuses_a_folder_that_exists_or_a_url_that_is_not_github
 
 def test_create_project_takes_a_name_and_a_url_only_when_they_match(xs, capsys, github):
     github.repo("quirq-ai/xo")
+    xs.route("GET", "/me/projects", body={"success": True, "data": {"projects": []}})
     xs.route("POST", "/me/projects", body={"success": True, "data": {"projects": ["quirq-ai/xo"]}})
     code, _, err = run(capsys, "create", "project", "notes", "https://github.com/quirq-ai/xo")
     assert code == 1 and xs.requests == [] and not Path("notes").exists()
     assert "xo connect project:notes --repo" in err
     assert run(capsys, "create", "project", "quirq-ai/XO", "https://github.com/quirq-ai/xo")[0] == 0
-    assert xs.requests[0]["body"] == {"name": "quirq-ai/xo"}
+    assert xs.requests[1]["body"] == {"name": "quirq-ai/xo"}
     assert Path("xo/README").read_text() == "hi\n"
     shutil.rmtree("xo")
     assert run(capsys, "create", "project", "XO", "https://github.com/quirq-ai/xo")[0] == 0  # its repo's name
-    assert xs.requests[1]["body"] == {"name": "quirq-ai/xo"}
+    assert xs.requests[3]["body"] == {"name": "quirq-ai/xo"}
 
 
 def test_connect_repo_records_it_and_points_the_folder_at_github(xs, capsys, github):
     from xo import gitops
+    xs.route("GET", "/me/projects", body={"success": True, "data": {"projects": []}})
     xs.route("POST", "/me/projects", body={"success": True, "data": {"projects": ["my-notes"]}})
     xs.route("POST", "/me/projects/connect", body={"success": True, "data": {"projects": ["quirq-ai/notes"]}})
     assert run(capsys, "create", "project", "my-notes")[0] == 0
     code, out, err = run(capsys, "connect", "project:my-notes", "--repo", "https://github.com/quirq-ai/notes")
     assert code == 0 and json.loads(out) == [{"name": "notes", "repo": f"{gitops.GITHUB}/quirq-ai/notes"}]
-    assert xs.requests[1]["body"] == {"name": "my-notes", "repo": "quirq-ai/notes"}
+    assert xs.requests[2]["body"] == {"name": "my-notes", "repo": "quirq-ai/notes"}
     assert not Path("my-notes").exists() and Path("notes/.git").is_dir()
     assert git("remote", "get-url", "origin", cwd="notes") == f"{gitops.GITHUB}/quirq-ai/notes"
     assert "moved to ./notes" in err
@@ -1899,6 +1931,7 @@ def test_connect_repo_refuses_before_sending(xs, capsys, argv):
 
 
 def test_create_project_says_when_the_folder_could_not_be_made(xs, capsys, github):
+    xs.route("GET", "/me/projects", body={"success": True, "data": {"projects": []}})
     xs.route("POST", "/me/projects", body={"success": True, "data": {"projects": ["quirq-ai/none"]}})
     code, _, err = run(capsys, "create", "project", "quirq-ai/none")
     assert code == 1 and "quirq-ai/none is in your projects, but its folder was not made: git clone failed" in err

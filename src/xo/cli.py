@@ -51,7 +51,7 @@
                                             XO space you already have.
     xo list projects | spaces | shared      show your projects, your spaces, or the invites shared
                                             with you.
-    xo share space:S|project:O/R USERNAME   invite that user to a copy of the space (its name and
+    xo share space:S|project:P USERNAME     invite that user to a copy of the space (its name and
                                             projects) or the project.
     xo accept ID [--as NAME] [--yes]        show invite ID (from xo list shared), ask, then add a
                                             shared space as a space of your own.
@@ -678,10 +678,16 @@ def _create_project(args: argparse.Namespace) -> int:
                           f"{gitops.GITHUB}/{repo}, or keep {name} without one and add it later with xo connect "
                           f"project:{name} --repo {gitops.GITHUB}/{repo}")
         name = repo
-    dest = Path(names.folder(name))
+    if not names.is_github(name) and (Path(name).exists() or Path(name).is_symlink()):
+        raise XoError(f"./{name} already exists here; nothing was changed")
+    client = _client(args, server=True)
+    known = _answer(client.request("GET", "/me/projects").data, "projects", "a projects list")
+    if not isinstance(known, list):
+        raise XoError("the xo server's projects list is not a list")
+    # Its folder among your projects with it added: ./REPO, or ./OWNER/REPO when another is called REPO.
+    dest = Path(names.folder(name, [*known, name]))
     if dest.exists() or dest.is_symlink():
         raise XoError(f"./{dest} already exists here; nothing was changed")
-    client = _client(args, server=True)
     projects = _answer(_post_server(client, "/me/projects", {"name": name}), "projects", "a projects list")
     try:
         gitops.clone(name, dest) if names.is_github(name) else gitops.init(dest)
@@ -689,9 +695,9 @@ def _create_project(args: argparse.Namespace) -> int:
         raise XoError(f"{name} is in your projects, but its folder was not made: {e}") from None
     how = f"cloned {gitops.GITHUB}/{name}" if names.is_github(name) else "an empty git repository"
     print(f"xo: ./{dest}: {how}", file=sys.stderr)
-    if len(names.named(projects, names.folder(name))) > 1:
-        print(f"xo: more than one of your projects is called {names.folder(name)}; call this one {name} in xo "
-              "commands", file=sys.stderr)
+    if isinstance(projects, list) and names.named(projects, names.short(name)) != [name]:
+        print(f"xo: another of your projects is called {names.short(name)}; call this one {name} in xo commands",
+              file=sys.stderr)
     print(client.scrub(_json(_shown_projects(projects))))
     return 0
 
@@ -706,8 +712,8 @@ def _shown_projects(projects: Any) -> Any:
         if not isinstance(p, str) or not names.is_github(p):
             out.append({"name": p})
             continue
-        short = names.folder(p)
-        out.append({"name": short if len(names.named(projects, short)) == 1 else p, "repo": f"{gitops.GITHUB}/{p}"})
+        out.append({"name": names.short(p) if names.named(projects, names.short(p)) == [p] else p,
+                    "repo": f"{gitops.GITHUB}/{p}"})
     return out
 
 
@@ -743,14 +749,25 @@ def _create_local_space(args: argparse.Namespace) -> int:
     """`xo create space NAME`: a space here only. The server records it in your spaces with no
     projects (the same entry xo connect space:NAME makes, nothing on XO), then ./NAME is made and
     marked installed, so xo connect, xo install and xo update work on it."""
-    name = args.space_name
-    if not names.space_ok(name):
+    if not names.space_ok(args.space_name):
         raise XoError(names.SPACE_RULE)
+    name = args.space_name.lower()
+    if name in names.SPACE_KINDS or name in ("new", "create"):
+        raise XoError(f"{name} is a kind of space, not a name: name it first, xo create space NAME {name}"
+                      if name in names.SPACE_KINDS else f"a space can't be called {name}")
+    if name != args.space_name:
+        print(f"xo: space names are lowercase, as on XO, so this space is {name}", file=sys.stderr)
     root = Path(name)
     if root.exists() or root.is_symlink():
         raise XoError(f"./{name} already exists here; nothing was changed")
     client = _client(args, server=True)
-    space = _answer(_post_server(client, "/me/spaces/connect", {"name": name}), "space", "a space")
+    try:
+        data = _post_server(client, "/me/spaces/connect", {"name": name})
+    except XoError as e:
+        if "already have a space named" in str(e):
+            raise XoError(f"{e}. If it is yours and ./{name} is missing, xo install space:{name} makes it") from None
+        raise
+    space = _answer(data, "space", "a space")
     try:
         workspace.made(name, space)
     except (OSError, XoError) as e:
@@ -783,7 +800,7 @@ def _connect(args: argparse.Namespace) -> int:
         client = _client(args, server=True)
         data = _post_server(client, "/me/projects/connect", {"name": value, "repo": repo})
         projects = _answer(data, "projects", "a projects list")
-        _local_repo(Path(value), repo)
+        _local_repo(Path(value), repo, projects)
         print(client.scrub(_json(_shown_projects(projects))))
         return 0
     if kind == "project":
@@ -798,11 +815,6 @@ def _connect(args: argparse.Namespace) -> int:
             raise XoError(names.REF_RULE)
         client = _client(args, server=True)
         value = _which(client, value)
-        held = workspace.space_projects(client, space)
-        clash = [p for p in held if p != value and names.folder(p).casefold() == names.folder(value).casefold()]
-        if clash:
-            raise XoError(f"space {space} already holds {clash[0]}, which goes in the same folder "
-                          f"{names.folder(value)}; nothing was changed")
         body = {"project": value, **({"ref": args.ref} if args.ref is not None else {})}
         data = _post_server(client, f"/me/spaces/{quote(space, safe='')}/projects", body)
     elif kind == "space":
@@ -830,9 +842,10 @@ def _which(client: Client, typed: str) -> str:
                              typed)
 
 
-def _local_repo(dest: Path, repo: str) -> None:
+def _local_repo(dest: Path, repo: str, projects: Any) -> None:
     """After the project is recorded as OWNER/REPO: point its folder here, if any, at the repo, and move
-    it to ./REPO, where xo install and xo sync look for it."""
+    it to ./REPO (./OWNER/REPO when another project is called REPO), where xo install and xo sync look
+    for it."""
     if not dest.is_dir():
         print(f"xo: ./{dest} is not here; xo install project:{repo} clones it", file=sys.stderr)
         return
@@ -841,9 +854,21 @@ def _local_repo(dest: Path, repo: str) -> None:
     except XoError as e:
         print(f"xo: ./{dest} was left as it is and not moved: {e}", file=sys.stderr)
         return
-    target = Path(names.folder(repo))
-    if str(target).casefold() == str(dest).casefold():
+    target = Path(names.folder(repo, projects if isinstance(projects, list) else []))
+    if str(target) == str(dest):
         return  # already called after its repo
+    if str(target).casefold() == str(dest).casefold():
+        # Only the case differs: move through another name, which works on a filesystem that ignores case.
+        step = dest.with_name(f"{dest.name}.xo-moving")
+        try:
+            dest.rename(step)
+            step.rename(target)
+        except OSError as e:
+            print(f"xo: ./{dest} could not be renamed ./{target} ({e.strerror or type(e).__name__}); rename it "
+                  "yourself", file=sys.stderr)
+            return
+        print(f"xo: ./{dest} renamed ./{target}", file=sys.stderr)
+        return
     if target.exists() or target.is_symlink():
         print(f"xo: ./{target} already exists, so ./{dest} was not moved there; move it yourself", file=sys.stderr)
         return
@@ -861,14 +886,14 @@ def _local_repo(dest: Path, repo: str) -> None:
 def _workspace(args: argparse.Namespace) -> int:
     """`xo install | update | sync project:P | space:S` (see xo/workspace.py)."""
     kind, name = workspace.target(args.target)
-    client = _client(args, server=True) if kind == "space" or args.command == "install" else None
+    client = _client(args, server=True)  # a project too: its name is looked up in your projects
     result = getattr(workspace, args.command)(client, kind, name)
-    print(_json(result) if client is None else client.scrub(_json(result)))
+    print(client.scrub(_json(result)))
     return 0
 
 
 def _share(args: argparse.Namespace) -> int:
-    """`xo share space:S|project:OWNER/REPO USERNAME`: an invite in that user's `shared`, which they
+    """`xo share space:S|project:P USERNAME`: an invite in that user's `shared`, which they
     accept or reject. The xo server writes it; the invite holds the space's name and projects."""
     kind, name = workspace.target(args.target)
     client = _client(args, server=True)
@@ -1200,7 +1225,7 @@ def main(argv: list[str] | None = None) -> int:
                     help="the project's https://github.com/OWNER/REPO, when NAME is also given (NAME must be REPO "
                          "or OWNER/REPO)")
     mp.set_defaults(run=_create_project)
-    ms = mksub.add_parser("space", parents=[common],
+    ms = mksub.add_parser("space", parents=[common], usage="xo create space [-h] NAME [KIND [flags]]",
                           help="create a space and record it in your spaces: on XO with xo create space NAME KIND, "
                                "or here only (./NAME, nothing on XO) with xo create space NAME")
     ms.add_argument("space_name", metavar="NAME", help=names.XO_NAME_RULE + "; with no KIND, " + names.SPACE_RULE)
@@ -1230,7 +1255,7 @@ def main(argv: list[str] | None = None) -> int:
     sh = sub.add_parser("share", parents=[common],
                         help="invite a user to a copy of one of your spaces or GitHub projects (it waits in "
                              "their shared list until they accept or reject it)")
-    sh.add_argument("target", metavar="space:NAME|project:OWNER/REPO")
+    sh.add_argument("target", metavar="space:NAME|project:NAME")
     sh.add_argument("username", metavar="USERNAME", help="their XO username")
     sh.set_defaults(run=_share)
     for verb, about in (("accept", "add an invite from your shared list: a space as a space of your own, a "

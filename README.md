@@ -56,7 +56,7 @@ xo spaces --space-id 6f1c2c1e-...   # connection URLs for a space you own
 | `xo status` | each service's address and whether you are logged in; never a key | none |
 | `xo me` | `GET /me` on your xo server; prints `{"xo": {username, imageUrl, ..., "public_data": {...}, "private_data": {...}}}` | none |
 | `xo projects` / `xo projects add NAME` | `GET` / `POST /me/projects` on your xo server: the `projects` list in your own private metadata; the server makes the change and writes only that list | the name only |
-| `xo create project NAME [URL]` | `POST /me/projects`, then clones `https://github.com/OWNER/REPO` into `./REPO` (or `git init ./NAME` for a plain name) with your own git. A project with a repo is recorded as `OWNER/REPO` and called `REPO`, so give a URL alone, or a NAME that is its `REPO` or `OWNER/REPO` | the name only |
+| `xo create project NAME [URL]` | `GET` and `POST /me/projects`, then clones `https://github.com/OWNER/REPO` into `./REPO` (`./OWNER/REPO` when another of your projects is called `REPO`), or `git init ./NAME` for a plain name, with your own git. A project with a repo is recorded as `OWNER/REPO` and called `REPO`, so give a URL alone, or a NAME that is its `REPO` or `OWNER/REPO` | the name only |
 | `xo connect project:P space:S` / `xo connect space:S` | `POST /me/spaces/S/projects` / `POST /me/spaces/connect`: a project's ref in a space, or a new space entry in your metadata | `--ref` (default main) / `--id` for an XO space you already have |
 | `xo connect project:P --repo URL` | `POST /me/projects/connect`: a project made with a name only gets its repo and is recorded as `OWNER/REPO`; `./P` gets that origin if it has none and moves to `./REPO` (left in place unless its origin, fetch and push, is that repository) | the name and `OWNER/REPO` |
 | `xo list projects\|spaces\|shared` | `GET /me/projects` / `GET /me/spaces` / `GET /me/shared`; projects show as `{"name": "headscale", "repo": "https://github.com/juanfont/headscale"}` (by `OWNER/REPO` when two of yours share a repo name) | none |
@@ -67,9 +67,13 @@ xo spaces --space-id 6f1c2c1e-...   # connection URLs for a space you own
 | `xo sync space:S` / `project:P` | `git pull --rebase` and push of each branch, then merges the space's changes with yours and `PUT`s them / `git pull --rebase` and push | none |
 | `xo user-metadata get` / `update` | `GET` / `PATCH /user-metadata/{userId}` on your xo server | publicMetadata, privateMetadata as JSON objects (admin keys only); try `--dry-run` first: a wrong `--user-id` edits another user |
 
-A GitHub project is called by its repo's name in every command (`project:headscale`); when two of
-your projects share that name, call each by its `OWNER/REPO`. A checkout an older xo put in
-`./OWNER/REPO` is still used there.
+A GitHub project is called by its repo's name in every command (`project:headscale`); when another
+of your projects has that name, call it by its `OWNER/REPO` (its folder is then `./OWNER/REPO`). A
+checkout an older xo put in `./OWNER/REPO` is still used there.
+
+`xo projects`, `xo list projects`, `xo create project` and `xo connect project:P --repo` print your
+projects as `[{"name": "headscale", "repo": "https://github.com/juanfont/headscale"}, {"name":
+"notes"}]`; before short names they printed `["juanfont/headscale", "notes"]`.
 
 Every space on XO is created with `xo create space NAME KIND`; the old `xo claude-code`, `xo codex`, ...
 commands are gone and say so. It prints the recorded space and XO's answer, `id` included, and

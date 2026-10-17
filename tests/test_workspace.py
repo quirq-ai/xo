@@ -3,6 +3,7 @@ repositories standing in for GitHub."""
 from __future__ import annotations
 
 import json
+import shutil
 import types
 from pathlib import Path
 
@@ -152,7 +153,7 @@ def test_project_update_pushes_and_sync_rebases_first(space):
     workspace.install(space.client, "project", "o/a")
     Path("a/README").write_text("pushed\n")
     git("commit", "-q", "-am", "pushed", cwd="a")
-    workspace.update(None, "project", "o/a")
+    workspace.update(space.client, "project", "o/a")
     assert git("log", "-1", "--format=%s", "main", cwd=space.hub.root / "o/a") == "pushed"
     space.hub.seeds.joinpath("o/a")  # someone else pushes on top
     git("pull", "-q", "origin", "main", cwd=space.hub.seeds / "o/a")
@@ -161,8 +162,8 @@ def test_project_update_pushes_and_sync_rebases_first(space):
     git("add", "NEW", cwd="a")
     git("commit", "-q", "-m", "mine", cwd="a")
     with pytest.raises(XoError, match="run xo sync"):
-        workspace.update(None, "project", "o/a")
-    workspace.sync(None, "project", "o/a")
+        workspace.update(space.client, "project", "o/a")
+    workspace.sync(space.client, "project", "o/a")
     assert git("log", "-2", "--format=%s", "main", cwd=space.hub.root / "o/a").split("\n") == ["mine", "theirs"]
 
 
@@ -171,21 +172,25 @@ def test_project_update_refuses_a_detached_or_dirty_checkout(space):
     workspace.install(space.client, "project", "o/a")
     Path("a/README").write_text("dirty\n")
     with pytest.raises(XoError, match="not committed"):
-        workspace.update(None, "project", "o/a")
+        workspace.update(space.client, "project", "o/a")
     git("checkout", "-q", "README", cwd="a")
     git("switch", "-q", "--detach", cwd="a")
     with pytest.raises(XoError, match="detached"):
-        workspace.update(None, "project", "o/a")
+        workspace.update(space.client, "project", "o/a")
 
 
 def test_project_update_and_sync_refuse_a_folder_that_is_not_a_checkout_of_its_own(space, tmp_path):
     git("init", "-q", "-b", "main")  # the working folder is itself a repository
     Path("a").mkdir(parents=True)
+    space.store.stored["private_metadata"]["projects"] = ["o/a"]
     for verb in (workspace.update, workspace.sync):
-        with pytest.raises(XoError, match="not a git checkout of its own"):
-            verb(None, "project", "o/a")
-        with pytest.raises(XoError, match="not a git checkout of its own"):
-            verb(None, "project", "o/missing")
+        with pytest.raises(XoError, match=r"o/a has no checkout here \(looked in ./a and ./o/a\); xo install"):
+            verb(space.client, "project", "o/a")
+        with pytest.raises(XoError, match="o/missing is not in your projects"):
+            verb(space.client, "project", "o/missing")
+    (Path("a") / ".git").write_text("gitdir: ../.git\n")  # looks like a checkout, but not of o/a
+    with pytest.raises(XoError, match="./a is not a checkout of o/a"):
+        workspace.update(space.client, "project", "o/a")
 
 
 def test_install_project_fast_forwards_an_existing_checkout(space, capsys):
@@ -205,19 +210,82 @@ def test_install_project_takes_its_repo_name_and_asks_when_two_share_it(space, c
         workspace.install(space.client, "project", "a")
 
 
-def test_a_space_with_two_repos_of_one_name_is_not_installed(space):
-    space.store.stored["private_metadata"]["spaces"] = [_space("dev", projects=[{"o/a": "main"}, {"p/A": "main"}])]
-    with pytest.raises(XoError, match="o/a and p/A would both go in the folder A"):
-        workspace.install(space.client, "space", "dev")
-    assert not Path("dev").exists()
+def test_a_space_with_a_fork_and_its_upstream_keeps_both_by_owner(space):
+    space.hub.repo("p/A")
+    space.store.stored["private_metadata"]["projects"] = ["o/a", "p/A", "o/b"]
+    space.store.stored["private_metadata"]["spaces"] = [_space("dev", projects=[
+        {"o/a": "main"}, {"p/A": "main"}, {"o/b": "v1"}])]
+    workspace.install(space.client, "space", "dev")
+    assert git("remote", "get-url", "origin", cwd="dev/o/a").endswith("/o/a")
+    assert git("remote", "get-url", "origin", cwd="dev/p/A").endswith("/p/A")
+    assert Path("dev/b/README").exists() and not Path("dev/a").exists()
+    git("switch", "-q", "-c", "feature", cwd="dev/p/A")
+    git("push", "-q", "-u", "origin", "feature", cwd="dev/p/A")
+    assert workspace.update(space.client, "space", "dev")["rev"] == 2
+    assert _stored(space)["projects"][1] == {"p/A": "feature"}
+    assert workspace.sync(space.client, "space", "dev")["rev"] == 2
 
 
 def test_install_never_fetches_another_repo_that_has_the_same_folder(space):
     space.hub.repo("p/a")
-    git("clone", "-q", f"{space.hub.root}/p/a", "a")
+    git("clone", "-q", f"file://{space.hub.root}/p/a", "a")
     space.store.stored["private_metadata"]["projects"] = ["o/a"]
     with pytest.raises(XoError, match="./a is not a checkout of o/a"):
         workspace.install(space.client, "project", "a")
+
+
+def test_project_update_and_sync_find_a_checkout_by_short_name_or_where_an_older_xo_put_it(space):
+    space.store.stored["private_metadata"]["projects"] = ["o/a"]
+    git("clone", "-q", f"file://{space.hub.root}/o/a", "o/a")  # an older xo's layout
+    Path("o/a/NEW").write_text("x")
+    git("add", "NEW", cwd="o/a")
+    git("commit", "-q", "-m", "mine", cwd="o/a")
+    assert workspace.update(space.client, "project", "a") == {"project": "o/a"}
+    assert git("log", "-1", "--format=%s", "main", cwd=space.hub.root / "o/a") == "mine"
+    assert workspace.sync(space.client, "project", "A") == {"project": "o/a"}
+    assert workspace.install(space.client, "project", "a") == {"project": "o/a"} and not Path("a").exists()
+
+
+def test_project_update_never_pushes_another_repos_checkout(space):
+    space.hub.repo("p/a")
+    space.store.stored["private_metadata"]["projects"] = ["o/a", "p/a"]
+    git("clone", "-q", f"file://{space.hub.root}/o/a", "a")  # o/a, where p/a's short name would put it
+    for verb in (workspace.update, workspace.sync):
+        with pytest.raises(XoError, match="p/a has no checkout here"):
+            verb(space.client, "project", "p/a")
+        with pytest.raises(XoError, match="a could be o/a or p/a"):
+            verb(space.client, "project", "a")
+    space.store.stored["private_metadata"]["projects"] = ["p/a"]
+    with pytest.raises(XoError, match="./a is not a checkout of p/a"):
+        workspace.update(space.client, "project", "p/a")
+
+
+def test_a_repo_named_dot_xo_never_lands_on_the_spaces_own_folder(space, tmp_path):
+    space.hub.repo("evil/.xo")
+    seed = space.hub.seeds / "evil/.xo"
+    victim = tmp_path / "victim"
+    victim.write_text("untouched")
+    (seed / "state.tmp").symlink_to(victim)
+    git("add", "state.tmp", cwd=seed)
+    git("commit", "-q", "-m", "link", cwd=seed)
+    git("push", "-q", "origin", "main", cwd=seed)
+    space.store.stored["private_metadata"]["spaces"] = [_space("dev", projects=[{"evil/.xo": "main"}])]
+    workspace.install(space.client, "space", "dev")
+    assert Path("dev/evil/.xo/state.tmp").is_symlink() and victim.read_text() == "untouched"
+    assert json.loads(Path("dev/.xo/state.json").read_text())["projects"] == [{"evil/.xo": "main"}]
+
+
+def test_the_state_file_is_never_written_through_a_link(space, tmp_path):
+    victim = tmp_path / "victim"
+    victim.write_text("untouched")
+    Path("dev/.xo").mkdir(parents=True)
+    Path("dev/.xo/state.tmp").symlink_to(victim)
+    workspace.install(space.client, "space", "dev")
+    assert victim.read_text() == "untouched" and json.loads(Path("dev/.xo/state.json").read_text())["rev"] == 1
+    shutil.rmtree("dev/.xo")
+    Path("dev/.xo").symlink_to(tmp_path)
+    with pytest.raises(XoError, match="not xo's own folder"):
+        workspace.install(space.client, "space", "dev")
 
 
 def test_a_checkout_an_older_xo_put_in_owner_repo_is_still_used(space):
@@ -238,7 +306,7 @@ def test_project_sync_that_conflicts_leaves_the_checkout_as_it_was(space):
     Path("a/README").write_text("mine\n")
     git("commit", "-q", "-am", "mine", cwd="a")
     with pytest.raises(XoError, match="left it as it was"):
-        workspace.sync(None, "project", "o/a")
+        workspace.sync(space.client, "project", "o/a")
     assert git("branch", "--show-current", cwd="a") == "main" and Path("a/README").read_text() == "mine\n"
 
 

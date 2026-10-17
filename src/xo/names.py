@@ -40,18 +40,37 @@ def is_github(name: str) -> bool:
     return "/" in name
 
 
-def folder(project: str) -> str:
-    """The folder a project gets: a GitHub project's repo name (juanfont/headscale is ./headscale), a
-    plain name as it is. The project is still recorded as OWNER/REPO."""
+# Folders a project never gets: .xo holds a space's own state.
+_RESERVED_FOLDERS = {".xo"}
+
+
+def short(project: str) -> str:
+    """What a project is called: a GitHub project's repo name, a plain name as it is."""
     return project.partition("/")[2] if is_github(project) else project
 
 
+def folder(project: str, projects: list | tuple = ()) -> str:
+    """The folder a project gets among projects (the others in the same place): a GitHub project's
+    repo name (juanfont/headscale is ./headscale), or OWNER/REPO, as before short names, when another
+    of projects is called the same or the repo name is reserved. A plain name as it is. The project is
+    always recorded as OWNER/REPO."""
+    if not is_github(project):
+        return project
+    key = short(project).casefold()
+    if key in _RESERVED_FOLDERS or any(isinstance(p, str) and p.casefold() != project.casefold()
+                                       and short(p).casefold() == key for p in projects):
+        return project
+    return short(project)
+
+
 def named(projects: list, typed: str) -> list[str]:
-    """The projects a typed name means: OWNER/REPO names one exactly; a plain name means the plain
-    project of that name or any GitHub project whose repo has it (any case)."""
+    """The projects a typed name means (any case): the project of exactly that name if there is one
+    (OWNER/REPO, or a plain name); otherwise, for a plain name, each GitHub project whose repo has it."""
     key = typed.casefold()
-    return [p for p in projects if isinstance(p, str)
-            and (p.casefold() == key or (not is_github(typed) and folder(p).casefold() == key))]
+    exact = [p for p in projects if isinstance(p, str) and p.casefold() == key]
+    if exact or is_github(typed):
+        return exact
+    return [p for p in projects if isinstance(p, str) and is_github(p) and short(p).casefold() == key]
 
 
 def project_ok(name: str) -> bool:

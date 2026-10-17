@@ -181,7 +181,7 @@ html { scroll-behavior: smooth; }
 <body>
 <div class="wrap">
 	<header class="top">
-		<div class="eyebrow">quirq-ai/xo · main as of this change: through #40</div>
+		<div class="eyebrow">quirq-ai/xo · main as of this change: through #42</div>
 		<h1>xo: one package, a CLI and <span class="x">its server</span></h1>
 		<p class="lede">The command line for XO Cloud's core API. The same Python package runs on your machine as <code>xo</code> and on Vercel as the xo server, which holds the Clerk Secret Key so the CLI never needs it. Standard library only. It also keeps your <code>projects</code> and <code>spaces</code> in your own Clerk metadata, lets you share a space or project with another user as an invite they accept or reject, and installs those projects on your machine and keeps them in step. Every command has its own diagram in section 03. Left out: test internals, the redaction rules in detail, and the Vercel deploy steps (see <code>docs/</code>).</p>
 		<div class="scroll">
@@ -354,12 +354,12 @@ html { scroll-behavior: smooth; }
 				<tr><td>xo connect project:P --repo URL</td><td>server, then git</td><td>A project made with a name only gets its repo and is recorded as <code>OWNER/REPO</code> (refused while P is in a space); <code>./P</code> gets that origin only if it has none, and moves to <code>./REPO</code> only if its origin is that repo</td></tr>
 				<tr><td>xo connect space:S [--id ID]</td><td>server, then XO</td><td>Records a space entry; <code>--id</code> ties it to an XO space your key can read</td></tr>
 				<tr><td>xo list projects | spaces | shared</td><td>server only</td><td>Shows your projects, your spaces, or the invites shared with you (each with an id)</td></tr>
-				<tr><td>xo share space:S | project:REPO USERNAME</td><td>server only</td><td>An invite in that user's <code>shared</code>: a space's name and GitHub projects, or one GitHub project</td></tr>
+				<tr><td>xo share space:S | project:P USERNAME</td><td>server only</td><td>An invite in that user's <code>shared</code>: a space's name and GitHub projects, or one GitHub project</td></tr>
 				<tr><td>xo accept ID [--as NAME | --space S [--ref R]] [--yes]</td><td>server only</td><td>Shows the invite and asks, then adds a shared space as your own (<code>--as</code> renames it), or a shared project to your space S at R</td></tr>
 				<tr><td>xo reject ID</td><td>server only</td><td>Takes the invite off your <code>shared</code>; its sender can share again</td></tr>
-				<tr><td>xo install project:P | space:S</td><td>server, git</td><td>Clones or fetches P here; for a space, each project into <code>./S/</code> at its ref</td></tr>
-				<tr><td>xo update project:P | space:S</td><td>git, server</td><td>Pushes P (never forced); for a space, records the refs checked out under <code>./S/</code></td></tr>
-				<tr><td>xo sync project:P | space:S</td><td>git, server</td><td><code>pull --rebase</code> and push P; for a space, merges its changes with yours, then records</td></tr>
+				<tr><td>xo install project:P | space:S</td><td>server, git</td><td>Looks P up, then clones or fetches it into <code>./REPO</code>; for a space, each project into <code>./S/</code> at its ref</td></tr>
+				<tr><td>xo update project:P | space:S</td><td>server, git</td><td>Looks P up, then pushes its checkout (never forced); for a space, records the refs checked out under <code>./S/</code></td></tr>
+				<tr><td>xo sync project:P | space:S</td><td>server, git</td><td>Looks P up, then <code>pull --rebase</code> and push its checkout; for a space, merges its changes with yours, then records</td></tr>
 				<tr><td>xo user-metadata get --user-id ID</td><td>server only</td><td>Admin keys only: both metadata buckets</td></tr>
 				<tr><td>xo user-metadata update --user-id ID --private-metadata JSON</td><td>server only</td><td>Admin keys only; deep merges into allow-listed keys (also <code>--public-metadata</code>); try <code>--dry-run</code> first</td></tr>
 				<tr><td>xo login [xo|me|github]</td><td>server, gh</td><td>Reads <code>/config</code>, checks and saves the XO key, runs gh's login</td></tr>
@@ -627,7 +627,7 @@ html { scroll-behavior: smooth; }
 <figcaption><strong>Admin needs two locks, and none is issued yet.</strong> Until a key has the claim and its id is listed, every caller gets 403. PATCH changes only top-level keys named in <code>XO_EDITABLE_*_KEYS</code>.</figcaption>
 </figure>
 <h3 id="cmd-spaces-on-xo">Spaces on XO</h3>
-<p>Every space is created one way, <code>xo create space NAME KIND</code>, and recorded in your spaces. The old <code>xo claude-code</code>, <code>xo codex</code>, ... commands are gone and say so.</p>
+<p>Every space on XO is created one way, <code>xo create space NAME KIND</code>, and recorded in your spaces. With no KIND, <code>xo create space NAME</code> records a space here only, with nothing on XO. The old <code>xo claude-code</code>, <code>xo codex</code>, ... commands are gone and say so.</p>
 <h4><code>xo create space NAME KIND</code></h4>
 <figure>
 <div class="canvas">
@@ -693,6 +693,64 @@ html { scroll-behavior: smooth; }
 </svg>
 </div>
 <figcaption><strong>One name, on XO and in your spaces.</strong> KIND is <code>claude-code</code>, <code>codex</code>, <code>antigravity</code>, <code>hermes</code>, <code>openclaw</code>, <code>xo-cowork</code> or <code>nebius-openclaw</code>; NAME is 1 to 32 letters, digits or hyphens. XO lowercases space names, so xo lowercases NAME before it sends it and says so when that changes it. Everything recording needs is checked before XO is called. Every kind but <code>nebius-openclaw</code> stores your key inside the new space, and xo says so first.</figcaption>
+</figure>
+<h4><code>xo create space NAME</code></h4>
+<figure>
+<div class="canvas">
+<svg class="d" viewBox="0 0 960 710" role="img" aria-label="xo create space NAME: A space here only, and nothing on XO.">
+<defs>
+<marker id="c40a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
+<marker id="c40h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
+</defs>
+<line class="life" x1="240" y1="40" x2="240" y2="704"/>
+<rect class="hdr" x="135" y="12" width="210" height="28" rx="7"/>
+<text class="t" x="240" y="31" text-anchor="middle">You: xo CLI</text>
+<line class="life" x1="480" y1="40" x2="480" y2="704"/>
+<rect class="hdr" x="375" y="12" width="210" height="28" rx="7"/>
+<text class="t" x="480" y="31" text-anchor="middle">xo server</text>
+<line class="life" x1="720" y1="40" x2="720" y2="704"/>
+<rect class="hdr" x="615" y="12" width="210" height="28" rx="7"/>
+<text class="t" x="720" y="31" text-anchor="middle">Clerk</text>
+<rect class="box" x="135" y="58" width="210" height="46" rx="8"/>
+<text class="m" x="240" y="78" text-anchor="middle">xo create space dev</text>
+<text class="s" x="240" y="95" text-anchor="middle">no KIND</text>
+<rect class="box" x="135" y="142" width="210" height="46" rx="8"/>
+<text class="t" x="240" y="162" text-anchor="middle">lowercase NAME</text>
+<text class="s" x="240" y="179" text-anchor="middle">./dev here? refuse</text>
+<line class="edge" x1="240" y1="104" x2="240" y2="140" marker-end="url(#c40a)"/>
+<rect class="box" x="375" y="226" width="210" height="46" rx="8"/>
+<text class="m" x="480" y="246" text-anchor="middle">POST /me/spaces/connect</text>
+<text class="s" x="480" y="263" text-anchor="middle">{&quot;name&quot;} only</text>
+<path class="edge" d="M240,188 V208 H480 V224" marker-end="url(#c40a)"/>
+<text class="lbl" x="360" y="203" text-anchor="middle">name</text>
+<rect class="box" x="615" y="310" width="210" height="46" rx="8"/>
+<text class="t" x="720" y="330" text-anchor="middle">verify, read user</text>
+<text class="s" x="720" y="347" text-anchor="middle">name free?</text>
+<path class="edge" d="M480,272 V292 H720 V308" marker-end="url(#c40a)"/>
+<text class="lbl" x="600" y="287" text-anchor="middle">verify</text>
+<rect class="box" x="375" y="394" width="210" height="46" rx="8"/>
+<text class="t" x="480" y="414" text-anchor="middle">new entry</text>
+<text class="s" x="480" y="431" text-anchor="middle">no projects, rev 1</text>
+<path class="edge dash" d="M720,356 V376 H480 V392" marker-end="url(#c40a)"/>
+<text class="lbl" x="600" y="371" text-anchor="middle">user</text>
+<rect class="box hot" x="615" y="478" width="210" height="46" rx="8"/>
+<text class="t" x="720" y="498" text-anchor="middle">merge {spaces}</text>
+<text class="s" x="720" y="515" text-anchor="middle">nothing on XO</text>
+<path class="edge hot" d="M480,440 V460 H720 V476" marker-end="url(#c40h)"/>
+<text class="lbl hot" x="600" y="455" text-anchor="middle">write</text>
+<rect class="box" x="375" y="562" width="210" height="46" rx="8"/>
+<text class="t" x="480" y="582" text-anchor="middle">read back</text>
+<text class="s" x="480" y="599" text-anchor="middle">after 0.3 s</text>
+<path class="edge dash" d="M720,524 V544 H480 V560" marker-end="url(#c40a)"/>
+<text class="lbl" x="600" y="539" text-anchor="middle">written</text>
+<rect class="box" x="135" y="646" width="210" height="46" rx="8"/>
+<text class="t" x="240" y="666" text-anchor="middle">make ./dev</text>
+<text class="s" x="240" y="683" text-anchor="middle">.xo/state.json, rev 1</text>
+<path class="edge dash" d="M480,608 V628 H240 V644" marker-end="url(#c40a)"/>
+<text class="lbl" x="360" y="623" text-anchor="middle">200</text>
+</svg>
+</div>
+<figcaption><strong>A space here only, and nothing on XO.</strong> The same entry <code>xo connect space:S</code> makes. xo lowercases NAME, as XO does, and refuses a kind word (<code>codex</code>, ...), <code>new</code> or <code>create</code>, and a <code>./NAME</code> that is already here, before anything is sent. Then it makes <code>./NAME/.xo/state.json</code> at rev 1 with no projects, so the space counts as installed. If the entry is written but the folder is not made, xo says to run <code>xo install space:NAME</code>; a name already taken (409) gets the hint that <code>xo install space:NAME</code> makes the folder.</figcaption>
 </figure>
 <h4><code>xo claude-code | codex | ... (removed)</code></h4>
 <figure>
@@ -816,21 +874,21 @@ html { scroll-behavior: smooth; }
 <h4><code>xo create project NAME [URL]</code></h4>
 <figure>
 <div class="canvas">
-<svg class="d" viewBox="0 0 960 626" role="img" aria-label="xo create project NAME [URL]: A project is named after its repo.">
+<svg class="d" viewBox="0 0 960 794" role="img" aria-label="xo create project NAME [URL]: A project is named after its repo.">
 <defs>
 <marker id="c10a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
 <marker id="c10h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
 </defs>
-<line class="life" x1="135" y1="40" x2="135" y2="620"/>
+<line class="life" x1="135" y1="40" x2="135" y2="788"/>
 <rect class="hdr" x="32" y="12" width="206" height="28" rx="7"/>
 <text class="t" x="135" y="31" text-anchor="middle">You: xo CLI</text>
-<line class="life" x1="365" y1="40" x2="365" y2="620"/>
+<line class="life" x1="365" y1="40" x2="365" y2="788"/>
 <rect class="hdr" x="262" y="12" width="206" height="28" rx="7"/>
 <text class="t" x="365" y="31" text-anchor="middle">xo server</text>
-<line class="life" x1="595" y1="40" x2="595" y2="620"/>
+<line class="life" x1="595" y1="40" x2="595" y2="788"/>
 <rect class="hdr" x="492" y="12" width="206" height="28" rx="7"/>
 <text class="t" x="595" y="31" text-anchor="middle">Clerk</text>
-<line class="life" x1="825" y1="40" x2="825" y2="620"/>
+<line class="life" x1="825" y1="40" x2="825" y2="788"/>
 <rect class="hdr" x="722" y="12" width="206" height="28" rx="7"/>
 <text class="t" x="825" y="31" text-anchor="middle">git · GitHub</text>
 <rect class="box" x="32" y="58" width="206" height="46" rx="8"/>
@@ -841,31 +899,41 @@ html { scroll-behavior: smooth; }
 <text class="s" x="135" y="179" text-anchor="middle">a repo: OWNER/REPO</text>
 <line class="edge" x1="135" y1="104" x2="135" y2="140" marker-end="url(#c10a)"/>
 <rect class="box" x="262" y="226" width="206" height="46" rx="8"/>
-<text class="m" x="365" y="246" text-anchor="middle">POST /me/projects</text>
-<text class="s" x="365" y="263" text-anchor="middle">the same add as above</text>
+<text class="m" x="365" y="246" text-anchor="middle">GET /me/projects</text>
+<text class="s" x="365" y="263" text-anchor="middle">your projects now</text>
 <path class="edge" d="M135,188 V208 H365 V224" marker-end="url(#c10a)"/>
-<text class="lbl" x="250" y="203" text-anchor="middle">name</text>
-<rect class="box" x="492" y="310" width="206" height="46" rx="8"/>
-<text class="t" x="595" y="330" text-anchor="middle">verify, read, merge</text>
-<text class="s" x="595" y="347" text-anchor="middle">{projects}, then read back</text>
-<path class="edge" d="M365,272 V292 H595 V308" marker-end="url(#c10a)"/>
-<text class="lbl" x="480" y="287" text-anchor="middle">write</text>
+<text class="lbl" x="250" y="203" text-anchor="middle">key</text>
+<rect class="box" x="32" y="310" width="206" height="46" rx="8"/>
+<text class="t" x="135" y="330" text-anchor="middle">pick the folder</text>
+<text class="s" x="135" y="347" text-anchor="middle">./REPO or ./OWNER/REPO</text>
+<path class="edge dash" d="M365,272 V292 H135 V308" marker-end="url(#c10a)"/>
+<text class="lbl" x="250" y="287" text-anchor="middle">projects</text>
 <rect class="box" x="262" y="394" width="206" height="46" rx="8"/>
-<text class="t" x="365" y="422" text-anchor="middle">listed</text>
-<path class="edge dash" d="M595,356 V376 H365 V392" marker-end="url(#c10a)"/>
-<text class="lbl" x="480" y="371" text-anchor="middle">written</text>
-<rect class="box" x="32" y="478" width="206" height="46" rx="8"/>
-<text class="t" x="135" y="506" text-anchor="middle">make ./NAME</text>
-<path class="edge dash" d="M365,440 V460 H135 V476" marker-end="url(#c10a)"/>
-<text class="lbl" x="250" y="455" text-anchor="middle">200</text>
-<rect class="box hot" x="722" y="562" width="206" height="46" rx="8"/>
-<text class="t" x="825" y="582" text-anchor="middle">clone or git init</text>
-<text class="s" x="825" y="599" text-anchor="middle">clone into ./REPO</text>
-<path class="edge hot" d="M135,524 V544 H825 V560" marker-end="url(#c10h)"/>
-<text class="lbl hot" x="480" y="539" text-anchor="middle">runs git</text>
+<text class="m" x="365" y="414" text-anchor="middle">POST /me/projects</text>
+<text class="s" x="365" y="431" text-anchor="middle">the same add as above</text>
+<path class="edge" d="M135,356 V376 H365 V392" marker-end="url(#c10a)"/>
+<text class="lbl" x="250" y="371" text-anchor="middle">name</text>
+<rect class="box" x="492" y="478" width="206" height="46" rx="8"/>
+<text class="t" x="595" y="498" text-anchor="middle">verify, read, merge</text>
+<text class="s" x="595" y="515" text-anchor="middle">{projects}, then read back</text>
+<path class="edge" d="M365,440 V460 H595 V476" marker-end="url(#c10a)"/>
+<text class="lbl" x="480" y="455" text-anchor="middle">write</text>
+<rect class="box" x="262" y="562" width="206" height="46" rx="8"/>
+<text class="t" x="365" y="590" text-anchor="middle">listed</text>
+<path class="edge dash" d="M595,524 V544 H365 V560" marker-end="url(#c10a)"/>
+<text class="lbl" x="480" y="539" text-anchor="middle">written</text>
+<rect class="box" x="32" y="646" width="206" height="46" rx="8"/>
+<text class="t" x="135" y="674" text-anchor="middle">make the folder</text>
+<path class="edge dash" d="M365,608 V628 H135 V644" marker-end="url(#c10a)"/>
+<text class="lbl" x="250" y="623" text-anchor="middle">200</text>
+<rect class="box hot" x="722" y="730" width="206" height="46" rx="8"/>
+<text class="t" x="825" y="750" text-anchor="middle">clone or git init</text>
+<text class="s" x="825" y="767" text-anchor="middle">clone into ./REPO</text>
+<path class="edge hot" d="M135,692 V712 H825 V728" marker-end="url(#c10h)"/>
+<text class="lbl hot" x="480" y="707" text-anchor="middle">runs git</text>
 </svg>
 </div>
-<figcaption><strong>A project is named after its repo.</strong> Give a name (<code>git init ./notes</code>), a GitHub URL (recorded as <code>OWNER/REPO</code>, cloned into <code>./REPO</code> and called <code>REPO</code>), or both when they name the same repository; a different name with a URL is refused before anything is sent. Record first, then make the folder.</figcaption>
+<figcaption><strong>A project is named after its repo.</strong> Give a name (<code>git init ./notes</code>), a GitHub URL (recorded as <code>OWNER/REPO</code>, cloned into <code>./REPO</code> and called <code>REPO</code>), or both when they name the same repository; a different name with a URL is refused before anything is sent. xo reads your projects first to pick the folder: <code>./REPO</code>, or <code>./OWNER/REPO</code> when another of your projects is called <code>REPO</code> or the repo is called <code>.xo</code> (a space&#x27;s own state folder). Record next, then make the folder; a folder already there is refused before anything is recorded. When two of your projects share a repo name, each is called by its <code>OWNER/REPO</code>. A typed name that matches a project exactly wins: a plain project <code>headscale</code> is called <code>headscale</code>, and <code>juanfont/headscale</code> is then called by its <code>OWNER/REPO</code>.</figcaption>
 </figure>
 <h4><code>xo connect project:P --repo URL</code></h4>
 <figure>
@@ -1000,55 +1068,65 @@ html { scroll-behavior: smooth; }
 <h4><code>xo connect project:P space:S [--ref R]</code></h4>
 <figure>
 <div class="canvas">
-<svg class="d" viewBox="0 0 960 626" role="img" aria-label="xo connect project:P space:S [--ref R]: One project, one ref, one more rev.">
+<svg class="d" viewBox="0 0 960 794" role="img" aria-label="xo connect project:P space:S [--ref R]: One project, one ref, one more rev.">
 <defs>
 <marker id="c13a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
 <marker id="c13h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
 </defs>
-<line class="life" x1="240" y1="40" x2="240" y2="620"/>
+<line class="life" x1="240" y1="40" x2="240" y2="788"/>
 <rect class="hdr" x="135" y="12" width="210" height="28" rx="7"/>
 <text class="t" x="240" y="31" text-anchor="middle">You: xo CLI</text>
-<line class="life" x1="480" y1="40" x2="480" y2="620"/>
+<line class="life" x1="480" y1="40" x2="480" y2="788"/>
 <rect class="hdr" x="375" y="12" width="210" height="28" rx="7"/>
 <text class="t" x="480" y="31" text-anchor="middle">xo server</text>
-<line class="life" x1="720" y1="40" x2="720" y2="620"/>
+<line class="life" x1="720" y1="40" x2="720" y2="788"/>
 <rect class="hdr" x="615" y="12" width="210" height="28" rx="7"/>
 <text class="t" x="720" y="31" text-anchor="middle">Clerk</text>
 <rect class="box" x="135" y="58" width="210" height="46" rx="8"/>
 <text class="m" x="240" y="78" text-anchor="middle">xo connect project:P</text>
 <text class="s" x="240" y="95" text-anchor="middle">space:S --ref R</text>
 <rect class="box" x="375" y="142" width="210" height="46" rx="8"/>
-<text class="m" x="480" y="162" text-anchor="middle">POST spaces/S/projects</text>
-<text class="s" x="480" y="179" text-anchor="middle">{&quot;project&quot;, &quot;ref&quot;}</text>
+<text class="m" x="480" y="162" text-anchor="middle">GET /me/projects</text>
+<text class="s" x="480" y="179" text-anchor="middle">your projects</text>
 <path class="edge" d="M240,104 V124 H480 V140" marker-end="url(#c13a)"/>
-<text class="lbl" x="360" y="119" text-anchor="middle">P, ref</text>
-<rect class="box" x="615" y="226" width="210" height="46" rx="8"/>
-<text class="t" x="720" y="246" text-anchor="middle">verify, read user</text>
-<text class="s" x="720" y="263" text-anchor="middle">P must be in projects</text>
-<path class="edge" d="M480,188 V208 H720 V224" marker-end="url(#c13a)"/>
-<text class="lbl" x="600" y="203" text-anchor="middle">verify</text>
+<text class="lbl" x="360" y="119" text-anchor="middle">if P is plain</text>
+<rect class="box" x="135" y="226" width="210" height="46" rx="8"/>
+<text class="t" x="240" y="246" text-anchor="middle">P is which project?</text>
+<text class="s" x="240" y="263" text-anchor="middle">exact name, else its repo</text>
+<path class="edge dash" d="M480,188 V208 H240 V224" marker-end="url(#c13a)"/>
+<text class="lbl" x="360" y="203" text-anchor="middle">projects</text>
 <rect class="box" x="375" y="310" width="210" height="46" rx="8"/>
-<text class="t" x="480" y="330" text-anchor="middle">set P at R</text>
-<text class="s" x="480" y="347" text-anchor="middle">rev + 1</text>
-<path class="edge dash" d="M720,272 V292 H480 V308" marker-end="url(#c13a)"/>
-<text class="lbl" x="600" y="287" text-anchor="middle">user</text>
-<rect class="box hot" x="615" y="394" width="210" height="46" rx="8"/>
-<text class="t" x="720" y="414" text-anchor="middle">merge {spaces}</text>
-<text class="s" x="720" y="431" text-anchor="middle">only spaces written</text>
-<path class="edge hot" d="M480,356 V376 H720 V392" marker-end="url(#c13h)"/>
-<text class="lbl hot" x="600" y="371" text-anchor="middle">write</text>
+<text class="m" x="480" y="330" text-anchor="middle">POST spaces/S/projects</text>
+<text class="s" x="480" y="347" text-anchor="middle">{&quot;project&quot;, &quot;ref&quot;}</text>
+<path class="edge" d="M240,272 V292 H480 V308" marker-end="url(#c13a)"/>
+<text class="lbl" x="360" y="287" text-anchor="middle">P, ref</text>
+<rect class="box" x="615" y="394" width="210" height="46" rx="8"/>
+<text class="t" x="720" y="414" text-anchor="middle">verify, read user</text>
+<text class="s" x="720" y="431" text-anchor="middle">P must be in projects</text>
+<path class="edge" d="M480,356 V376 H720 V392" marker-end="url(#c13a)"/>
+<text class="lbl" x="600" y="371" text-anchor="middle">verify</text>
 <rect class="box" x="375" y="478" width="210" height="46" rx="8"/>
-<text class="t" x="480" y="498" text-anchor="middle">read back</text>
-<text class="s" x="480" y="515" text-anchor="middle">after 0.3 s</text>
+<text class="t" x="480" y="498" text-anchor="middle">set P at R</text>
+<text class="s" x="480" y="515" text-anchor="middle">rev + 1</text>
 <path class="edge dash" d="M720,440 V460 H480 V476" marker-end="url(#c13a)"/>
-<text class="lbl" x="600" y="455" text-anchor="middle">written</text>
-<rect class="box" x="135" y="562" width="210" height="46" rx="8"/>
-<text class="t" x="240" y="590" text-anchor="middle">print the space</text>
-<path class="edge dash" d="M480,524 V544 H240 V560" marker-end="url(#c13a)"/>
-<text class="lbl" x="360" y="539" text-anchor="middle">200</text>
+<text class="lbl" x="600" y="455" text-anchor="middle">user</text>
+<rect class="box hot" x="615" y="562" width="210" height="46" rx="8"/>
+<text class="t" x="720" y="582" text-anchor="middle">merge {spaces}</text>
+<text class="s" x="720" y="599" text-anchor="middle">only spaces written</text>
+<path class="edge hot" d="M480,524 V544 H720 V560" marker-end="url(#c13h)"/>
+<text class="lbl hot" x="600" y="539" text-anchor="middle">write</text>
+<rect class="box" x="375" y="646" width="210" height="46" rx="8"/>
+<text class="t" x="480" y="666" text-anchor="middle">read back</text>
+<text class="s" x="480" y="683" text-anchor="middle">after 0.3 s</text>
+<path class="edge dash" d="M720,608 V628 H480 V644" marker-end="url(#c13a)"/>
+<text class="lbl" x="600" y="623" text-anchor="middle">written</text>
+<rect class="box" x="135" y="730" width="210" height="46" rx="8"/>
+<text class="t" x="240" y="758" text-anchor="middle">print the space</text>
+<path class="edge dash" d="M480,692 V712 H240 V728" marker-end="url(#c13a)"/>
+<text class="lbl" x="360" y="707" text-anchor="middle">200</text>
 </svg>
 </div>
-<figcaption><strong>One project, one ref, one more rev.</strong> A missing ref is <code>main</code>. Connecting P again replaces its ref in place; a space holds at most 10 projects.</figcaption>
+<figcaption><strong>One project, one ref, one more rev.</strong> A plain P is looked up in your projects first, so <code>headscale</code> sends <code>juanfont/headscale</code>. A missing ref is <code>main</code>. Connecting P again replaces its ref in place; a space holds at most 10 projects.</figcaption>
 </figure>
 <h4><code>xo list projects | spaces | shared</code></h4>
 <figure>
@@ -1092,79 +1170,89 @@ html { scroll-behavior: smooth; }
 </div>
 <figcaption><strong>A read, masked as <code>/me</code> is.</strong> Project names and refs are not masked: a repository called <code>auth-service</code> is not a secret. <code>xo list shared</code> shows each invite with its id and its sender&#x27;s username now, which the server looks up in one more Clerk call.</figcaption>
 </figure>
-<h4><code>xo share space:S|project:OWNER/REPO USERNAME</code></h4>
+<h4><code>xo share space:S|project:P USERNAME</code></h4>
 <figure>
 <div class="canvas">
-<svg class="d" viewBox="0 0 960 962" role="img" aria-label="xo share space:S|project:OWNER/REPO USERNAME: The one write to another user, and only to their `shared`.">
+<svg class="d" viewBox="0 0 960 1130" role="img" aria-label="xo share space:S|project:P USERNAME: The one write to another user, and only to their `shared`.">
 <defs>
 <marker id="c15a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
 <marker id="c15h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
 </defs>
-<line class="life" x1="240" y1="40" x2="240" y2="956"/>
+<line class="life" x1="240" y1="40" x2="240" y2="1124"/>
 <rect class="hdr" x="135" y="12" width="210" height="28" rx="7"/>
 <text class="t" x="240" y="31" text-anchor="middle">You: xo CLI</text>
-<line class="life" x1="480" y1="40" x2="480" y2="956"/>
+<line class="life" x1="480" y1="40" x2="480" y2="1124"/>
 <rect class="hdr" x="375" y="12" width="210" height="28" rx="7"/>
 <text class="t" x="480" y="31" text-anchor="middle">xo server</text>
-<line class="life" x1="720" y1="40" x2="720" y2="956"/>
+<line class="life" x1="720" y1="40" x2="720" y2="1124"/>
 <rect class="hdr" x="615" y="12" width="210" height="28" rx="7"/>
 <text class="t" x="720" y="31" text-anchor="middle">Clerk</text>
 <rect class="box" x="135" y="58" width="210" height="46" rx="8"/>
 <text class="m" x="240" y="78" text-anchor="middle">xo share space:dev bob</text>
-<text class="s" x="240" y="95" text-anchor="middle">or project:OWNER/REPO</text>
+<text class="s" x="240" y="95" text-anchor="middle">or project:P</text>
 <rect class="box" x="375" y="142" width="210" height="46" rx="8"/>
-<text class="m" x="480" y="162" text-anchor="middle">POST /me/share</text>
-<text class="s" x="480" y="179" text-anchor="middle">{&quot;item&quot;, &quot;to&quot;}</text>
+<text class="m" x="480" y="162" text-anchor="middle">GET /me/projects</text>
+<text class="s" x="480" y="179" text-anchor="middle">your projects</text>
 <path class="edge" d="M240,104 V124 H480 V140" marker-end="url(#c15a)"/>
-<text class="lbl" x="360" y="119" text-anchor="middle">item, to</text>
-<rect class="box" x="615" y="226" width="210" height="46" rx="8"/>
-<text class="t" x="720" y="246" text-anchor="middle">verify, read you</text>
-<text class="s" x="720" y="263" text-anchor="middle">your item, your username</text>
-<path class="edge" d="M480,188 V208 H720 V224" marker-end="url(#c15a)"/>
-<text class="lbl" x="600" y="203" text-anchor="middle">verify</text>
+<text class="lbl" x="360" y="119" text-anchor="middle">if P is plain</text>
+<rect class="box" x="135" y="226" width="210" height="46" rx="8"/>
+<text class="t" x="240" y="246" text-anchor="middle">P is which project?</text>
+<text class="s" x="240" y="263" text-anchor="middle">exact name, else its repo</text>
+<path class="edge dash" d="M480,188 V208 H240 V224" marker-end="url(#c15a)"/>
+<text class="lbl" x="360" y="203" text-anchor="middle">projects</text>
 <rect class="box" x="375" y="310" width="210" height="46" rx="8"/>
-<text class="t" x="480" y="330" text-anchor="middle">build the invite</text>
-<text class="s" x="480" y="347" text-anchor="middle">name + GitHub projects</text>
-<path class="edge dash" d="M720,272 V292 H480 V308" marker-end="url(#c15a)"/>
-<text class="lbl" x="600" y="287" text-anchor="middle">you</text>
+<text class="m" x="480" y="330" text-anchor="middle">POST /me/share</text>
+<text class="s" x="480" y="347" text-anchor="middle">{&quot;item&quot;, &quot;to&quot;}</text>
+<path class="edge" d="M240,272 V292 H480 V308" marker-end="url(#c15a)"/>
+<text class="lbl" x="360" y="287" text-anchor="middle">item, to</text>
 <rect class="box" x="615" y="394" width="210" height="46" rx="8"/>
-<text class="t" x="720" y="414" text-anchor="middle">find bob</text>
-<text class="s" x="720" y="431" text-anchor="middle">users?username=bob</text>
+<text class="t" x="720" y="414" text-anchor="middle">verify, read you</text>
+<text class="s" x="720" y="431" text-anchor="middle">your item, your username</text>
 <path class="edge" d="M480,356 V376 H720 V392" marker-end="url(#c15a)"/>
-<text class="lbl" x="600" y="371" text-anchor="middle">look up</text>
+<text class="lbl" x="600" y="371" text-anchor="middle">verify</text>
 <rect class="box" x="375" y="478" width="210" height="46" rx="8"/>
-<text class="t" x="480" y="498" text-anchor="middle">exactly one user?</text>
-<text class="s" x="480" y="515" text-anchor="middle">else 404: could not share</text>
+<text class="t" x="480" y="498" text-anchor="middle">build the invite</text>
+<text class="s" x="480" y="515" text-anchor="middle">name + GitHub projects</text>
 <path class="edge dash" d="M720,440 V460 H480 V476" marker-end="url(#c15a)"/>
-<text class="lbl" x="600" y="455" text-anchor="middle">users</text>
+<text class="lbl" x="600" y="455" text-anchor="middle">you</text>
 <rect class="box" x="615" y="562" width="210" height="46" rx="8"/>
-<text class="t" x="720" y="582" text-anchor="middle">read bob</text>
-<text class="s" x="720" y="599" text-anchor="middle">his shared: room, limits</text>
+<text class="t" x="720" y="582" text-anchor="middle">find bob</text>
+<text class="s" x="720" y="599" text-anchor="middle">users?username=bob</text>
 <path class="edge" d="M480,524 V544 H720 V560" marker-end="url(#c15a)"/>
-<text class="lbl" x="600" y="539" text-anchor="middle">read</text>
+<text class="lbl" x="600" y="539" text-anchor="middle">look up</text>
 <rect class="box" x="375" y="646" width="210" height="46" rx="8"/>
-<text class="t" x="480" y="666" text-anchor="middle">add your invite</text>
-<text class="s" x="480" y="683" text-anchor="middle">1.5KB shared, 6KB whole</text>
+<text class="t" x="480" y="666" text-anchor="middle">exactly one user?</text>
+<text class="s" x="480" y="683" text-anchor="middle">else 404: could not share</text>
 <path class="edge dash" d="M720,608 V628 H480 V644" marker-end="url(#c15a)"/>
-<text class="lbl" x="600" y="623" text-anchor="middle">bob&#x27;s metadata</text>
-<rect class="box hot" x="615" y="730" width="210" height="46" rx="8"/>
-<text class="t" x="720" y="750" text-anchor="middle">merge {shared} on bob</text>
-<text class="s" x="720" y="767" text-anchor="middle">nothing else of his</text>
-<path class="edge hot" d="M480,692 V712 H720 V728" marker-end="url(#c15h)"/>
-<text class="lbl hot" x="600" y="707" text-anchor="middle">write</text>
+<text class="lbl" x="600" y="623" text-anchor="middle">users</text>
+<rect class="box" x="615" y="730" width="210" height="46" rx="8"/>
+<text class="t" x="720" y="750" text-anchor="middle">read bob</text>
+<text class="s" x="720" y="767" text-anchor="middle">his shared: room, limits</text>
+<path class="edge" d="M480,692 V712 H720 V728" marker-end="url(#c15a)"/>
+<text class="lbl" x="600" y="707" text-anchor="middle">read</text>
 <rect class="box" x="375" y="814" width="210" height="46" rx="8"/>
-<text class="t" x="480" y="834" text-anchor="middle">read back</text>
-<text class="s" x="480" y="851" text-anchor="middle">1.5 s at least in all</text>
+<text class="t" x="480" y="834" text-anchor="middle">add your invite</text>
+<text class="s" x="480" y="851" text-anchor="middle">1.5KB shared, 6KB whole</text>
 <path class="edge dash" d="M720,776 V796 H480 V812" marker-end="url(#c15a)"/>
-<text class="lbl" x="600" y="791" text-anchor="middle">written</text>
-<rect class="box" x="135" y="898" width="210" height="46" rx="8"/>
-<text class="t" x="240" y="918" text-anchor="middle">print the invite</text>
-<text class="s" x="240" y="935" text-anchor="middle">to, item, projects</text>
-<path class="edge dash" d="M480,860 V880 H240 V896" marker-end="url(#c15a)"/>
-<text class="lbl" x="360" y="875" text-anchor="middle">200</text>
+<text class="lbl" x="600" y="791" text-anchor="middle">bob&#x27;s metadata</text>
+<rect class="box hot" x="615" y="898" width="210" height="46" rx="8"/>
+<text class="t" x="720" y="918" text-anchor="middle">merge {shared} on bob</text>
+<text class="s" x="720" y="935" text-anchor="middle">nothing else of his</text>
+<path class="edge hot" d="M480,860 V880 H720 V896" marker-end="url(#c15h)"/>
+<text class="lbl hot" x="600" y="875" text-anchor="middle">write</text>
+<rect class="box" x="375" y="982" width="210" height="46" rx="8"/>
+<text class="t" x="480" y="1002" text-anchor="middle">read back</text>
+<text class="s" x="480" y="1019" text-anchor="middle">1.5 s at least in all</text>
+<path class="edge dash" d="M720,944 V964 H480 V980" marker-end="url(#c15a)"/>
+<text class="lbl" x="600" y="959" text-anchor="middle">written</text>
+<rect class="box" x="135" y="1066" width="210" height="46" rx="8"/>
+<text class="t" x="240" y="1086" text-anchor="middle">print the invite</text>
+<text class="s" x="240" y="1103" text-anchor="middle">to, item, projects</text>
+<path class="edge dash" d="M480,1028 V1048 H240 V1064" marker-end="url(#c15a)"/>
+<text class="lbl" x="360" y="1043" text-anchor="middle">200</text>
 </svg>
 </div>
-<figcaption><strong>The one write to another user, and only to their <code>shared</code>.</strong> The invite holds a space&#x27;s name and its GitHub projects at their refs, never its id, kind or rev; a space&#x27;s local projects are left out. Everything about the recipient (no such username, a full list, no room) is the same 404 &quot;Could not share ITEM with USERNAME&quot;, and every answer takes at least 1.5 seconds. At most 20 invites wait on anyone, 5 from one sender.</figcaption>
+<figcaption><strong>The one write to another user, and only to their <code>shared</code>.</strong> A plain P is looked up in your projects first, and only a GitHub project can be shared. The invite holds a space&#x27;s name and its GitHub projects at their refs, never its id, kind or rev; a space&#x27;s local projects are left out. Everything about the recipient (no such username, a full list, no room) is the same 404 &quot;Could not share ITEM with USERNAME&quot;, and every answer takes at least 1.5 seconds. At most 20 invites wait on anyone, 5 from one sender.</figcaption>
 </figure>
 <h4><code>xo accept ID · xo reject ID</code></h4>
 <figure>
@@ -1297,26 +1385,26 @@ html { scroll-behavior: smooth; }
 <text class="lbl" x="480" y="623" text-anchor="middle">done</text>
 </svg>
 </div>
-<figcaption><strong>The installed rev and refs are the base for later updates.</strong> A project with no GitHub remote is left as it is. A branch that has moved on from its remote is refused, never merged.</figcaption>
+<figcaption><strong>The installed rev and refs are the base for later updates.</strong> A project with no GitHub remote is left as it is. A branch that has moved on from its remote is refused, never merged. Each GitHub project goes in <code>./S/REPO</code>, or <code>./S/OWNER/REPO</code> when another project in the space has that name, and an existing checkout is used only if its origin is that repo. <code>./S/.xo/state.json</code> is never written through a link, and a <code>./S/.xo</code> that is a link or a checkout is refused.</figcaption>
 </figure>
 <h4><code>xo install project:P</code></h4>
 <figure>
 <div class="canvas">
-<svg class="d" viewBox="0 0 960 710" role="img" aria-label="xo install project:P: Clone once, then only fast-forward.">
+<svg class="d" viewBox="0 0 960 794" role="img" aria-label="xo install project:P: Clone once, then only fast-forward.">
 <defs>
 <marker id="c18a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
 <marker id="c18h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
 </defs>
-<line class="life" x1="135" y1="40" x2="135" y2="704"/>
+<line class="life" x1="135" y1="40" x2="135" y2="788"/>
 <rect class="hdr" x="32" y="12" width="206" height="28" rx="7"/>
 <text class="t" x="135" y="31" text-anchor="middle">You: xo CLI</text>
-<line class="life" x1="365" y1="40" x2="365" y2="704"/>
+<line class="life" x1="365" y1="40" x2="365" y2="788"/>
 <rect class="hdr" x="262" y="12" width="206" height="28" rx="7"/>
 <text class="t" x="365" y="31" text-anchor="middle">xo server</text>
-<line class="life" x1="595" y1="40" x2="595" y2="704"/>
+<line class="life" x1="595" y1="40" x2="595" y2="788"/>
 <rect class="hdr" x="492" y="12" width="206" height="28" rx="7"/>
 <text class="t" x="595" y="31" text-anchor="middle">Clerk</text>
-<line class="life" x1="825" y1="40" x2="825" y2="704"/>
+<line class="life" x1="825" y1="40" x2="825" y2="788"/>
 <rect class="hdr" x="722" y="12" width="206" height="28" rx="7"/>
 <text class="t" x="825" y="31" text-anchor="middle">git · GitHub</text>
 <rect class="box" x="32" y="58" width="206" height="46" rx="8"/>
@@ -1334,27 +1422,31 @@ html { scroll-behavior: smooth; }
 <path class="edge dash" d="M595,272 V292 H365 V308" marker-end="url(#c18a)"/>
 <text class="lbl" x="480" y="287" text-anchor="middle">user</text>
 <rect class="box" x="32" y="394" width="206" height="46" rx="8"/>
-<text class="t" x="135" y="414" text-anchor="middle">P listed?</text>
-<text class="s" x="135" y="431" text-anchor="middle">./P here?</text>
+<text class="t" x="135" y="414" text-anchor="middle">P is which project?</text>
+<text class="s" x="135" y="431" text-anchor="middle">./REPO or ./OWNER/REPO</text>
 <path class="edge dash" d="M365,356 V376 H135 V392" marker-end="url(#c18a)"/>
 <text class="lbl" x="250" y="371" text-anchor="middle">projects</text>
-<rect class="box hot" x="722" y="478" width="206" height="46" rx="8"/>
-<text class="t" x="825" y="498" text-anchor="middle">clone, or fetch</text>
-<text class="s" x="825" y="515" text-anchor="middle">over https</text>
-<path class="edge hot" d="M135,440 V460 H825 V476" marker-end="url(#c18h)"/>
-<text class="lbl hot" x="480" y="455" text-anchor="middle">runs git</text>
-<rect class="box" x="722" y="562" width="206" height="46" rx="8"/>
-<text class="t" x="825" y="582" text-anchor="middle">fast-forward</text>
-<text class="s" x="825" y="599" text-anchor="middle">never a merge</text>
-<line class="edge" x1="825" y1="524" x2="825" y2="560" marker-end="url(#c18a)"/>
-<rect class="box" x="32" y="646" width="206" height="46" rx="8"/>
-<text class="t" x="135" y="666" text-anchor="middle">print</text>
-<text class="s" x="135" y="683" text-anchor="middle">cloned or moved on</text>
-<path class="edge dash" d="M825,608 V628 H135 V644" marker-end="url(#c18a)"/>
-<text class="lbl" x="480" y="623" text-anchor="middle">done</text>
+<rect class="box" x="32" y="478" width="206" height="46" rx="8"/>
+<text class="t" x="135" y="498" text-anchor="middle">a checkout there?</text>
+<text class="s" x="135" y="515" text-anchor="middle">origin must be P&#x27;s repo</text>
+<line class="edge" x1="135" y1="440" x2="135" y2="476" marker-end="url(#c18a)"/>
+<rect class="box hot" x="722" y="562" width="206" height="46" rx="8"/>
+<text class="t" x="825" y="582" text-anchor="middle">clone, or fetch</text>
+<text class="s" x="825" y="599" text-anchor="middle">over https</text>
+<path class="edge hot" d="M135,524 V544 H825 V560" marker-end="url(#c18h)"/>
+<text class="lbl hot" x="480" y="539" text-anchor="middle">runs git</text>
+<rect class="box" x="722" y="646" width="206" height="46" rx="8"/>
+<text class="t" x="825" y="666" text-anchor="middle">fast-forward</text>
+<text class="s" x="825" y="683" text-anchor="middle">never a merge</text>
+<line class="edge" x1="825" y1="608" x2="825" y2="644" marker-end="url(#c18a)"/>
+<rect class="box" x="32" y="730" width="206" height="46" rx="8"/>
+<text class="t" x="135" y="750" text-anchor="middle">print</text>
+<text class="s" x="135" y="767" text-anchor="middle">cloned or moved on</text>
+<path class="edge dash" d="M825,692 V712 H135 V728" marker-end="url(#c18a)"/>
+<text class="lbl" x="480" y="707" text-anchor="middle">done</text>
 </svg>
 </div>
-<figcaption><strong>Clone once, then only fast-forward.</strong> If your branch and its upstream have both moved on, xo stops and points you to <code>xo sync project:P</code>.</figcaption>
+<figcaption><strong>Clone once, then only fast-forward.</strong> P is the project a typed name means: an exact match first, else the one GitHub project whose repo is called that (two are refused: say which by <code>OWNER/REPO</code>). Its checkout is looked for in <code>./REPO</code> and <code>./OWNER/REPO</code>, and used only if its origin, every fetch and push URL, is that repo; a folder whose origin is another repo is refused, never fetched. If your branch and its upstream have both moved on, xo stops and points you to <code>xo sync project:P</code>.</figcaption>
 </figure>
 <h4><code>xo update space:S</code></h4>
 <figure>
@@ -1439,36 +1531,49 @@ html { scroll-behavior: smooth; }
 <h4><code>xo update project:P</code></h4>
 <figure>
 <div class="canvas">
-<svg class="d" viewBox="0 0 960 374" role="img" aria-label="xo update project:P: A plain push, never forced.">
+<svg class="d" viewBox="0 0 960 542" role="img" aria-label="xo update project:P: A plain push, never forced.">
 <defs>
 <marker id="c20a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
 <marker id="c20h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
 </defs>
-<line class="life" x1="360" y1="40" x2="360" y2="368"/>
-<rect class="hdr" x="255" y="12" width="210" height="28" rx="7"/>
-<text class="t" x="360" y="31" text-anchor="middle">You: xo CLI</text>
-<line class="life" x1="600" y1="40" x2="600" y2="368"/>
-<rect class="hdr" x="495" y="12" width="210" height="28" rx="7"/>
-<text class="t" x="600" y="31" text-anchor="middle">git · GitHub</text>
-<rect class="box" x="255" y="58" width="210" height="46" rx="8"/>
-<text class="m" x="360" y="86" text-anchor="middle">xo update project:P</text>
-<rect class="box" x="255" y="142" width="210" height="46" rx="8"/>
-<text class="t" x="360" y="162" text-anchor="middle">check upstream</text>
-<text class="s" x="360" y="179" text-anchor="middle">own, on a branch, clean</text>
-<line class="edge" x1="360" y1="104" x2="360" y2="140" marker-end="url(#c20a)"/>
-<rect class="box hot" x="495" y="226" width="210" height="46" rx="8"/>
-<text class="t" x="600" y="246" text-anchor="middle">push to upstream</text>
-<text class="s" x="600" y="263" text-anchor="middle">never forced</text>
-<path class="edge hot" d="M360,188 V208 H600 V224" marker-end="url(#c20h)"/>
-<text class="lbl hot" x="480" y="203" text-anchor="middle">push</text>
-<rect class="box" x="255" y="310" width="210" height="46" rx="8"/>
-<text class="t" x="360" y="330" text-anchor="middle">pushed</text>
-<text class="s" x="360" y="347" text-anchor="middle">remote ahead: xo sync</text>
-<path class="edge dash" d="M600,272 V292 H360 V308" marker-end="url(#c20a)"/>
-<text class="lbl" x="480" y="287" text-anchor="middle">done</text>
+<line class="life" x1="240" y1="40" x2="240" y2="536"/>
+<rect class="hdr" x="135" y="12" width="210" height="28" rx="7"/>
+<text class="t" x="240" y="31" text-anchor="middle">You: xo CLI</text>
+<line class="life" x1="480" y1="40" x2="480" y2="536"/>
+<rect class="hdr" x="375" y="12" width="210" height="28" rx="7"/>
+<text class="t" x="480" y="31" text-anchor="middle">xo server</text>
+<line class="life" x1="720" y1="40" x2="720" y2="536"/>
+<rect class="hdr" x="615" y="12" width="210" height="28" rx="7"/>
+<text class="t" x="720" y="31" text-anchor="middle">git · GitHub</text>
+<rect class="box" x="135" y="58" width="210" height="46" rx="8"/>
+<text class="m" x="240" y="86" text-anchor="middle">xo update project:P</text>
+<rect class="box" x="375" y="142" width="210" height="46" rx="8"/>
+<text class="m" x="480" y="162" text-anchor="middle">GET /me/projects</text>
+<text class="s" x="480" y="179" text-anchor="middle">your projects</text>
+<path class="edge" d="M240,104 V124 H480 V140" marker-end="url(#c20a)"/>
+<text class="lbl" x="360" y="119" text-anchor="middle">key</text>
+<rect class="box" x="135" y="226" width="210" height="46" rx="8"/>
+<text class="t" x="240" y="246" text-anchor="middle">P is which project?</text>
+<text class="s" x="240" y="263" text-anchor="middle">its checkout here?</text>
+<path class="edge dash" d="M480,188 V208 H240 V224" marker-end="url(#c20a)"/>
+<text class="lbl" x="360" y="203" text-anchor="middle">projects</text>
+<rect class="box" x="135" y="310" width="210" height="46" rx="8"/>
+<text class="t" x="240" y="330" text-anchor="middle">origin is P&#x27;s repo?</text>
+<text class="s" x="240" y="347" text-anchor="middle">else refuse</text>
+<line class="edge" x1="240" y1="272" x2="240" y2="308" marker-end="url(#c20a)"/>
+<rect class="box hot" x="615" y="394" width="210" height="46" rx="8"/>
+<text class="t" x="720" y="414" text-anchor="middle">push to upstream</text>
+<text class="s" x="720" y="431" text-anchor="middle">never forced</text>
+<path class="edge hot" d="M240,356 V376 H720 V392" marker-end="url(#c20h)"/>
+<text class="lbl hot" x="480" y="371" text-anchor="middle">push</text>
+<rect class="box" x="135" y="478" width="210" height="46" rx="8"/>
+<text class="t" x="240" y="498" text-anchor="middle">pushed</text>
+<text class="s" x="240" y="515" text-anchor="middle">remote ahead: xo sync</text>
+<path class="edge dash" d="M720,440 V460 H240 V476" marker-end="url(#c20a)"/>
+<text class="lbl" x="480" y="455" text-anchor="middle">done</text>
 </svg>
 </div>
-<figcaption><strong>A plain push, never forced.</strong> It goes to the branch&#x27;s upstream remote, not a <code>pushRemote</code>, and needs a branch, not a detached HEAD.</figcaption>
+<figcaption><strong>A plain push, never forced.</strong> P is looked up in your projects as for install, and needs a checkout here whose origin is P&#x27;s repo; one whose origin is another repo is refused, never pushed. It goes to the branch&#x27;s upstream remote, not a <code>pushRemote</code>, and needs a branch, not a detached HEAD.</figcaption>
 </figure>
 <h4><code>xo sync space:S</code></h4>
 <figure>
@@ -1554,36 +1659,53 @@ html { scroll-behavior: smooth; }
 <h4><code>xo sync project:P</code></h4>
 <figure>
 <div class="canvas">
-<svg class="d" viewBox="0 0 960 374" role="img" aria-label="xo sync project:P: Rebase on the upstream, then push.">
+<svg class="d" viewBox="0 0 960 626" role="img" aria-label="xo sync project:P: Rebase on the upstream, then push.">
 <defs>
 <marker id="c22a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
 <marker id="c22h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
 </defs>
-<line class="life" x1="360" y1="40" x2="360" y2="368"/>
-<rect class="hdr" x="255" y="12" width="210" height="28" rx="7"/>
-<text class="t" x="360" y="31" text-anchor="middle">You: xo CLI</text>
-<line class="life" x1="600" y1="40" x2="600" y2="368"/>
-<rect class="hdr" x="495" y="12" width="210" height="28" rx="7"/>
-<text class="t" x="600" y="31" text-anchor="middle">git · GitHub</text>
-<rect class="box" x="255" y="58" width="210" height="46" rx="8"/>
-<text class="m" x="360" y="86" text-anchor="middle">xo sync project:P</text>
-<rect class="box hot" x="495" y="142" width="210" height="46" rx="8"/>
-<text class="m" x="600" y="162" text-anchor="middle">pull --rebase</text>
-<text class="s" x="600" y="179" text-anchor="middle">undone on conflict</text>
-<path class="edge hot" d="M360,104 V124 H600 V140" marker-end="url(#c22h)"/>
-<text class="lbl hot" x="480" y="119" text-anchor="middle">rebase</text>
-<rect class="box" x="495" y="226" width="210" height="46" rx="8"/>
-<text class="t" x="600" y="246" text-anchor="middle">push</text>
-<text class="s" x="600" y="263" text-anchor="middle">never forced</text>
-<line class="edge" x1="600" y1="188" x2="600" y2="224" marker-end="url(#c22a)"/>
-<rect class="box" x="255" y="310" width="210" height="46" rx="8"/>
-<text class="t" x="360" y="330" text-anchor="middle">print</text>
-<text class="s" x="360" y="347" text-anchor="middle">rebased, pushed</text>
-<path class="edge dash" d="M600,272 V292 H360 V308" marker-end="url(#c22a)"/>
-<text class="lbl" x="480" y="287" text-anchor="middle">done</text>
+<line class="life" x1="240" y1="40" x2="240" y2="620"/>
+<rect class="hdr" x="135" y="12" width="210" height="28" rx="7"/>
+<text class="t" x="240" y="31" text-anchor="middle">You: xo CLI</text>
+<line class="life" x1="480" y1="40" x2="480" y2="620"/>
+<rect class="hdr" x="375" y="12" width="210" height="28" rx="7"/>
+<text class="t" x="480" y="31" text-anchor="middle">xo server</text>
+<line class="life" x1="720" y1="40" x2="720" y2="620"/>
+<rect class="hdr" x="615" y="12" width="210" height="28" rx="7"/>
+<text class="t" x="720" y="31" text-anchor="middle">git · GitHub</text>
+<rect class="box" x="135" y="58" width="210" height="46" rx="8"/>
+<text class="m" x="240" y="86" text-anchor="middle">xo sync project:P</text>
+<rect class="box" x="375" y="142" width="210" height="46" rx="8"/>
+<text class="m" x="480" y="162" text-anchor="middle">GET /me/projects</text>
+<text class="s" x="480" y="179" text-anchor="middle">your projects</text>
+<path class="edge" d="M240,104 V124 H480 V140" marker-end="url(#c22a)"/>
+<text class="lbl" x="360" y="119" text-anchor="middle">key</text>
+<rect class="box" x="135" y="226" width="210" height="46" rx="8"/>
+<text class="t" x="240" y="246" text-anchor="middle">P is which project?</text>
+<text class="s" x="240" y="263" text-anchor="middle">its checkout here?</text>
+<path class="edge dash" d="M480,188 V208 H240 V224" marker-end="url(#c22a)"/>
+<text class="lbl" x="360" y="203" text-anchor="middle">projects</text>
+<rect class="box" x="135" y="310" width="210" height="46" rx="8"/>
+<text class="t" x="240" y="330" text-anchor="middle">origin is P&#x27;s repo?</text>
+<text class="s" x="240" y="347" text-anchor="middle">else refuse</text>
+<line class="edge" x1="240" y1="272" x2="240" y2="308" marker-end="url(#c22a)"/>
+<rect class="box hot" x="615" y="394" width="210" height="46" rx="8"/>
+<text class="m" x="720" y="414" text-anchor="middle">pull --rebase</text>
+<text class="s" x="720" y="431" text-anchor="middle">undone on conflict</text>
+<path class="edge hot" d="M240,356 V376 H720 V392" marker-end="url(#c22h)"/>
+<text class="lbl hot" x="480" y="371" text-anchor="middle">rebase</text>
+<rect class="box" x="615" y="478" width="210" height="46" rx="8"/>
+<text class="t" x="720" y="498" text-anchor="middle">push</text>
+<text class="s" x="720" y="515" text-anchor="middle">never forced</text>
+<line class="edge" x1="720" y1="440" x2="720" y2="476" marker-end="url(#c22a)"/>
+<rect class="box" x="135" y="562" width="210" height="46" rx="8"/>
+<text class="t" x="240" y="582" text-anchor="middle">print</text>
+<text class="s" x="240" y="599" text-anchor="middle">rebased, pushed</text>
+<path class="edge dash" d="M720,524 V544 H240 V560" marker-end="url(#c22a)"/>
+<text class="lbl" x="480" y="539" text-anchor="middle">done</text>
 </svg>
 </div>
-<figcaption><strong>Rebase on the upstream, then push.</strong> On a conflict xo runs <code>git rebase --abort</code>, so the checkout is as it was.</figcaption>
+<figcaption><strong>Rebase on the upstream, then push.</strong> P and its checkout are found as for update. On a conflict xo runs <code>git rebase --abort</code>, so the checkout is as it was.</figcaption>
 </figure>
 <h3 id="cmd-lower-level">Lower level</h3>
 <p>For operations the generated commands don&#x27;t cover, or to see what a command would send.</p>
@@ -1886,10 +2008,10 @@ html { scroll-behavior: smooth; }
 				<tr><td>POST /me/projects</td><td>xo projects add · xo create project</td><td>Appends a name; <code>create project</code> then clones it (OWNER/REPO, into ./REPO) or runs <code>git init</code> here</td></tr>
 				<tr><td>POST /me/projects/connect</td><td>xo connect project:P --repo URL</td><td>Replaces a plain name with its <code>OWNER/REPO</code>, in place; refused while P is in a space</td></tr>
 				<tr><td>POST /me/spaces</td><td>xo create space NAME KIND</td><td>Checks the name and budget first, creates the space on XO with your key, then records <code>{name, kind, id, rev: 1}</code></td></tr>
-				<tr><td>POST /me/spaces/connect</td><td>xo connect space:S [--id ID]</td><td>A new entry; with an id, only after XO confirms your key can read that space</td></tr>
+				<tr><td>POST /me/spaces/connect</td><td>xo connect space:S [--id ID] · xo create space NAME (no KIND)</td><td>A new entry; with an id, only after XO confirms your key can read that space</td></tr>
 				<tr><td>POST /me/spaces/{name}/projects</td><td>xo connect project:P space:S</td><td>Sets one project's ref (default <code>main</code>); P must be in your projects</td></tr>
 				<tr><td>PUT /me/spaces/{name}</td><td>xo update · xo sync</td><td>Replaces the space's projects and refs if it is still at <code>rev</code> holding <code>base</code>, else 409 "run xo sync"</td></tr>
-				<tr><td>GET /me/projects · /me/spaces</td><td>xo projects · xo list</td><td>Reads either list, masked as <code>/me</code> is (refs shown as stored)</td></tr>
+				<tr><td>GET /me/projects · /me/spaces</td><td>xo projects · xo list; <code>GET /me/projects</code> also for xo create project, xo install, update and sync project:P, and a plain P in xo connect and xo share</td><td>Reads either list, masked as <code>/me</code> is (refs shown as stored)</td></tr>
 				<tr><td>POST /me/share</td><td>xo share</td><td><code>{item, to}</code>: the caller's invite into user <code>to</code>'s <code>shared</code>, and nothing else of theirs; anything about the recipient is the same 404</td></tr>
 				<tr><td>GET /me/shared</td><td>xo list shared · xo accept</td><td>The caller's invites, each with an id and its sender's username now</td></tr>
 				<tr><td>POST /me/shared/accept</td><td>xo accept</td><td><code>{id, as?}</code> or <code>{id, space, ref?}</code>: one write of <code>spaces</code>, <code>projects</code> and <code>shared</code> (the invite off)</td></tr>
@@ -1951,7 +2073,7 @@ html { scroll-behavior: smooth; }
 	</figure>
 	<ul class="facts">
 		<li><strong>Branches move before refs are recorded.</strong> <code>update</code> pushes each tracked branch first; <code>sync</code> rebases each on its upstream and pushes it, undoing a rebase that conflicts. Tags and commits stay where they are.</li>
-		<li><strong>Single projects use git only.</strong> <code>xo install project:P</code> clones, or fetches and fast-forwards, <code>./P</code>; <code>update</code> pushes its branch, never forced; <code>sync</code> runs <code>pull --rebase</code>, then that push.</li>
+		<li><strong>Single projects: look up, then git.</strong> xo looks P up in your projects (<code>GET /me/projects</code>); <code>xo install project:P</code> then clones, or fetches and fast-forwards, <code>./REPO</code>; <code>update</code> pushes its branch, never forced; <code>sync</code> runs <code>pull --rebase</code>, then that push. An existing checkout is used only if its origin is P&#x27;s repo.</li>
 		<li><strong>Your git, locked down.</strong> Every call sets <code>GIT_ALLOW_PROTOCOL=https</code>, turns submodules off, puts <code>--end-of-options</code> before any name or ref, and drops XO, Clerk and gh tokens from git's environment. xo never reads a git credential.</li>
 		<li><strong>A narrow race remains.</strong> Two updates on different instances that both read rev N within the 0.3 s settle can both get 200; the later write stands, and the other client's next update is refused because the space no longer holds its <code>base</code>. If a stale write sends the rev backwards, <code>xo sync</code> stops and names the projects that differ.</li>
 	</ul>
@@ -2029,7 +2151,7 @@ html { scroll-behavior: smooth; }
 	</div>
 </section>
 
-<footer>Describes <code>quirq-ai/xo</code> main as of this change: through #40. Setup is in <code>docs/quickstart.md</code>; the server's settings in <code>docs/server.md</code>.</footer>
+<footer>Describes <code>quirq-ai/xo</code> main as of this change: through #42. Setup is in <code>docs/quickstart.md</code>; the server's settings in <code>docs/server.md</code>.</footer>
 </main>
 </body>
 </html>

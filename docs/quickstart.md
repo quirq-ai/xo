@@ -88,7 +88,7 @@ xo spaces --space-id THE_ID
 | `xo create space N` | a space here only: the folder `./N`, recorded in your spaces, nothing on XO |
 | `xo spaces --space-id ID` | nothing; it shows a space you own |
 
-A space's name N is 1 to 32 letters, digits or hyphens, starts with a letter or digit, and can't be `new` or `create`; it is its name on XO and in your spaces. A name you already used fails. The volume size is 20 to 100 GB. Add `--dry-run` to any create to see it first.
+With a kind, a space's name N is 1 to 32 letters, digits or hyphens, starts with a letter or digit, and can't be `new` or `create`; it is its name on XO and in your spaces. A name you already used fails. The volume size is 20 to 100 GB. Add `--dry-run` to any create on XO to see it first; `xo create space N` with no kind sends no create to XO and takes no `--dry-run`.
 
 `nebius-openclaw` is behind a feature flag on XO Cloud; when the flag is off for your account it answers HTTP 404.
 

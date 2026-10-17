@@ -94,11 +94,20 @@ xo sync project:headscale                        # git pull --rebase, then push
 - `xo install`, `update` and `sync` use your own git and its login, over https only and without
   submodules. A space's projects go in `./SPACE/REPO`; `./SPACE/.xo/state.json` remembers the
   space's rev and refs as installed. A project with no GitHub remote is left as it is.
-  - A GitHub project is recorded as `OWNER/REPO` and called by its `REPO` in every command. When
-    two of your projects share a repo name, call each by its `OWNER/REPO`; only one of them can be
-    in a space or in one folder here. A checkout an older xo put in `./OWNER/REPO` is still used.
+  - A GitHub project is recorded as `OWNER/REPO` and called by its `REPO` in every command, in
+    `./REPO`. When another of your projects (or of the space's) is called the same, say a fork and
+    its upstream, or a plain project, call it by its `OWNER/REPO`; its folder is `./OWNER/REPO`,
+    as before short names. A plain project keeps its own name. A repo called `.xo` always goes in
+    `./OWNER/.xo`, since `.xo` holds a space's own state.
+  - xo looks for a checkout in `./REPO` and `./OWNER/REPO` (where an older xo put it) and uses it
+    only when its origin, every fetch and push URL, is that repository in an https, `git@` or
+    `ssh://` form. A folder whose origin is another repository, or carries a login
+    (`https://USER@github.com/...`), is refused: move it, or point its origin at the repository.
+  - `xo install`, `update` and `sync project:P` look P up in your projects first, so they need the
+    xo server.
   - `xo create space NAME` with no KIND makes the space entry and `./NAME` here, already
-    installed, so `xo connect project:P space:NAME` and `xo update space:NAME` work on it.
+    installed, so `xo connect project:P space:NAME` and `xo update space:NAME` work on it. NAME is
+    lowercased, as on XO. If the folder could not be made, `xo install space:NAME` makes it.
   - `update` first pushes each checkout's branch to its upstream (refused if the remote is ahead:
     run `xo sync`). Then it sends the branch (or, when detached, the commit) each checkout is on,
     and is refused when the space changed since: run `xo sync`. A ref its remote does not have is
