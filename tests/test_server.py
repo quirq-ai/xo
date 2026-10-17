@@ -1574,6 +1574,21 @@ def test_projects_shows_up_on_the_status_page_as_its_route(xo_server, alice):
     assert activity[0]["route"] == "/me/projects"
 
 
+def test_create_space_with_no_kind_end_to_end(xo_server, clerk, alice, monkeypatch, capfd, tmp_path):
+    monkeypatch.setenv("XO_URL", xo_server.url)
+    monkeypatch.setenv("XO_API_KEY", USER_KEY)
+    monkeypatch.chdir(tmp_path)
+    assert cli.main(["create", "space", "dev"]) == 0
+    out, err = capfd.readouterr()
+    _no_secret(out, err)
+    assert json.loads(out)["name"] == "dev" and json.loads(out)["projects"] == []
+    assert json.loads((tmp_path / "dev/.xo/state.json").read_text())["rev"] == 1
+    assert [s["name"] for s in alice["private_metadata"]["spaces"]] == ["dev"]
+    (tmp_path / "dev").rename(tmp_path / "gone")
+    assert cli.main(["create", "space", "dev"]) == 1
+    assert "xo install space:dev makes it" in capfd.readouterr().err
+
+
 def test_xo_projects_end_to_end(xo_server, clerk, alice, monkeypatch, capfd):
     monkeypatch.setenv("XO_URL", xo_server.url)
     monkeypatch.setenv("XO_API_KEY", USER_KEY)
@@ -1582,7 +1597,7 @@ def test_xo_projects_end_to_end(xo_server, clerk, alice, monkeypatch, capfd):
     assert cli.main(["projects", "add", "my app"]) == 0
     out, err = capfd.readouterr()
     _no_secret(out, err)
-    assert json.loads(out) == ["my app"] and "POST" in err
+    assert json.loads(out) == [{"name": "my app"}] and "POST" in err
     assert cli.main(["projects", "add", "My App"]) == 1
     assert "already in your projects" in capfd.readouterr().err
     assert alice["private_metadata"] == {"stripeId": "cus_1", "notes": {"a": [1, 2]}, "flag": True,

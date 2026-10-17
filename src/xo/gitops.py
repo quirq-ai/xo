@@ -83,14 +83,19 @@ def set_origin(dest: Path, name: str) -> str:
     if run("remote", "get-url", "origin", cwd=dest, check=False) is None:
         run("remote", "add", "origin", url, cwd=dest)
         return f"its origin is now {url}"
-    urls = [line for kind in (["--all"], ["--push", "--all"])
-            for line in (run("remote", "get-url", *kind, "origin", cwd=dest, check=False) or "").splitlines()
-            if line.strip()]
-    if not urls or not all(_is_repo(u, name) for u in urls):
+    if not origin_is(dest, name):
         # Never echo a URL: it can carry a token. One with a login in it is refused too, since xo
         # cannot tell where it points.
         raise XoError(f"its origin is not one xo can confirm is {name}; point it at {url} yourself")
     return f"its origin is already {name}"
+
+
+def origin_is(dest: Path, name: str) -> bool:
+    """Whether a checkout's origin, every fetch and push URL, is GitHub's owner/repo."""
+    urls = [line for kind in (["--all"], ["--push", "--all"])
+            for line in (run("remote", "get-url", *kind, "origin", cwd=dest, check=False) or "").splitlines()
+            if line.strip()]
+    return bool(urls) and all(_is_repo(u, name) for u in urls)
 
 
 def init(dest: Path) -> None:

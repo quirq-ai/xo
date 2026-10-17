@@ -34,14 +34,16 @@ xo create space my-cc claude-code --volume-size 20 --providers-anthropic-api-key
 xo create space my-claw openclaw --volume-size 20 \
   --providers-anthropic-api-key "$ANTHROPIC_API_KEY" \
   --notification-channels-telegram-bot-token "$TELEGRAM_BOT_TOKEN"
+xo create space dev                              # a space here only: ./dev, nothing on XO
 xo create project notes                          # an empty repository at ./notes
-xo create project https://github.com/OWNER/REPO  # named OWNER/REPO and cloned
+xo create project https://github.com/juanfont/headscale  # called headscale, cloned into ./headscale
 xo spaces --space-id 6f1c2c1e-...   # connection URLs for a space you own
 ```
 
 | Command | Request | Body |
 |---|---|---|
 | `xo create space NAME KIND` | `POST /me/spaces` on your xo server: it creates the space through XO (`POST /KIND`) with NAME as its name there, then records it in your `spaces` as NAME | the flags of KIND, below |
+| `xo create space NAME` | no KIND: `POST /me/spaces/connect`, a space entry with no projects and nothing on XO, then the folder `./NAME` here, ready for `xo connect` and `xo update` | none |
 | &nbsp;&nbsp;KIND `claude-code` | `POST /claude-code` | volume size; Anthropic provider |
 | &nbsp;&nbsp;KIND `codex` | `POST /codex` | volume size |
 | &nbsp;&nbsp;KIND `antigravity` | `POST /antigravity` | volume size |
@@ -54,18 +56,28 @@ xo spaces --space-id 6f1c2c1e-...   # connection URLs for a space you own
 | `xo status` | each service's address and whether you are logged in; never a key | none |
 | `xo me` | `GET /me` on your xo server; prints `{"xo": {username, imageUrl, ..., "public_data": {...}, "private_data": {...}}}` | none |
 | `xo projects` / `xo projects add NAME` | `GET` / `POST /me/projects` on your xo server: the `projects` list in your own private metadata; the server makes the change and writes only that list | the name only |
-| `xo create project NAME [URL]` | `POST /me/projects`, then clones `https://github.com/OWNER/REPO` here (or `git init ./NAME` for a plain name) with your own git. A project with a repo is named `OWNER/REPO`, so give a URL alone, or a NAME that matches it | the name only |
+| `xo create project NAME [URL]` | `GET` and `POST /me/projects`, then clones `https://github.com/OWNER/REPO` into `./REPO` (`./OWNER/REPO` when another of your projects is called `REPO`), or `git init ./NAME` for a plain name, with your own git. A project with a repo is recorded as `OWNER/REPO` and called `REPO`, so give a URL alone, or a NAME that is its `REPO` or `OWNER/REPO` | the name only |
 | `xo connect project:P space:S` / `xo connect space:S` | `POST /me/spaces/S/projects` / `POST /me/spaces/connect`: a project's ref in a space, or a new space entry in your metadata | `--ref` (default main) / `--id` for an XO space you already have |
-| `xo connect project:P --repo URL` | `POST /me/projects/connect`: a project made with a name only gets its repo and is renamed `OWNER/REPO`; `./P` gets that origin if it has none and moves to `./OWNER/REPO` (left in place unless its origin, fetch and push, is that repository) | the name and `OWNER/REPO` |
-| `xo list projects\|spaces\|shared` | `GET /me/projects` / `GET /me/spaces` / `GET /me/shared` | none |
+| `xo connect project:P --repo URL` | `POST /me/projects/connect`: a project made with a name only gets its repo and is recorded as `OWNER/REPO`; `./P` gets that origin if it has none and moves to `./REPO` (left in place unless its origin, fetch and push, is that repository) | the name and `OWNER/REPO` |
+| `xo list projects\|spaces\|shared` | `GET /me/projects` / `GET /me/spaces` / `GET /me/shared`; projects show as `{"name": "headscale", "repo": "https://github.com/juanfont/headscale"}` (by `OWNER/REPO` when two of yours share a repo name) | none |
 | `xo share space:S\|project:O/R USERNAME` | `POST /me/share`: an invite in that user's `shared` list, holding the space's name and projects (never its id) | none |
 | `xo accept ID` / `xo reject ID` | `GET /me/shared` and a y/N, then `POST /me/shared/accept`: in one write, a shared space into your spaces or a shared project into the space you name, its projects into your projects, the invite off / `POST /me/shared/reject`: the invite off (the sender can share again) | `--as NAME` (accept a space under another name), `--space NAME` and `--ref REF` (where a shared project goes), `--yes` |
-| `xo install space:S` / `project:P` | `GET /me/spaces`, then your own git: each project cloned or fetched into `./S/OWNER/REPO` at its ref / P cloned, or fetched and fast-forwarded | none |
+| `xo install space:S` / `project:P` | `GET /me/spaces`, then your own git: each project cloned or fetched into `./S/REPO` at its ref / P cloned, or fetched and fast-forwarded | none |
 | `xo update space:S` / `project:P` | `git push` of each branch under `./S`, then `PUT /me/spaces/S` with the refs checked out (refused if the space changed) / `git push` of P's branch | none |
 | `xo sync space:S` / `project:P` | `git pull --rebase` and push of each branch, then merges the space's changes with yours and `PUT`s them / `git pull --rebase` and push | none |
 | `xo user-metadata get` / `update` | `GET` / `PATCH /user-metadata/{userId}` on your xo server | publicMetadata, privateMetadata as JSON objects (admin keys only); try `--dry-run` first: a wrong `--user-id` edits another user |
 
-Every space is created with `xo create space NAME KIND`; the old `xo claude-code`, `xo codex`, ...
+A GitHub project is called by its repo's name in every command (`project:headscale`); when another
+of your projects has that name, call it by its `OWNER/REPO` (its folder is then `./OWNER/REPO`). A
+repo named like such an `OWNER` folder goes in `./OWNER/REPO` too (`suraj/suraj` beside `suraj/react`),
+so no project's folder is ever inside another's. A checkout an older xo put in `./OWNER/REPO` is still
+used there.
+
+`xo projects`, `xo list projects`, `xo create project` and `xo connect project:P --repo` print your
+projects as `[{"name": "headscale", "repo": "https://github.com/juanfont/headscale"}, {"name":
+"notes"}]`; before short names they printed `["juanfont/headscale", "notes"]`.
+
+Every space on XO is created with `xo create space NAME KIND`; the old `xo claude-code`, `xo codex`, ...
 commands are gone and say so. It prints the recorded space and XO's answer, `id` included, and
 `xo list spaces` shows it again later. The API has no list, delete, start or stop endpoint, so
 `xo spaces --space-id ID` is the only way to XO's own view of a space.

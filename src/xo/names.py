@@ -40,6 +40,59 @@ def is_github(name: str) -> bool:
     return "/" in name
 
 
+# Folders a project never gets: .xo holds a space's own state.
+_RESERVED_FOLDERS = {".xo"}
+
+
+def short(project: str) -> str:
+    """What a project is called: a GitHub project's repo name, a plain name as it is."""
+    return project.partition("/")[2] if is_github(project) else project
+
+
+def folder(project: str, projects: list | tuple = ()) -> str:
+    """The folder a project gets among projects (the others in the same place): a GitHub project's
+    repo name (juanfont/headscale is ./headscale), or OWNER/REPO, as before short names, when another
+    of projects is called the same, the repo name is reserved, or the repo name is the OWNER folder
+    another project needs (see _nested). A plain name as it is. The project is always recorded as
+    OWNER/REPO."""
+    if not is_github(project):
+        return project
+    return project if project.casefold() in _nested([*projects, project]) else short(project)
+
+
+def owner_folders(projects: list | tuple) -> set[str]:
+    """The OWNER folders (casefolded) that projects' OWNER/REPO folders sit in."""
+    return {p.partition("/")[0] for p in _nested(projects)}
+
+
+def _nested(projects: list | tuple) -> set[str]:
+    """The GitHub projects (casefolded) that get OWNER/REPO: those whose repo name another project
+    shares or is reserved, then, until none is left, each whose repo name is the OWNER folder one of
+    those sits in, so no project's folder is ever inside another's (suraj/suraj beside suraj/react)."""
+    every = {p.casefold() for p in projects if isinstance(p, str)}
+    github = {p for p in every if is_github(p)}
+    count: dict[str, int] = {}
+    for p in every:
+        count[short(p)] = count.get(short(p), 0) + 1
+    nested = {p for p in github if short(p) in _RESERVED_FOLDERS or count[short(p)] > 1}
+    while True:
+        owners = {p.partition("/")[0] for p in nested}
+        more = {p for p in github - nested if short(p) in owners}
+        if not more:
+            return nested
+        nested |= more
+
+
+def named(projects: list, typed: str) -> list[str]:
+    """The projects a typed name means (any case): the project of exactly that name if there is one
+    (OWNER/REPO, or a plain name); otherwise, for a plain name, each GitHub project whose repo has it."""
+    key = typed.casefold()
+    exact = [p for p in projects if isinstance(p, str) and p.casefold() == key]
+    if exact or is_github(typed):
+        return exact
+    return [p for p in projects if isinstance(p, str) and is_github(p) and short(p).casefold() == key]
+
+
 def project_ok(name: str) -> bool:
     if not isinstance(name, str):
         return False
