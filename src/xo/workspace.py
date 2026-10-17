@@ -86,7 +86,8 @@ def dest(root: Path, project: str, projects: list) -> Path:
         return want
     owners = names.owner_folders([*projects, project])
     for there in dict.fromkeys((want, root / names.folder(project), root / project)):
-        if there != want and there.relative_to(root).parts[0].casefold() in owners:
+        top = there.relative_to(root).parts
+        if there != want and len(top) == 1 and top[0].casefold() in owners:
             continue  # another project's OWNER/REPO goes in there, so it is no checkout's home now
         if (there / ".git").exists() and gitops.origin_is(there, project):
             return there
@@ -184,7 +185,7 @@ def _save(root: Path, name: str, rev: int, pairs: list[tuple[str, str]]) -> None
     os.replace(tmp, path)
 
 
-def _place(dest: Path, project: str, ref: str | None) -> bool:
+def _place(dest: Path, project: str, ref: str | None, root: Path = Path(".")) -> bool:
     """Clone or fetch a GitHub project at dest and put it at ref. False for a project with no
     GitHub remote, which xo cannot fetch: it is left as it is."""
     if not names.is_github(project):
@@ -198,7 +199,8 @@ def _place(dest: Path, project: str, ref: str | None) -> bool:
             raise XoError(f"./{dest} has changes that are not committed; commit or stash them first")
         gitops.fetch(dest)
     else:
-        holder = next((p for p in dest.parents if p != Path(".") and (p / ".git").exists()), None)
+        # Only between the space's folder and dest: the space's own folder may be a repository.
+        holder = next((p for p in dest.parents if p != root and root in p.parents and (p / ".git").exists()), None)
         if holder is not None:
             raise XoError(f"./{holder} is a git checkout, and {project} goes in ./{dest} inside it; move ./{holder} "
                           "and try again")
@@ -221,7 +223,7 @@ def install(client: Client, kind: str, name: str) -> Any:
     root = Path(name)
     for project, ref in pairs:
         there = dest(root, project, [p for p, _ in pairs])
-        if _place(there, project, ref):
+        if _place(there, project, ref, root):
             _say(f"./{there}: {ref}")
     rev = _rev(space)
     _save(root, name, rev, pairs)
@@ -362,7 +364,7 @@ def sync(client: Client, kind: str, name: str) -> Any:
         raise XoError("both you and the space changed " + "; ".join(clashes) + "." + left)
     for project, ref in merged:
         if local.get(project) != ref:
-            _place(dest(root, project, [p for p, _ in merged]), project, ref)
+            _place(dest(root, project, [p for p, _ in merged]), project, ref, root)
     # The checkouts now hold the space's refs and yours: save the space as read, so that if recording
     # fails below, the next sync still counts your refs as yours and the space's as its own.
     _save(root, name, _rev(space), remote)

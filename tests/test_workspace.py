@@ -266,6 +266,27 @@ def test_a_project_is_never_cloned_inside_another_checkout(space):
     assert git("status", "--porcelain", cwd="dev/suraj") == ""
 
 
+def test_a_checkout_main_put_in_owner_repo_is_found_beside_a_same_name_pair(space):
+    for repo in ("juanfont/headscale", "suraj/headscale", "suraj/tool"):
+        space.hub.repo(repo)
+        git("clone", "-q", f"file://{space.hub.root}/{repo}", repo)  # main's layout
+    space.store.stored["private_metadata"]["projects"] = ["juanfont/headscale", "suraj/headscale", "suraj/tool"]
+    Path("suraj/tool/NEW").write_text("x")
+    git("add", "NEW", cwd="suraj/tool")
+    git("commit", "-q", "-m", "mine", cwd="suraj/tool")
+    assert workspace.update(space.client, "project", "suraj/tool") == {"project": "suraj/tool"}
+    assert git("log", "-1", "--format=%s", "main", cwd=space.hub.root / "suraj/tool") == "mine"
+    assert workspace.install(space.client, "project", "tool") == {"project": "suraj/tool"}
+    assert not Path("tool").exists()
+
+
+def test_a_space_whose_own_folder_is_a_repository_still_installs(space):
+    git("init", "-q", "dev")
+    space.store.stored["private_metadata"]["spaces"] = [_space("dev", projects=[{"o/a": "main"}, {"o/b": "v1"}])]
+    workspace.install(space.client, "space", "dev")
+    assert Path("dev/a/README").exists() and Path("dev/b/README").exists()
+
+
 def test_a_plain_project_never_pushes_a_github_projects_checkout(space):
     git("clone", "-q", f"file://{space.hub.root}/o/a", "a")
     Path("a/NEW").write_text("x")
