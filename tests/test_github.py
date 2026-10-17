@@ -194,23 +194,6 @@ def test_login_without_gh_says_skipped(capsys):
     assert code == 0 and "xo: github: skipped: the GitHub CLI is not installed (https://cli.github.com)\n" in err
 
 
-def test_a_failed_coder_logout_still_asks_about_gh(monkeypatch, capsys):
-    gh = FakeGh(monkeypatch)
-
-    class BrokenCoder:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def logout(self, ask):
-            raise cli.XoError("coder logout failed (exit 1)")
-    monkeypatch.setattr(cli.shutil, "which", lambda name: "/usr/bin/coder" if name == "coder" else None)
-    monkeypatch.setattr(cli, "CoderClient", BrokenCoder)
-    monkeypatch.setattr(cli, "_ask", lambda question: True)
-    code, _, err = run(capsys, "logout")
-    assert code == 1 and "xo: coder: failed: coder logout failed" in err
-    assert "xo: github: logged out of github.com\n" in err and gh.ran("auth", "logout")
-
-
 def test_undo_in_a_test_keeps_the_real_gh_away(monkeypatch):
     FakeGh(monkeypatch)
     monkeypatch.undo()

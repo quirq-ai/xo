@@ -23,12 +23,11 @@
                                             `xo user-metadata` with the Clerk credentials it holds,
                                             and passes the creates and GET /spaces/{id} on to XO's
                                             core API.
-    xo login [xo|me|coder|github] [--url URL]
+    xo login [xo|me|github] [--url URL]
                                             log in to every service the xo server lists (or the one
                                             named): me (the xo server) and xo take your API key,
                                             asked for without showing it unless a saved key still
-                                            works; coder runs Coder's own login in this terminal;
-                                            github runs gh auth login for github.com, unless gh is
+                                            works; github runs gh auth login for github.com, unless gh is
                                             already connected.
     xo status                               each service, its address, and whether you are logged in.
     xo projects [add NAME]                  show the projects list in your private metadata, or add
@@ -63,19 +62,8 @@
                                             keep yours, then record the result.
     (the xo key step:)                      ask for your API key without showing it, check it with
                                             XO through the xo server, and save it with the URL.
-    xo logout                               delete the saved key, URL and addresses, and log Coder
-                                            out if it is logged in to xo's deployment; asks before
+    xo logout                               delete the saved key, URL and addresses; asks before
                                             logging gh out of github.com.
-    xo coder github URL [--name NAME]       create an xo-github workspace for a GitHub repository;
-                                            uses your Coder login, then prints workspace and public
-                                            app URLs as JSON. See `xo coder github --help`.
-    xo coder login | logout                 log Coder in to the deployment in this terminal, or out
-                                            of it (only if that is where it is logged in).
-    xo coder list | show | start | stop | ssh | ... [ARGS]
-                                            run that coder command on the deployment. Before any
-                                            Coder command xo asks Coder, without naming a
-                                            deployment, where it is logged in, and stops unless
-                                            it is this one, so Coder's token goes nowhere else.
 
 A request that is not a GET changes things on XO, so it prints one line on stderr first; a create
 that stores your API key in the new space says so on a second line. --dry-run prints the request
@@ -83,8 +71,7 @@ and sends nothing, with provider keys and bot tokens shown as <hidden> unless --
 given. A DELETE also needs --yes.
 
 XO API commands go to one URL: --url, else $XO_URL, else the one xo login saved, else
-https://xo.quirq.dev. The core API is under its /api/core/v1. Coder commands use
---coder-url, else $XO_CODER_URL, else https://dev-coder.xo.builders, and Coder's own login.
+https://xo.quirq.dev. The core API is under its /api/core/v1.
 
 The API key comes from --api-key - (one line on stdin), $XO_API_KEY, or the key xo login saved,
 in that order; the saved key is only ever sent to the URL it was saved with. --api-key KEY also
@@ -103,20 +90,19 @@ import json
 import math
 import os
 import re
-import shutil
 import sys
 from pathlib import Path
 from typing import Any, NoReturn
 from urllib.parse import quote
 
-from xo import __version__, coder, commands, github, gitops, names, services, spec, workspace
-from xo.client import (CODER_URL_ENV, CORE_PATH, DEFAULT_TIMEOUT, KEY_ENV, MAYBE_RECEIVED, MIN_SECRET, Client,
-                       CoderClient, Login, XoError, api_key, check_key, coder_url, credentials_path,
-                       forget_login, read_key, redact, save_login, saved_login, xo_url)
+from xo import __version__, commands, github, gitops, names, services, spec, workspace
+from xo.client import (CORE_PATH, DEFAULT_TIMEOUT, KEY_ENV, MAYBE_RECEIVED, MIN_SECRET, Client, Login, XoError,
+                       api_key, check_key, credentials_path, forget_login, read_key, redact, save_login, saved_login,
+                       xo_url)
 
-GLOBAL_DEFAULTS = {"api_key": None, "url": None, "coder_url": None, "spec": None, "timeout": DEFAULT_TIMEOUT}
+GLOBAL_DEFAULTS = {"api_key": None, "url": None, "spec": None, "timeout": DEFAULT_TIMEOUT}
 # Global options that take a value, so the word after one is never read as the command.
-_VALUED = {"--api-key", "--url", "--coder-url", "--spec", "--timeout"}
+_VALUED = {"--api-key", "--url", "--spec", "--timeout"}
 HIDDEN = "<hidden>"
 _UNRECOGNIZED = re.compile(r"(unrecognized arguments: )(.*)\Z", re.S)
 _ECHOED = re.compile(r"(invalid choice|invalid [\w ]+ value|ignored explicit argument): ('(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\"|\S+)")
@@ -124,8 +110,8 @@ _JOINED = re.compile(r"(--?[A-Za-z0-9][\w-]*)=\S*")
 
 
 def _secrets(argv: list[str]) -> list[str]:
-    """Every --api-key in argv, plus XO's API key and Coder's session token from the environment."""
-    found = [os.environ.get(KEY_ENV, "").strip(), os.environ.get("CODER_SESSION_TOKEN", "").strip()]
+    """Every --api-key in argv, plus XO's API key from the environment."""
+    found = [os.environ.get(KEY_ENV, "").strip()]
     for i, arg in enumerate(argv):
         if arg == "--api-key" and i + 1 < len(argv):
             found.append(argv[i + 1])
@@ -549,12 +535,11 @@ def _login(args: argparse.Namespace) -> int:
         saved = None  # a file xo cannot use is replaced
     url = xo_url(args.url, saved.url if saved else None)
     listed, notes = services.fetch(url, args.timeout)
-    platform, coder_at = listed["xo"].url, listed["coder"].url
+    platform = listed["xo"].url
     print(f"xo: services from the xo server at {url}:", file=sys.stderr)
     print(f"xo:   me     {url} (the xo server; your XO key is only sent here)", file=sys.stderr)
     print(f"xo:   xo     {platform} (creates and xo spaces; your key reaches it through the xo server)",
           file=sys.stderr)
-    print(f"xo:   coder  {coder_at}", file=sys.stderr)
     print(f"xo:   github https://{github.HOST} (gh's own login; xo never sees the token)", file=sys.stderr)
     for note in notes:
         print(f"xo: {spec.clean(note)}", file=sys.stderr)
@@ -563,7 +548,7 @@ def _login(args: argparse.Namespace) -> int:
     results: list[tuple[str, str | None, str]] = []  # (service, error or None, line)
 
     def report(name: str, error: str | None, line: str) -> None:
-        # Printed as each step ends, so the key's result shows before Coder's sign-in starts.
+        # Printed as each step ends, so the key's result shows before gh's sign-in starts.
         results.append((name, error, line))
         text = f"failed: {error}" if error else line
         print(f"xo: {name}: {spec.clean(_redacted(text, _Parser.argv, getattr(args, 'resolved_key', None)))}",
@@ -574,14 +559,6 @@ def _login(args: argparse.Namespace) -> int:
             last["me"], last["xo"] = url, platform
         except XoError as e:
             report("me", str(e), "")
-    if args.service in (None, "coder"):
-        try:
-            line, where = _login_coder(args, coder_at, last)
-            report("coder", None, line)
-            if where:
-                last["coder"] = where
-        except XoError as e:
-            report("coder", str(e), "")
     if args.service in (None, "github"):
         if not github.installed():
             report("github", None, f"skipped: the GitHub CLI is not installed ({github.INSTALL})")
@@ -648,21 +625,6 @@ def _check_with_xo(client: Client, url: str, what: str = "the key") -> None:
                 raise XoError(f"{e}; the xo server at {url} does not pass the core API on (is it up to date?); "
                               "nothing saved") from None
             raise XoError(f"{e}; nothing saved") from None
-
-
-def _login_coder(args: argparse.Namespace, listed: str, last: dict[str, str]) -> tuple[str, str | None]:
-    """The coder step: (result line, the address logged in to, or None when it was skipped)."""
-    if args.coder_url or os.environ.get(CODER_URL_ENV, "").strip():
-        where = coder_url(args.coder_url)  # chosen by the person, not by the list
-    else:
-        where = coder_url(listed, source="the coder address in the list")
-        before = last.get("coder") or services.builtin()["coder"].url
-        if where != before and not _ask(f"the list names {where} for coder; you last used {before}. Use {where}?"):
-            raise XoError(f"kept {before}: the list's new address was not accepted (answer y at a terminal to "
-                          "use it); nothing sent")
-    if not shutil.which("coder"):
-        return "skipped: the Coder CLI is not installed (https://coder.com/docs/install/cli); xo coder needs it", None
-    return CoderClient(where, timeout=args.timeout).login(_ask), where
 
 
 def _projects(args: argparse.Namespace) -> int:
@@ -925,23 +887,15 @@ def _account(client: Client) -> str | None:
 
 
 def _logout(args: argparse.Namespace) -> int:
-    """Delete the saved key and addresses; log Coder out only of the deployment xo logged it in to."""
-    # The XO key goes first, whatever else is wrong (a bad XO_CODER_URL must not keep it saved).
+    """Delete the saved key and addresses; log gh out of github.com if you say so."""
+    # The XO key goes first, whatever else is wrong.
     path = forget_login()
     print(f"xo: me: deleted {path}" if path else f"xo: me: no saved key at {credentials_path()}",
           file=sys.stderr)
-    coder_default = services.coder_default()
     services.forget_addresses()
     if os.environ.get(KEY_ENV, "").strip():
         print(f"xo: {KEY_ENV} is still set in this terminal; run unset {KEY_ENV} to clear it", file=sys.stderr)
     failed = 0
-    if shutil.which("coder"):
-        try:
-            coder_at = coder_url(args.coder_url, default=coder_default)
-            print(f"xo: coder: {CoderClient(coder_at, timeout=args.timeout).logout(_ask)}", file=sys.stderr)
-        except XoError as e:
-            print(f"xo: coder: failed: {spec.clean(str(e))}", file=sys.stderr)
-            failed = 1
     if github.installed():
         try:
             print(f"xo: github: {spec.clean(github.GhClient(timeout=args.timeout).logout(_ask))}", file=sys.stderr)
@@ -952,9 +906,9 @@ def _logout(args: argparse.Namespace) -> int:
 
 
 def _status(args: argparse.Namespace) -> int:
-    """Each service, its address, and whether you are logged in. Never a key. Only the Coder and
-    GitHub CLIs are asked anything: Coder where it is logged in, without naming a deployment, and gh
-    who it is logged in as on github.com (up to two gh calls, one of them to GitHub)."""
+    """Each service, its address, and whether you are logged in. Never a key. Only the GitHub CLI
+    is asked anything: who it is logged in as on github.com (up to two gh calls, one of them to
+    GitHub)."""
     try:
         saved = saved_login()
         problem = None
@@ -973,53 +927,13 @@ def _status(args: argparse.Namespace) -> int:
     else:
         state = "not logged in; run xo login"
     platform = last.get("xo") or services.builtin()["xo"].url
-    coder_at = coder_url(args.coder_url, default=services.coder_default())
-    if not shutil.which("coder"):
-        coder_state = "the Coder CLI is not installed"
-    else:
-        try:
-            found = CoderClient(coder_at, timeout=args.timeout).logged_in_to()
-            coder_state = ("not logged in; run xo login coder" if found is None
-                           else f"logged in as {found[1]}" if found[0] == coder_at
-                           else f"logged in to {found[0]}, not this one; run xo login coder")
-        except XoError as e:
-            coder_state = str(e)
     gh_state = (github.GhClient(timeout=args.timeout).status() if github.installed()
                 else "the GitHub CLI is not installed")
     rows = [("me", url, state), ("xo", platform, "uses the same key, through the xo server (me)"),
-            ("coder", coder_at, coder_state), ("github", f"https://{github.HOST}", gh_state)]
+            ("github", f"https://{github.HOST}", gh_state)]
     for name, where, what in rows:
         print(spec.clean(f"{name:<6} {where:<34} {what}"))
     return 0
-
-
-def _coder_github(args: argparse.Namespace) -> int:
-    name, parameters = coder.github_parameters(
-        args.repo_url, name=args.name, ref=args.ref, start_command=args.start_command,
-        capacity=args.capacity, workspace_size=args.workspace_size,
-        home_disk_size=args.home_disk_size, wait_timeout=args.wait_timeout)
-    args.client = client = CoderClient(coder_url(args.coder_url, default=services.coder_default()), timeout=args.timeout)
-    client.hide(_secrets(_Parser.argv))
-    if args.dry_run:
-        print(client.scrub(_json({"deploymentUrl": client.base, "template": "xo-github", "name": name,
-                                  "organization": args.org, "parameters": parameters})))
-        print("xo: dry run, nothing sent", file=sys.stderr)
-        return 0
-    owner = client.owner()
-    workspace_url = f"{client.base}/@{quote(owner, safe='')}/{quote(name, safe='')}"
-    print(client.scrub(f"xo: creating xo-github workspace {name}; its port 3000 app is public"), file=sys.stderr)
-    try:
-        app_url = client.create_github(name, parameters, org=args.org, wait_timeout=args.wait_timeout)
-    except XoError as e:
-        raise XoError(f"{e}; workspace: {workspace_url}") from None
-    print(client.scrub(_json({"name": name, "repoUrl": parameters["repo_url"],
-                              "workspaceUrl": workspace_url, "appUrl": app_url})))
-    return 0
-
-
-# Coder commands passed straight to the coder CLI, on the deployment xo checked Coder is logged in to.
-# No delete: xo has no delete command; delete workspaces in the Coder dashboard.
-CODER_PASS = ("list", "show", "start", "stop", "restart", "ssh", "open", "ping", "port-forward", "update")
 
 
 def _ask(question: str) -> bool:
@@ -1031,59 +945,6 @@ def _ask(question: str) -> bool:
         return sys.stdin.readline().strip().lower() in ("y", "yes")
     except (EOFError, KeyboardInterrupt):
         return False
-
-
-def _coder_login(args: argparse.Namespace) -> int:
-    client = CoderClient(coder_url(args.coder_url, default=services.coder_default()), timeout=args.timeout)
-    print(f"xo: coder: {client.login(_ask)}", file=sys.stderr)
-    last = services.saved_addresses()
-    last["coder"] = client.base
-    services.save_addresses(last)
-    return 0
-
-
-def _coder_logout(args: argparse.Namespace) -> int:
-    client = CoderClient(coder_url(args.coder_url, default=services.coder_default()), timeout=args.timeout)
-    print(f"xo: coder: {client.logout(_ask)}", file=sys.stderr)
-    return 0
-
-
-def _coder_pass(argv: list[str]) -> int | None:
-    """`xo [--coder-url URL] coder [--coder-url URL] VERB ARGS...` for a VERB in CODER_PASS: run
-    `coder --url URL VERB ARGS...` in this terminal once Coder is known to be logged in to URL.
-    None when argv is something else."""
-    flag, timeout, i = None, DEFAULT_TIMEOUT, 0
-    seen_coder = False
-    while i < len(argv):
-        arg = argv[i]
-        name, eq, value = arg.partition("=")
-        if name in _VALUED and (eq or i + 1 < len(argv)):
-            # xo's own options; only --coder-url and --timeout matter to Coder commands.
-            if not eq:
-                value = argv[i + 1]
-            if name == "--coder-url":
-                flag = value
-            elif name == "--timeout":
-                try:
-                    timeout = _seconds(value)
-                except argparse.ArgumentTypeError:
-                    return None
-            i += 1 if eq else 2
-        elif not seen_coder and arg == "coder":
-            seen_coder = True
-            i += 1
-        elif seen_coder and arg in CODER_PASS:
-            client = CoderClient(coder_url(flag, default=services.coder_default()), timeout=timeout)
-            return client.run([arg, *argv[i + 1:]])
-        else:
-            return None
-    return None
-
-
-def _coder_pass_misplaced(args: argparse.Namespace) -> int:
-    raise XoError(f"xo coder {args.action} takes only xo's --coder-url and --timeout before "
-                  f"{args.action} (with a valid number of seconds); put coder's own arguments after it. "
-                  "Nothing was sent")
 
 
 def _seconds(text: str) -> float:
@@ -1124,9 +985,6 @@ def _common(key: bool = True) -> argparse.ArgumentParser:
     c.add_argument("--url", default=argparse.SUPPRESS,
                    help="the server XO API commands go to (default $XO_URL, then the one xo login saved, "
                         "then https://xo.quirq.dev)")
-    c.add_argument("--coder-url", default=argparse.SUPPRESS,
-                   help="a Coder deployment, for `xo coder` (default $XO_CODER_URL, "
-                        "then https://dev-coder.xo.builders)")
     c.add_argument("--spec", default=argparse.SUPPRESS, metavar="FILE",
                    help="an OpenAPI JSON file (default $XO_SPEC, then the one bundled with xo)")
     c.add_argument("--timeout", type=_seconds, default=argparse.SUPPRESS, help="seconds per request (default 30)")
@@ -1187,7 +1045,7 @@ def _endpoints(sub: argparse._SubParsersAction, common: argparse.ArgumentParser,
                     commands.add_operation(p, op, _add_send, _create_space, skip={"name"})
     except (XoError, ValueError, TypeError, RecursionError, argparse.ArgumentError) as e:
         command = _command_word(argv)
-        if command in ("ops", "call", "api", "serve", "login", "logout", "status", "coder"):
+        if command in ("ops", "call", "api", "serve", "login", "logout", "status"):
             return  # they say for themselves when they need the spec
         reason = str(e) if isinstance(e, XoError) else f"cannot use spec {where}: {type(e).__name__}: {e}"
         print(f"xo: {spec.clean(_redacted(reason, argv))}", file=sys.stderr)
@@ -1197,15 +1055,6 @@ def _endpoints(sub: argparse._SubParsersAction, common: argparse.ArgumentParser,
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    try:
-        passed = _coder_pass(argv)
-    except XoError as e:
-        print(f"xo: {spec.clean(_redacted(str(e), argv))}", file=sys.stderr)
-        return 1
-    except KeyboardInterrupt:
-        return 130
-    if passed is not None:
-        return passed
     if _command_word(argv) in names.SPACE_KINDS:  # nothing is parsed or sent, so no value is echoed
         print(f"xo: {_moved(_command_word(argv))}", file=sys.stderr)
         return 1
@@ -1242,15 +1091,15 @@ def main(argv: list[str] | None = None) -> int:
 
     keyless = _common(key=False)
     li = sub.add_parser("login", parents=[keyless],
-                        help="log in to every service the xo server lists (me and xo with your XO API key, "
-                             "coder with Coder's login), and to GitHub with gh's login, or to the one named")
-    li.add_argument("service", nargs="?", choices=(*KEY_SERVICES, "coder", "github"),
+                        help="log in to every service the xo server lists (me and xo with your XO API key), "
+                             "and to GitHub with gh's login, or to the one named")
+    li.add_argument("service", nargs="?", choices=(*KEY_SERVICES, "github"),
                     help="only this one (xo and me both mean the XO API key; xo-server and xo-platform "
                          "are their old names)")
     li.set_defaults(run=_login)
     lo = sub.add_parser("logout", parents=[keyless],
-                        help="delete the key and addresses xo login saved, and log Coder out of xo's deployment "
-                             "and gh out of github.com (each asked first)")
+                        help="delete the key and addresses xo login saved, and log gh out of github.com "
+                             "(asked first)")
     lo.set_defaults(run=_logout)
     st = sub.add_parser("status", parents=[keyless],
                         help="each service, its address, and whether you are logged in (never a key)")
@@ -1324,32 +1173,6 @@ def main(argv: list[str] | None = None) -> int:
     ls = sub.add_parser("list", parents=[common], help="show your projects, your spaces or the invites shared with you")
     ls.add_argument("what", choices=("projects", "spaces", "shared"))
     ls.set_defaults(run=_list)
-
-    cr = sub.add_parser("coder", parents=[common], help="launch workspaces using your Coder login")
-    crsub = cr.add_subparsers(dest="action", required=True, metavar="ACTION")
-    gh = crsub.add_parser("github", parents=[common], help="deploy a GitHub repository with xo-github")
-    gh.add_argument("repo_url", metavar="URL", help="HTTPS GitHub repository URL (without a branch path)")
-    gh.add_argument("--name", help="workspace name (default: repository name, normalized to letters/digits/hyphens)")
-    gh.add_argument("--ref", default="", help="branch or tag (default: repository default branch)")
-    gh.add_argument("--start-command", default="auto",
-                    help="auto detects Node apps; manual only clones; otherwise a shell command on port 3000")
-    gh.add_argument("--capacity", choices=("spot", "ondemand"), default="spot",
-                    help="spot: shared/free; ondemand: dedicated/paid (default: spot)")
-    gh.add_argument("--workspace-size", choices=coder.SIZES, default="xo.small", help="default: xo.small")
-    gh.add_argument("--home-disk-size", type=int, default=5, metavar="GB", help="1 to 100 (default: 5); fixed at creation")
-    gh.add_argument("--org", help="Coder organization name or UUID (default: Coder's configured organization)")
-    gh.add_argument("--wait-timeout", type=float, default=600, metavar="SECONDS",
-                    help="maximum wait for Coder to create/start the workspace (default: 600)")
-    gh.add_argument("--dry-run", action="store_true", help="print the deployment plan; no Coder CLI or login needed")
-    gh.set_defaults(run=_coder_github)
-    li = crsub.add_parser("login", parents=[common], help="log Coder in to the deployment, in this terminal")
-    li.set_defaults(run=_coder_login)
-    lo = crsub.add_parser("logout", parents=[common],
-                          help="log Coder out, only if it is logged in to the deployment")
-    lo.set_defaults(run=_coder_logout)
-    for verb in CODER_PASS:
-        crsub.add_parser(verb, help=f"coder {verb} ARGS..., on the deployment, after checking Coder's login"
-                         ).set_defaults(run=_coder_pass_misplaced)
 
     _endpoints(sub, common, argv, space_kinds)
 

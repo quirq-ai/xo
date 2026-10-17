@@ -5,13 +5,13 @@ Vercel at `xo.quirq.dev` through `app.py`), which holds the Clerk Secret Key so 
 it. Standard library only. Setup is in [quickstart.md](quickstart.md); the server's settings in
 [server.md](server.md).
 
-This describes main as of this change: through #37 (sharing) plus the unified `xo create` change.
+This describes main as of this change: through #40.
 Every command has its own sequence diagram in section 3. [architecture.html](architecture.html) is the same doc as a page with drawn diagrams;
 GitHub shows it as source, so open it locally or from a static host.
 
 | Mode | Runs on | Holds | Entry point |
 |---|---|---|---|
-| CLI | your Mac or Linux machine, Python 3.11+ | your XO API key; Coder and gh keep their own logins | `xo` = `xo.cli:main` |
+| CLI | your Mac or Linux machine, Python 3.11+ | your XO API key; gh keeps its own login | `xo` = `xo.cli:main` |
 | Server | Vercel, Docker, or `xo serve` locally | `CLERK_SECRET_KEY`, in its environment only | `app.py` = `wsgi_app()` |
 
 ## 1. System context
@@ -19,30 +19,27 @@ GitHub shows it as source, so open it locally or from a static host.
 The CLI sends your XO key to one address, the xo server. The server answers `/me` and
 `/user-metadata` through Clerk, writes your `projects` and `spaces` lists there (and, when you
 share, an invite in the other user's `shared`), and passes creates and the space read on to XO's
-core API with your key as sent. Projects are cloned with your own git.
+core API with your key as sent. GitHub is reached through gh and its own login; projects are cloned
+with your own git.
 
 ```mermaid
 flowchart LR
   subgraph machine[Your machine]
     cli[xo CLI]
     cred[~/.config/xo/credentials]
-    coder[coder CLI]
     gh[gh CLI]
     git[git]
     cli -- save --> cred
-    cli -- runs --> coder
     cli -- runs --> gh
     cli -- runs --> git
   end
   server[xo server<br/>xo.quirq.dev]
   clerk[Clerk<br/>api.clerk.com]
   core[XO core API<br/>dev.xo.builders/api/core/v1]
-  coderdep[Coder<br/>dev-coder.xo.builders]
   github[GitHub]
   cli == XO API key ==> server
   server -- key, user --> clerk
   server == your key ==> core
-  coder -- Coder session token --> coderdep
   gh -- gh token --> github
   git -- clone, fetch, push over https --> github
 ```
@@ -52,12 +49,10 @@ flowchart LR
 Most commands are generated: `commands.register()` reads the bundled spec (`src/xo/openapi.json`,
 or `--spec`) and makes one command per operation, with every parameter and body field as a flag.
 XO's seven space creates are the exception: they are the kinds of `xo create space NAME KIND`.
-`xo coder VERB` is caught before argparse and handed to the coder CLI.
 
 ```mermaid
 flowchart LR
   argv[xo ARGS] -- argv --> main["cli.main()"]
-  main -- coder VERB --> pass["_coder_pass()"] -- runs --> coderc[coder CLI]
   main -- built-in --> builtin[login, status, projects, create, connect, list, install, update, sync, share, accept, reject, ops, call, api, serve]
   main -- endpoint --> gen["commands.register()"]
   spec[openapi.json or --spec] -- reads --> gen
@@ -90,11 +85,9 @@ flowchart LR
 | `xo sync project:P\|space:S` | git, server | `pull --rebase` and push P; for a space, rebase and push each branch, merge refs, record |
 | `xo user-metadata get --user-id ID` | server only | admin keys only: both metadata buckets |
 | `xo user-metadata update --user-id ID --private-metadata JSON` | server only | admin keys only; deep merges into allow-listed keys (also `--public-metadata`) |
-| `xo login [xo\|me\|coder\|github]` | server, Coder, gh | reads `/config`, checks and saves the key, runs Coder's and gh's logins |
-| `xo logout`, `xo status` | local, Coder, gh | delete saved login; show each service |
+| `xo login [xo\|me\|github]` | server, gh | reads `/config`, checks and saves the key, runs gh's login |
+| `xo logout`, `xo status` | local, gh | delete saved login; show each service |
 | `xo ops`, `xo call`, `xo api` | local / server | list operations; run one by id; send any request |
-| `xo coder github URL` | Coder | create an `xo-github` workspace |
-| `xo coder login`, `logout`, `list`, `ssh`, ... | Coder | Coder's own commands after the login check; no delete |
 | `xo serve` | local | run the server on 127.0.0.1:8787 |
 
 Each create row, and each endpoint row (`xo spaces`, `xo me`, `xo user-metadata`), runs as shown
@@ -103,7 +96,7 @@ with `--dry-run` added, which needs no key and sends nothing. XO lowercases spac
 
 ## 3. Every command, step by step
 
-One swimlane per command: who does each step, in order, and what moves between them. An arrow is a call (`->>`) or its answer (`-->>`): the CLI calls the xo server, git, gh and coder; only the server calls Clerk and XO, and their answers come back through it. A label that starts with "if" is a step that happens only sometimes.
+One swimlane per command: who does each step, in order, and what moves between them. An arrow is a call (`->>`) or its answer (`-->>`): the CLI calls the xo server, git and gh; only the server calls Clerk and XO, and their answers come back through it. A label that starts with "if" is a step that happens only sometimes.
 
 ### Log in and check
 
@@ -116,54 +109,46 @@ sequenceDiagram
   participant Cli as You · xo CLI
   participant Srv as xo server
   participant Xo as XO core API
-  participant Coder as coder · Coder
   participant Gh as gh · GitHub
-  Note over Cli: xo login: or: xo login coder
+  Note over Cli: xo login: or: xo login github
   Cli->>Srv: fetch / GET /config: addresses, no key
   Srv-->>Cli: the list / ask for your key: hidden, must start ak_
   Cli->>Srv: your key / GET spaces/0000...: a space no one has
   Srv->>Xo: forwarded / Space not found: 404: the key works
   Xo-->>Srv: 404 / passes it back: XO's answer as sent
   Srv-->>Cli: 404 / save key + URL: ~/.config/xo/credentials
-  Cli->>Coder: runs / coder login: in your terminal
-  Coder-->>Cli: logged in / one line each: me, xo, then coder
   Cli->>Gh: runs / gh auth login: only if not logged in
+  Gh-->>Cli: logged in / one line each: me, then github
 ```
 
-A key is saved only after XO accepts it. A 401, or the server's own bare 404, saves nothing. xo also asks the server's `/me` whose key it is, for the line it prints. Each service prints one line; `xo login xo`, `coder` or `github` does just that one.
+A key is saved only after XO accepts it. A 401, or the server's own bare 404, saves nothing. xo also asks the server's `/me` whose key it is, for the line it prints. Each service prints one line; `xo login xo` (or `me`) or `xo login github` does just that one.
 
 #### `xo logout`
 
 ```mermaid
 sequenceDiagram
   participant Cli as You · xo CLI
-  participant Coder as coder · Coder
   participant Gh as gh · GitHub
   Note over Cli: xo logout
   Note over Cli: delete key + addresses: the files login saved
-  Cli->>Coder: if logged in there / coder logout: asks, xo's deployment only
-  Coder-->>Cli: done / one line: then GitHub
   Cli->>Gh: if gh is installed / gh auth logout: asks first
 ```
 
-Logout is local first. Coder and gh are logged out only where they point at xo's deployment and github.com, and only after asking.
+Logout is local first. gh is logged out of github.com only after asking.
 
 #### `xo status`
 
 ```mermaid
 sequenceDiagram
   participant Cli as You · xo CLI
-  participant Coder as coder · Coder
   participant Gh as gh · GitHub
   Note over Cli: xo status
   Note over Cli: read saved login: never prints the key
-  Cli->>Coder: ask / coder whoami: asked without a URL
-  Coder-->>Cli: answer / coder row: where, and as whom
-  Cli->>Gh: ask / gh auth status: who, on github.com
-  Gh-->>Cli: answer / four rows: me, xo, coder, github
+  Cli->>Gh: if gh is installed / gh auth status: who, on github.com
+  Gh-->>Cli: answer / three rows: me, xo, github
 ```
 
-Status sends no key. It only asks the Coder and GitHub CLIs who they are logged in as.
+Status sends no key. It only asks the GitHub CLI who it is logged in as.
 
 ### Your account
 
@@ -571,39 +556,9 @@ sequenceDiagram
 
 Anything else gets the server's 404. To reach XO directly, add `--url https://dev.xo.builders` with `XO_API_KEY` or `--api-key -`. `--dry-run` sends nothing and hides provider keys.
 
-### Coder and the server
+### Run the server
 
-Coder keeps its own login; xo checks where it points before every call.
-
-#### `xo coder github URL`
-
-```mermaid
-sequenceDiagram
-  participant Cli as You · xo CLI
-  participant Coder as coder · Coder
-  Note over Cli: xo coder github URL: --name, --ref, --start-command
-  Cli->>Coder: check / coder whoami: where is it logged in?
-  Coder-->>Cli: where / xo's deployment?: else stop
-  Cli->>Coder: runs coder / create workspace: template xo-github
-  Note over Coder: wait for the build: up to 600 s
-  Coder-->>Cli: done / print URLs: workspace + public app
-```
-
-The app on port 3000 is public. `--dry-run` prints the plan without Coder. Provisioner logs are never printed, since they can hold credentials.
-
-#### `xo coder login | logout | list | ssh | ...`
-
-```mermaid
-sequenceDiagram
-  participant Cli as You · xo CLI
-  participant Coder as coder · Coder
-  Note over Cli: xo coder ssh my-app: caught before argparse
-  Cli->>Coder: check / coder whoami: asked without a URL
-  Coder-->>Cli: where / xo's deployment?: else stop
-  Cli->>Coder: runs / coder --url DEP ssh: in your terminal
-```
-
-No Coder command runs against another deployment. Options that change the deployment, token or login store are refused anywhere after the verb. xo has no delete.
+`xo serve` runs the same server on your machine.
 
 #### `xo serve`
 
@@ -703,7 +658,7 @@ flowchart LR
 - A ref is recorded only if it is on the project's remote; a checkout with uncommitted changes is never touched.
 - Single projects use git only: install clones, or fetches and fast-forwards; update pushes (never
   forced); sync runs `pull --rebase` then pushes.
-- git runs with `GIT_ALLOW_PROTOCOL=https`, no submodules, `--end-of-options` before names and refs, and without XO, Clerk, Coder or gh tokens in its environment.
+- git runs with `GIT_ALLOW_PROTOCOL=https`, no submodules, `--end-of-options` before names and refs, and without XO, Clerk or gh tokens in its environment.
 - Two updates on different instances that both read rev N within the 0.3 s settle can both get 200;
   the later write stands and the other client's next update is refused, since the space no longer
   holds its `base`. If a stale write sends the rev backwards, `xo sync` stops and names the projects
@@ -719,13 +674,11 @@ flowchart LR
   one merge), and one thing on another user: its own invite in their `shared` (`xo share`). Every
   change is one audit line (a count, never a value; a share names the recipient only by a hash).
 - An admin key needs the claim `xo_admin: true` and an id in `XO_ADMIN_KEY_IDS`. None is issued yet.
-- Before each Coder command, xo checks Coder is logged in to xo's deployment.
 
 | Secret | Lives in | Sent to |
 |---|---|---|
 | XO API key | `~/.config/xo/credentials` or `XO_API_KEY` | the server it was saved with, which forwards it (also for `xo create space` and `connect --id`); copied into each new space except `nebius-openclaw` |
 | `CLERK_SECRET_KEY` | the server's environment | `api.clerk.com` |
-| Coder session token | Coder's own store | xo's Coder deployment |
 | GitHub token | gh's store or your git credential helper | github.com over https; xo never reads it |
 
 ## 8. Where state lives
@@ -739,18 +692,17 @@ per user), plus audit lines on stderr.
 
 ## 9. Folder map
 
-44 tracked files.
+41 tracked files.
 
 ```
 src/xo/
   cli.py            CLI    argparse; built-ins: login, status, projects, create, connect, list,
-                           install, update, sync, share, accept, reject, coder
+                           install, update, sync, share, accept, reject
   workspace.py      CLI    install, update, sync
   gitops.py         CLI    the user's git: https only, own checkouts, no submodules, no xo tokens
   client.py         CLI    the only XO network code, saved key, redaction
   commands.py       CLI    spec operations to commands and flags
   spec.py           CLI    load and check the OpenAPI spec
-  coder.py          CLI    xo-github template inputs
   github.py         CLI    gh login, status, logout
   names.py          shared project, space and ref rules; the only module both sides import
   services.py/.json shared services list and saved addresses

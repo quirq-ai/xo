@@ -181,14 +181,14 @@ html { scroll-behavior: smooth; }
 <body>
 <div class="wrap">
 	<header class="top">
-		<div class="eyebrow">quirq-ai/xo · main as of this change: through #37 (sharing) + unified create</div>
+		<div class="eyebrow">quirq-ai/xo · main as of this change: through #40</div>
 		<h1>xo: one package, a CLI and <span class="x">its server</span></h1>
 		<p class="lede">The command line for XO Cloud's core API. The same Python package runs on your machine as <code>xo</code> and on Vercel as the xo server, which holds the Clerk Secret Key so the CLI never needs it. Standard library only. It also keeps your <code>projects</code> and <code>spaces</code> in your own Clerk metadata, lets you share a space or project with another user as an invite they accept or reject, and installs those projects on your machine and keeps them in step. Every command has its own diagram in section 03. Left out: test internals, the redaction rules in detail, and the Vercel deploy steps (see <code>docs/</code>).</p>
 		<div class="scroll">
 			<table class="modes">
 				<thead><tr><th>Mode</th><th>Runs on</th><th>Holds</th><th>Entry point</th></tr></thead>
 				<tbody>
-					<tr><td><span class="chip agent">CLI</span></td><td>Your Mac or Linux machine, Python 3.11+</td><td>Your XO API key (<code>ak_...</code>); Coder and gh keep their own logins</td><td><code>xo</code> = <code>xo.cli:main</code></td></tr>
+					<tr><td><span class="chip agent">CLI</span></td><td>Your Mac or Linux machine, Python 3.11+</td><td>Your XO API key (<code>ak_...</code>); gh keeps its own login</td><td><code>xo</code> = <code>xo.cli:main</code></td></tr>
 					<tr><td><span class="chip org">Server</span></td><td>Vercel at <code>xo.quirq.dev</code>, or Docker, or <code>xo serve</code> locally</td><td><code>CLERK_SECRET_KEY</code>, in its environment only</td><td><code>app.py</code> = <code>wsgi_app()</code></td></tr>
 				</tbody>
 			</table>
@@ -214,16 +214,16 @@ html { scroll-behavior: smooth; }
 
 <section id="system">
 	<h2><span class="num">01</span>System context</h2>
-	<p>The CLI sends your XO key to exactly one address, the xo server. The server answers account questions and writes your lists itself through Clerk (and, when you share, an invite in the other user's <code>shared</code>), and passes space creates and reads on to XO's core API with your key as sent. Coder and GitHub are reached through their own CLIs and their own logins; projects are cloned with your own git.</p>
+	<p>The CLI sends your XO key to exactly one address, the xo server. The server answers account questions and writes your lists itself through Clerk (and, when you share, an invite in the other user's <code>shared</code>), and passes space creates and reads on to XO's core API with your key as sent. GitHub is reached through gh and its own login; projects are cloned with your own git.</p>
 	<figure>
 		<div class="canvas">
-			<svg class="d" viewBox="0 0 960 420" role="img" aria-label="On your machine the xo CLI reads its saved key and runs the coder, gh and git CLIs. It sends the XO API key only to the xo server, which verifies keys with Clerk and forwards creates to XO's core API. The coder CLI talks to the Coder deployment, and gh and git to GitHub.">
+			<svg class="d" viewBox="0 0 960 354" role="img" aria-label="On your machine the xo CLI reads its saved key and runs the gh and git CLIs. It sends the XO API key only to the xo server, which verifies keys with Clerk and forwards creates to XO's core API. gh and git talk to GitHub.">
 				<defs>
 					<marker id="f1a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
 					<marker id="f1h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
 				</defs>
 
-				<rect class="group" x="20" y="16" width="400" height="390" rx="12"/>
+				<rect class="group" x="20" y="16" width="400" height="324" rx="12"/>
 				<text class="t" x="36" y="40">Your machine</text>
 
 				<rect class="box hot" x="40" y="56" width="360" height="60" rx="8"/>
@@ -236,24 +236,18 @@ html { scroll-behavior: smooth; }
 				<text class="lbl" x="80" y="232">runs</text>
 				<path class="edge" d="M70,238 V304 H148" marker-end="url(#f1a)"/>
 				<text class="lbl" x="80" y="298">runs</text>
-				<path class="edge" d="M70,304 V370 H148" marker-end="url(#f1a)"/>
-				<text class="lbl" x="80" y="364">runs</text>
 
 				<rect class="box" x="150" y="150" width="250" height="44" rx="8"/>
 				<text class="m" x="166" y="168">~/.config/xo/credentials</text>
 				<text class="s" x="166" y="185">key + URL, owner only</text>
 
 				<rect class="box" x="150" y="216" width="250" height="44" rx="8"/>
-				<text class="t" x="166" y="235">coder CLI</text>
-				<text class="s" x="166" y="252">its own login and keyring</text>
+				<text class="t" x="166" y="235">gh CLI</text>
+				<text class="s" x="166" y="252">its own login; xo never sees it</text>
 
 				<rect class="box" x="150" y="282" width="250" height="44" rx="8"/>
-				<text class="t" x="166" y="301">gh CLI</text>
-				<text class="s" x="166" y="318">its own login; xo never sees it</text>
-
-				<rect class="box" x="150" y="348" width="250" height="44" rx="8"/>
-				<text class="t" x="166" y="367">git</text>
-				<text class="s" x="166" y="384">your login; https only</text>
+				<text class="t" x="166" y="301">git</text>
+				<text class="s" x="166" y="318">your login; https only</text>
 
 				<line class="edge hot" x1="400" y1="86" x2="478" y2="86" marker-end="url(#f1h)"/>
 				<text class="lbl hot" x="439" y="78" text-anchor="middle">XO API key</text>
@@ -273,24 +267,18 @@ html { scroll-behavior: smooth; }
 				<text class="t" x="840" y="142" text-anchor="middle">XO core API</text>
 				<text class="s" x="840" y="160" text-anchor="middle">dev.xo.builders/api/core/v1</text>
 
-				<rect class="box" x="740" y="212" width="200" height="52" rx="8"/>
-				<text class="t" x="840" y="234" text-anchor="middle">Coder</text>
-				<text class="s" x="840" y="252" text-anchor="middle">dev-coder.xo.builders</text>
-
-				<rect class="box" x="740" y="278" width="200" height="114" rx="8"/>
-				<text class="t" x="840" y="330" text-anchor="middle">GitHub</text>
-				<text class="s" x="840" y="348" text-anchor="middle">github.com</text>
+				<rect class="box" x="740" y="212" width="200" height="114" rx="8"/>
+				<text class="t" x="840" y="264" text-anchor="middle">GitHub</text>
+				<text class="s" x="840" y="282" text-anchor="middle">github.com</text>
 
 				<line class="edge" x1="660" y1="66" x2="738" y2="66" marker-end="url(#f1a)"/>
 				<text class="lbl" x="699" y="58" text-anchor="middle">key, user</text>
 				<line class="edge hot" x1="660" y1="146" x2="738" y2="146" marker-end="url(#f1h)"/>
 				<text class="lbl hot" x="699" y="138" text-anchor="middle">your key</text>
 				<line class="edge" x1="400" y1="238" x2="738" y2="238" marker-end="url(#f1a)"/>
-				<text class="lbl" x="569" y="230" text-anchor="middle">Coder session token</text>
+				<text class="lbl" x="569" y="230" text-anchor="middle">gh token</text>
 				<line class="edge" x1="400" y1="304" x2="738" y2="304" marker-end="url(#f1a)"/>
-				<text class="lbl" x="569" y="296" text-anchor="middle">gh token</text>
-				<line class="edge" x1="400" y1="370" x2="738" y2="370" marker-end="url(#f1a)"/>
-				<text class="lbl" x="569" y="362" text-anchor="middle">clone, fetch, push over https</text>
+				<text class="lbl" x="569" y="296" text-anchor="middle">clone, fetch, push over https</text>
 			</svg>
 		</div>
 		<figcaption><strong>The XO key goes to one address and nowhere else.</strong> The saved key is only sent to the URL it was saved with, never with a redirect followed, and the server is the only place that passes it on to XO. The Clerk Secret Key never leaves the server.</figcaption>
@@ -299,60 +287,48 @@ html { scroll-behavior: smooth; }
 
 <section id="commands">
 	<h2><span class="num">02</span>Commands: how argv becomes a request</h2>
-	<p>Most commands are not written by hand. <code>commands.register()</code> reads the bundled OpenAPI spec and makes one command per operation, with every parameter and body field as a flag. A handful of built-ins sit beside them, and <code>xo coder VERB</code> is caught before argparse and handed to the coder CLI.</p>
+	<p>Most commands are not written by hand. <code>commands.register()</code> reads the bundled OpenAPI spec and makes one command per operation, with every parameter and body field as a flag. A handful of built-ins sit beside them.</p>
 	<figure>
 		<div class="canvas">
-			<svg class="d" viewBox="0 0 960 320" role="img" aria-label="cli.main parses argv. coder VERB goes to _coder_pass and then the coder CLI. Built-in parsers (login, create, connect, list, install, update, sync, share, accept, reject and the rest) and spec-generated endpoint commands, which read openapi.json, both send through Client.request.">
+			<svg class="d" viewBox="0 0 960 222" role="img" aria-label="cli.main parses argv. Built-in parsers (login, create, connect, list, install, update, sync, share, accept, reject and the rest) and spec-generated endpoint commands, which read openapi.json, both send through Client.request.">
 				<defs>
 					<marker id="f2a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
 					<marker id="f2h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
 				</defs>
 
-				<rect class="box" x="20" y="103" width="110" height="50" rx="8"/>
-				<text class="m" x="75" y="132" text-anchor="middle">xo ARGS</text>
-				<line class="edge" x1="130" y1="128" x2="168" y2="128" marker-end="url(#f2a)"/>
-				<text class="lbl" x="149" y="120" text-anchor="middle">argv</text>
+				<rect class="box" x="20" y="23" width="110" height="50" rx="8"/>
+				<text class="m" x="75" y="52" text-anchor="middle">xo ARGS</text>
+				<line class="edge" x1="130" y1="48" x2="168" y2="48" marker-end="url(#f2a)"/>
+				<text class="lbl" x="149" y="40" text-anchor="middle">argv</text>
 
-				<rect class="box" x="170" y="103" width="130" height="50" rx="8"/>
-				<text class="m" x="235" y="132" text-anchor="middle">cli.main()</text>
+				<rect class="box" x="170" y="23" width="130" height="50" rx="8"/>
+				<text class="m" x="235" y="52" text-anchor="middle">cli.main()</text>
 
-				<line class="edge" x1="300" y1="128" x2="418" y2="128" marker-end="url(#f2a)"/>
-				<path class="edge" d="M330,128 V48 H418" marker-end="url(#f2a)"/>
-				<path class="edge hot" d="M330,128 V208 H418" marker-end="url(#f2h)"/>
-				<text class="lbl" x="338" y="40">coder VERB</text>
-				<text class="lbl" x="338" y="120">built-in</text>
-				<text class="lbl hot" x="338" y="200">endpoint</text>
+				<line class="edge" x1="300" y1="48" x2="418" y2="48" marker-end="url(#f2a)"/>
+				<path class="edge hot" d="M330,48 V128 H418" marker-end="url(#f2h)"/>
+				<text class="lbl" x="338" y="40">built-in</text>
+				<text class="lbl hot" x="338" y="120">endpoint</text>
 
 				<rect class="box" x="420" y="20" width="250" height="56" rx="8"/>
-				<text class="m" x="436" y="43">_coder_pass()</text>
-				<text class="s" x="436" y="63">list · show · start · stop · ssh ...</text>
+				<text class="m" x="436" y="43">built-in parsers</text>
+				<text class="s" x="436" y="63">login · create · connect · sync · share · accept</text>
 
-				<rect class="box" x="420" y="100" width="250" height="56" rx="8"/>
-				<text class="m" x="436" y="123">built-in parsers</text>
-				<text class="s" x="436" y="143">login · create · connect · sync · share · accept</text>
+				<rect class="box hot" x="420" y="100" width="250" height="56" rx="8"/>
+				<text class="m" x="436" y="123">commands.register()</text>
+				<text class="s" x="436" y="143">one command per operation</text>
 
-				<rect class="box hot" x="420" y="180" width="250" height="56" rx="8"/>
-				<text class="m" x="436" y="203">commands.register()</text>
-				<text class="s" x="436" y="223">one command per operation</text>
+				<rect class="box" x="420" y="182" width="250" height="40" rx="8"/>
+				<text class="m" x="545" y="207" text-anchor="middle">openapi.json or --spec</text>
+				<line class="edge" x1="545" y1="182" x2="545" y2="158" marker-end="url(#f2a)"/>
+				<text class="lbl" x="553" y="174">reads</text>
 
-				<rect class="box" x="420" y="262" width="250" height="40" rx="8"/>
-				<text class="m" x="545" y="287" text-anchor="middle">openapi.json or --spec</text>
-				<line class="edge" x1="545" y1="262" x2="545" y2="238" marker-end="url(#f2a)"/>
-				<text class="lbl" x="553" y="254">reads</text>
-
-				<line class="edge" x1="670" y1="48" x2="728" y2="48" marker-end="url(#f2a)"/>
-				<text class="lbl" x="699" y="40" text-anchor="middle">runs</text>
-				<rect class="box" x="730" y="20" width="210" height="56" rx="8"/>
-				<text class="t" x="746" y="43">coder CLI</text>
-				<text class="s" x="746" y="63">after checking its login</text>
-
-				<path class="edge" d="M670,128 H700 V160 H728" marker-end="url(#f2a)"/>
-				<text class="lbl" x="685" y="120" text-anchor="middle">send</text>
-				<path class="edge hot" d="M670,208 H700 V176 H728" marker-end="url(#f2h)"/>
-				<text class="lbl hot" x="685" y="226" text-anchor="middle">send</text>
-				<rect class="box" x="730" y="140" width="210" height="56" rx="8"/>
-				<text class="m" x="746" y="163">Client.request()</text>
-				<text class="s" x="746" y="183">Bearer key · no redirects</text>
+				<path class="edge" d="M670,48 H700 V80 H728" marker-end="url(#f2a)"/>
+				<text class="lbl" x="685" y="40" text-anchor="middle">send</text>
+				<path class="edge hot" d="M670,128 H700 V96 H728" marker-end="url(#f2h)"/>
+				<text class="lbl hot" x="685" y="146" text-anchor="middle">send</text>
+				<rect class="box" x="730" y="60" width="210" height="56" rx="8"/>
+				<text class="m" x="746" y="83">Client.request()</text>
+				<text class="s" x="746" y="103">Bearer key · no redirects</text>
 			</svg>
 		</div>
 		<figcaption><strong>The spec is the command list.</strong> <code>GET /spaces/{spaceId}</code> becomes <code>xo spaces</code>, and XO's seven space creates become the kinds of <code>xo create space NAME KIND</code>, where <code>providers.anthropic.apiKey</code> becomes <code>--providers-anthropic-api-key</code>. The spec is read from disk only, never fetched, so <code>--help</code> works offline.</figcaption>
@@ -385,15 +361,12 @@ html { scroll-behavior: smooth; }
 				<tr><td>xo sync project:P | space:S</td><td>git, server</td><td><code>pull --rebase</code> and push P; for a space, merges its changes with yours, then records</td></tr>
 				<tr><td>xo user-metadata get --user-id ID</td><td>server only</td><td>Admin keys only: both metadata buckets</td></tr>
 				<tr><td>xo user-metadata update --user-id ID --private-metadata JSON</td><td>server only</td><td>Admin keys only; deep merges into allow-listed keys (also <code>--public-metadata</code>); try <code>--dry-run</code> first</td></tr>
-				<tr><td>xo login [xo|me|coder|github]</td><td>server, Coder, gh</td><td>Reads <code>/config</code>, checks and saves the XO key, runs Coder's and gh's logins</td></tr>
-				<tr><td>xo logout</td><td>local, Coder, gh</td><td>Deletes the saved key and addresses; asks before logging Coder and gh out</td></tr>
-				<tr><td>xo status</td><td>local, Coder, gh</td><td>Each service, its address, whether you are logged in; never a key</td></tr>
+				<tr><td>xo login [xo|me|github]</td><td>server, gh</td><td>Reads <code>/config</code>, checks and saves the XO key, runs gh's login</td></tr>
+				<tr><td>xo logout</td><td>local, gh</td><td>Deletes the saved key and addresses; asks before logging gh out</td></tr>
+				<tr><td>xo status</td><td>local, gh</td><td>Each service, its address, whether you are logged in; never a key</td></tr>
 				<tr><td>xo ops [FILTER]</td><td>local</td><td>Lists operations in the spec</td></tr>
 				<tr><td>xo call OPERATION</td><td>server</td><td>Runs one operation by id with <code>--param</code>, <code>--data</code>, <code>--field</code></td></tr>
 				<tr><td>xo api METHOD PATH</td><td>server, or <code>--url</code></td><td>Any request; through the server only the creates and the space read pass</td></tr>
-				<tr><td>xo coder github URL</td><td>Coder</td><td>Creates an <code>xo-github</code> workspace; prints workspace and public app URLs</td></tr>
-				<tr><td>xo coder login · logout</td><td>Coder</td><td>Coder's own login on xo's deployment, in your terminal</td></tr>
-				<tr><td>xo coder list · ssh · start ...</td><td>Coder</td><td>Passed to <code>coder --url DEPLOYMENT</code> after the login check; no delete</td></tr>
 				<tr><td>xo serve</td><td>local</td><td>Runs the server on 127.0.0.1:8787</td></tr>
 			</tbody>
 		</table>
@@ -409,173 +382,139 @@ html { scroll-behavior: smooth; }
 
 <section id="every">
 <h2><span class="num">03</span>Every command, step by step</h2>
-<p>One swimlane per command: who does each step, in order, and what moves between them. A solid arrow is a call and a dashed arrow its answer: the CLI calls the xo server, git, gh and coder; only the server calls Clerk and XO, and their answers come back through it. Highlighted is the step the command exists for; a label that starts with &quot;if&quot; is a step that happens only sometimes.</p>
-<p class="jump"><a href="#cmd-log-in-and-check">Log in and check</a> · <a href="#cmd-your-account">Your account</a> · <a href="#cmd-spaces-on-xo">Spaces on XO</a> · <a href="#cmd-projects-and-spaces-in-your-metadata">Projects, spaces and sharing in your metadata</a> · <a href="#cmd-install-update-and-sync">Install, update and sync</a> · <a href="#cmd-lower-level">Lower level</a> · <a href="#cmd-coder-and-the-server">Coder and the server</a></p>
+<p>One swimlane per command: who does each step, in order, and what moves between them. A solid arrow is a call and a dashed arrow its answer: the CLI calls the xo server, git and gh; only the server calls Clerk and XO, and their answers come back through it. Highlighted is the step the command exists for; a label that starts with &quot;if&quot; is a step that happens only sometimes.</p>
+<p class="jump"><a href="#cmd-log-in-and-check">Log in and check</a> · <a href="#cmd-your-account">Your account</a> · <a href="#cmd-spaces-on-xo">Spaces on XO</a> · <a href="#cmd-projects-and-spaces-in-your-metadata">Projects, spaces and sharing in your metadata</a> · <a href="#cmd-install-update-and-sync">Install, update and sync</a> · <a href="#cmd-lower-level">Lower level</a> · <a href="#cmd-run-the-server">Run the server</a></p>
 <h3 id="cmd-log-in-and-check">Log in and check</h3>
 <p>Setup commands. Only <code>xo login</code> sends your key anywhere, and only to the xo server.</p>
 <h4><code>xo login</code></h4>
 <figure>
 <div class="canvas">
-<svg class="d" viewBox="0 0 960 878" role="img" aria-label="xo login: A key is saved only after XO accepts it.">
+<svg class="d" viewBox="0 0 960 794" role="img" aria-label="xo login: A key is saved only after XO accepts it.">
 <defs>
 <marker id="c1a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
 <marker id="c1h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
 </defs>
-<line class="life" x1="112" y1="40" x2="112" y2="872"/>
-<rect class="hdr" x="32" y="12" width="160" height="28" rx="7"/>
-<text class="t" x="112" y="31" text-anchor="middle">You: xo CLI</text>
-<line class="life" x1="296" y1="40" x2="296" y2="872"/>
-<rect class="hdr" x="216" y="12" width="160" height="28" rx="7"/>
-<text class="t" x="296" y="31" text-anchor="middle">xo server</text>
-<line class="life" x1="480" y1="40" x2="480" y2="872"/>
-<rect class="hdr" x="400" y="12" width="160" height="28" rx="7"/>
-<text class="t" x="480" y="31" text-anchor="middle">XO core API</text>
-<line class="life" x1="664" y1="40" x2="664" y2="872"/>
-<rect class="hdr" x="584" y="12" width="160" height="28" rx="7"/>
-<text class="t" x="664" y="31" text-anchor="middle">coder · Coder</text>
-<line class="life" x1="848" y1="40" x2="848" y2="872"/>
-<rect class="hdr" x="768" y="12" width="160" height="28" rx="7"/>
-<text class="t" x="848" y="31" text-anchor="middle">gh · GitHub</text>
-<rect class="box" x="32" y="58" width="160" height="46" rx="8"/>
-<text class="m" x="112" y="78" text-anchor="middle">xo login</text>
-<text class="s" x="112" y="95" text-anchor="middle">or: xo login coder</text>
-<rect class="box" x="216" y="142" width="160" height="46" rx="8"/>
-<text class="m" x="296" y="162" text-anchor="middle">GET /config</text>
-<text class="s" x="296" y="179" text-anchor="middle">addresses, no key</text>
-<path class="edge" d="M112,104 V124 H296 V140" marker-end="url(#c1a)"/>
-<text class="lbl" x="204" y="119" text-anchor="middle">fetch</text>
-<rect class="box" x="32" y="226" width="160" height="46" rx="8"/>
-<text class="t" x="112" y="246" text-anchor="middle">ask for your key</text>
-<text class="s" x="112" y="263" text-anchor="middle">hidden, must start ak_</text>
-<path class="edge dash" d="M296,188 V208 H112 V224" marker-end="url(#c1a)"/>
-<text class="lbl" x="204" y="203" text-anchor="middle">the list</text>
-<rect class="box" x="216" y="310" width="160" height="46" rx="8"/>
-<text class="m" x="296" y="330" text-anchor="middle">GET spaces/0000...</text>
-<text class="s" x="296" y="347" text-anchor="middle">a space no one has</text>
-<path class="edge" d="M112,272 V292 H296 V308" marker-end="url(#c1a)"/>
-<text class="lbl" x="204" y="287" text-anchor="middle">your key</text>
-<rect class="box" x="400" y="394" width="160" height="46" rx="8"/>
-<text class="t" x="480" y="414" text-anchor="middle">Space not found</text>
-<text class="s" x="480" y="431" text-anchor="middle">404: the key works</text>
-<path class="edge" d="M296,356 V376 H480 V392" marker-end="url(#c1a)"/>
-<text class="lbl" x="388" y="371" text-anchor="middle">forwarded</text>
-<rect class="box" x="216" y="478" width="160" height="46" rx="8"/>
-<text class="t" x="296" y="498" text-anchor="middle">passes it back</text>
-<text class="s" x="296" y="515" text-anchor="middle">XO&#x27;s answer as sent</text>
-<path class="edge dash" d="M480,440 V460 H296 V476" marker-end="url(#c1a)"/>
-<text class="lbl" x="388" y="455" text-anchor="middle">404</text>
-<rect class="box hot" x="32" y="562" width="160" height="46" rx="8"/>
-<text class="t" x="112" y="582" text-anchor="middle">save key + URL</text>
-<text class="s" x="112" y="599" text-anchor="middle">~/.config/xo/credentials</text>
-<path class="edge hot dash" d="M296,524 V544 H112 V560" marker-end="url(#c1h)"/>
-<text class="lbl hot" x="204" y="539" text-anchor="middle">404</text>
-<rect class="box" x="584" y="646" width="160" height="46" rx="8"/>
-<text class="m" x="664" y="666" text-anchor="middle">coder login</text>
-<text class="s" x="664" y="683" text-anchor="middle">in your terminal</text>
-<path class="edge" d="M112,608 V628 H664 V644" marker-end="url(#c1a)"/>
-<text class="lbl" x="388" y="623" text-anchor="middle">runs</text>
-<rect class="box" x="32" y="730" width="160" height="46" rx="8"/>
-<text class="t" x="112" y="750" text-anchor="middle">one line each</text>
-<text class="s" x="112" y="767" text-anchor="middle">me, xo, then coder</text>
-<path class="edge dash" d="M664,692 V712 H112 V728" marker-end="url(#c1a)"/>
-<text class="lbl" x="388" y="707" text-anchor="middle">logged in</text>
-<rect class="box" x="768" y="814" width="160" height="46" rx="8"/>
-<text class="m" x="848" y="834" text-anchor="middle">gh auth login</text>
-<text class="s" x="848" y="851" text-anchor="middle">only if not logged in</text>
-<path class="edge" d="M112,776 V796 H848 V812" marker-end="url(#c1a)"/>
-<text class="lbl" x="480" y="791" text-anchor="middle">runs</text>
+<line class="life" x1="135" y1="40" x2="135" y2="788"/>
+<rect class="hdr" x="32" y="12" width="206" height="28" rx="7"/>
+<text class="t" x="135" y="31" text-anchor="middle">You: xo CLI</text>
+<line class="life" x1="365" y1="40" x2="365" y2="788"/>
+<rect class="hdr" x="262" y="12" width="206" height="28" rx="7"/>
+<text class="t" x="365" y="31" text-anchor="middle">xo server</text>
+<line class="life" x1="595" y1="40" x2="595" y2="788"/>
+<rect class="hdr" x="492" y="12" width="206" height="28" rx="7"/>
+<text class="t" x="595" y="31" text-anchor="middle">XO core API</text>
+<line class="life" x1="825" y1="40" x2="825" y2="788"/>
+<rect class="hdr" x="722" y="12" width="206" height="28" rx="7"/>
+<text class="t" x="825" y="31" text-anchor="middle">gh · GitHub</text>
+<rect class="box" x="32" y="58" width="206" height="46" rx="8"/>
+<text class="m" x="135" y="78" text-anchor="middle">xo login</text>
+<text class="s" x="135" y="95" text-anchor="middle">or: xo login github</text>
+<rect class="box" x="262" y="142" width="206" height="46" rx="8"/>
+<text class="m" x="365" y="162" text-anchor="middle">GET /config</text>
+<text class="s" x="365" y="179" text-anchor="middle">addresses, no key</text>
+<path class="edge" d="M135,104 V124 H365 V140" marker-end="url(#c1a)"/>
+<text class="lbl" x="250" y="119" text-anchor="middle">fetch</text>
+<rect class="box" x="32" y="226" width="206" height="46" rx="8"/>
+<text class="t" x="135" y="246" text-anchor="middle">ask for your key</text>
+<text class="s" x="135" y="263" text-anchor="middle">hidden, must start ak_</text>
+<path class="edge dash" d="M365,188 V208 H135 V224" marker-end="url(#c1a)"/>
+<text class="lbl" x="250" y="203" text-anchor="middle">the list</text>
+<rect class="box" x="262" y="310" width="206" height="46" rx="8"/>
+<text class="m" x="365" y="330" text-anchor="middle">GET spaces/0000...</text>
+<text class="s" x="365" y="347" text-anchor="middle">a space no one has</text>
+<path class="edge" d="M135,272 V292 H365 V308" marker-end="url(#c1a)"/>
+<text class="lbl" x="250" y="287" text-anchor="middle">your key</text>
+<rect class="box" x="492" y="394" width="206" height="46" rx="8"/>
+<text class="t" x="595" y="414" text-anchor="middle">Space not found</text>
+<text class="s" x="595" y="431" text-anchor="middle">404: the key works</text>
+<path class="edge" d="M365,356 V376 H595 V392" marker-end="url(#c1a)"/>
+<text class="lbl" x="480" y="371" text-anchor="middle">forwarded</text>
+<rect class="box" x="262" y="478" width="206" height="46" rx="8"/>
+<text class="t" x="365" y="498" text-anchor="middle">passes it back</text>
+<text class="s" x="365" y="515" text-anchor="middle">XO&#x27;s answer as sent</text>
+<path class="edge dash" d="M595,440 V460 H365 V476" marker-end="url(#c1a)"/>
+<text class="lbl" x="480" y="455" text-anchor="middle">404</text>
+<rect class="box hot" x="32" y="562" width="206" height="46" rx="8"/>
+<text class="t" x="135" y="582" text-anchor="middle">save key + URL</text>
+<text class="s" x="135" y="599" text-anchor="middle">~/.config/xo/credentials</text>
+<path class="edge hot dash" d="M365,524 V544 H135 V560" marker-end="url(#c1h)"/>
+<text class="lbl hot" x="250" y="539" text-anchor="middle">404</text>
+<rect class="box" x="722" y="646" width="206" height="46" rx="8"/>
+<text class="m" x="825" y="666" text-anchor="middle">gh auth login</text>
+<text class="s" x="825" y="683" text-anchor="middle">only if not logged in</text>
+<path class="edge" d="M135,608 V628 H825 V644" marker-end="url(#c1a)"/>
+<text class="lbl" x="480" y="623" text-anchor="middle">runs</text>
+<rect class="box" x="32" y="730" width="206" height="46" rx="8"/>
+<text class="t" x="135" y="750" text-anchor="middle">one line each</text>
+<text class="s" x="135" y="767" text-anchor="middle">me, then github</text>
+<path class="edge dash" d="M825,692 V712 H135 V728" marker-end="url(#c1a)"/>
+<text class="lbl" x="480" y="707" text-anchor="middle">logged in</text>
 </svg>
 </div>
-<figcaption><strong>A key is saved only after XO accepts it.</strong> A 401, or the server&#x27;s own bare 404, saves nothing. xo also asks the server&#x27;s <code>/me</code> whose key it is, for the line it prints. Each service prints one line; <code>xo login xo</code>, <code>coder</code> or <code>github</code> does just that one.</figcaption>
+<figcaption><strong>A key is saved only after XO accepts it.</strong> A 401, or the server&#x27;s own bare 404, saves nothing. xo also asks the server&#x27;s <code>/me</code> whose key it is, for the line it prints. Each service prints one line; <code>xo login xo</code> (or <code>me</code>) or <code>xo login github</code> does just that one.</figcaption>
 </figure>
 <h4><code>xo logout</code></h4>
 <figure>
 <div class="canvas">
-<svg class="d" viewBox="0 0 960 458" role="img" aria-label="xo logout: Logout is local first.">
+<svg class="d" viewBox="0 0 960 290" role="img" aria-label="xo logout: Logout is local first.">
 <defs>
 <marker id="c2a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
 <marker id="c2h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
 </defs>
-<line class="life" x1="240" y1="40" x2="240" y2="452"/>
-<rect class="hdr" x="135" y="12" width="210" height="28" rx="7"/>
-<text class="t" x="240" y="31" text-anchor="middle">You: xo CLI</text>
-<line class="life" x1="480" y1="40" x2="480" y2="452"/>
-<rect class="hdr" x="375" y="12" width="210" height="28" rx="7"/>
-<text class="t" x="480" y="31" text-anchor="middle">coder · Coder</text>
-<line class="life" x1="720" y1="40" x2="720" y2="452"/>
-<rect class="hdr" x="615" y="12" width="210" height="28" rx="7"/>
-<text class="t" x="720" y="31" text-anchor="middle">gh · GitHub</text>
-<rect class="box" x="135" y="58" width="210" height="46" rx="8"/>
-<text class="m" x="240" y="86" text-anchor="middle">xo logout</text>
-<rect class="box hot" x="135" y="142" width="210" height="46" rx="8"/>
-<text class="t" x="240" y="162" text-anchor="middle">delete key + addresses</text>
-<text class="s" x="240" y="179" text-anchor="middle">the files login saved</text>
-<line class="edge hot" x1="240" y1="104" x2="240" y2="140" marker-end="url(#c2h)"/>
-<rect class="box" x="375" y="226" width="210" height="46" rx="8"/>
-<text class="m" x="480" y="246" text-anchor="middle">coder logout</text>
-<text class="s" x="480" y="263" text-anchor="middle">asks, xo&#x27;s deployment only</text>
-<path class="edge" d="M240,188 V208 H480 V224" marker-end="url(#c2a)"/>
-<text class="lbl" x="360" y="203" text-anchor="middle">if logged in there</text>
-<rect class="box" x="135" y="310" width="210" height="46" rx="8"/>
-<text class="t" x="240" y="330" text-anchor="middle">one line</text>
-<text class="s" x="240" y="347" text-anchor="middle">then GitHub</text>
-<path class="edge dash" d="M480,272 V292 H240 V308" marker-end="url(#c2a)"/>
-<text class="lbl" x="360" y="287" text-anchor="middle">done</text>
-<rect class="box" x="615" y="394" width="210" height="46" rx="8"/>
-<text class="m" x="720" y="414" text-anchor="middle">gh auth logout</text>
-<text class="s" x="720" y="431" text-anchor="middle">asks first</text>
-<path class="edge" d="M240,356 V376 H720 V392" marker-end="url(#c2a)"/>
-<text class="lbl" x="480" y="371" text-anchor="middle">if gh is installed</text>
+<line class="life" x1="360" y1="40" x2="360" y2="284"/>
+<rect class="hdr" x="255" y="12" width="210" height="28" rx="7"/>
+<text class="t" x="360" y="31" text-anchor="middle">You: xo CLI</text>
+<line class="life" x1="600" y1="40" x2="600" y2="284"/>
+<rect class="hdr" x="495" y="12" width="210" height="28" rx="7"/>
+<text class="t" x="600" y="31" text-anchor="middle">gh · GitHub</text>
+<rect class="box" x="255" y="58" width="210" height="46" rx="8"/>
+<text class="m" x="360" y="86" text-anchor="middle">xo logout</text>
+<rect class="box hot" x="255" y="142" width="210" height="46" rx="8"/>
+<text class="t" x="360" y="162" text-anchor="middle">delete key + addresses</text>
+<text class="s" x="360" y="179" text-anchor="middle">the files login saved</text>
+<line class="edge hot" x1="360" y1="104" x2="360" y2="140" marker-end="url(#c2h)"/>
+<rect class="box" x="495" y="226" width="210" height="46" rx="8"/>
+<text class="m" x="600" y="246" text-anchor="middle">gh auth logout</text>
+<text class="s" x="600" y="263" text-anchor="middle">asks first</text>
+<path class="edge" d="M360,188 V208 H600 V224" marker-end="url(#c2a)"/>
+<text class="lbl" x="480" y="203" text-anchor="middle">if gh is installed</text>
 </svg>
 </div>
-<figcaption><strong>Logout is local first.</strong> Coder and gh are logged out only where they point at xo&#x27;s deployment and github.com, and only after asking.</figcaption>
+<figcaption><strong>Logout is local first.</strong> gh is logged out of github.com only after asking.</figcaption>
 </figure>
 <h4><code>xo status</code></h4>
 <figure>
 <div class="canvas">
-<svg class="d" viewBox="0 0 960 542" role="img" aria-label="xo status: Status sends no key.">
+<svg class="d" viewBox="0 0 960 374" role="img" aria-label="xo status: Status sends no key.">
 <defs>
 <marker id="c3a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
 <marker id="c3h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
 </defs>
-<line class="life" x1="240" y1="40" x2="240" y2="536"/>
-<rect class="hdr" x="135" y="12" width="210" height="28" rx="7"/>
-<text class="t" x="240" y="31" text-anchor="middle">You: xo CLI</text>
-<line class="life" x1="480" y1="40" x2="480" y2="536"/>
-<rect class="hdr" x="375" y="12" width="210" height="28" rx="7"/>
-<text class="t" x="480" y="31" text-anchor="middle">coder · Coder</text>
-<line class="life" x1="720" y1="40" x2="720" y2="536"/>
-<rect class="hdr" x="615" y="12" width="210" height="28" rx="7"/>
-<text class="t" x="720" y="31" text-anchor="middle">gh · GitHub</text>
-<rect class="box" x="135" y="58" width="210" height="46" rx="8"/>
-<text class="m" x="240" y="86" text-anchor="middle">xo status</text>
-<rect class="box" x="135" y="142" width="210" height="46" rx="8"/>
-<text class="t" x="240" y="162" text-anchor="middle">read saved login</text>
-<text class="s" x="240" y="179" text-anchor="middle">never prints the key</text>
-<line class="edge" x1="240" y1="104" x2="240" y2="140" marker-end="url(#c3a)"/>
-<rect class="box" x="375" y="226" width="210" height="46" rx="8"/>
-<text class="m" x="480" y="246" text-anchor="middle">coder whoami</text>
-<text class="s" x="480" y="263" text-anchor="middle">asked without a URL</text>
-<path class="edge" d="M240,188 V208 H480 V224" marker-end="url(#c3a)"/>
-<text class="lbl" x="360" y="203" text-anchor="middle">ask</text>
-<rect class="box" x="135" y="310" width="210" height="46" rx="8"/>
-<text class="t" x="240" y="330" text-anchor="middle">coder row</text>
-<text class="s" x="240" y="347" text-anchor="middle">where, and as whom</text>
-<path class="edge dash" d="M480,272 V292 H240 V308" marker-end="url(#c3a)"/>
-<text class="lbl" x="360" y="287" text-anchor="middle">answer</text>
-<rect class="box" x="615" y="394" width="210" height="46" rx="8"/>
-<text class="m" x="720" y="414" text-anchor="middle">gh auth status</text>
-<text class="s" x="720" y="431" text-anchor="middle">who, on github.com</text>
-<path class="edge" d="M240,356 V376 H720 V392" marker-end="url(#c3a)"/>
-<text class="lbl" x="480" y="371" text-anchor="middle">ask</text>
-<rect class="box hot" x="135" y="478" width="210" height="46" rx="8"/>
-<text class="t" x="240" y="498" text-anchor="middle">four rows</text>
-<text class="s" x="240" y="515" text-anchor="middle">me, xo, coder, github</text>
-<path class="edge hot dash" d="M720,440 V460 H240 V476" marker-end="url(#c3h)"/>
-<text class="lbl hot" x="480" y="455" text-anchor="middle">answer</text>
+<line class="life" x1="360" y1="40" x2="360" y2="368"/>
+<rect class="hdr" x="255" y="12" width="210" height="28" rx="7"/>
+<text class="t" x="360" y="31" text-anchor="middle">You: xo CLI</text>
+<line class="life" x1="600" y1="40" x2="600" y2="368"/>
+<rect class="hdr" x="495" y="12" width="210" height="28" rx="7"/>
+<text class="t" x="600" y="31" text-anchor="middle">gh · GitHub</text>
+<rect class="box" x="255" y="58" width="210" height="46" rx="8"/>
+<text class="m" x="360" y="86" text-anchor="middle">xo status</text>
+<rect class="box" x="255" y="142" width="210" height="46" rx="8"/>
+<text class="t" x="360" y="162" text-anchor="middle">read saved login</text>
+<text class="s" x="360" y="179" text-anchor="middle">never prints the key</text>
+<line class="edge" x1="360" y1="104" x2="360" y2="140" marker-end="url(#c3a)"/>
+<rect class="box" x="495" y="226" width="210" height="46" rx="8"/>
+<text class="m" x="600" y="246" text-anchor="middle">gh auth status</text>
+<text class="s" x="600" y="263" text-anchor="middle">who, on github.com</text>
+<path class="edge" d="M360,188 V208 H600 V224" marker-end="url(#c3a)"/>
+<text class="lbl" x="480" y="203" text-anchor="middle">if gh is installed</text>
+<rect class="box hot" x="255" y="310" width="210" height="46" rx="8"/>
+<text class="t" x="360" y="330" text-anchor="middle">three rows</text>
+<text class="s" x="360" y="347" text-anchor="middle">me, xo, github</text>
+<path class="edge hot dash" d="M600,272 V292 H360 V308" marker-end="url(#c3h)"/>
+<text class="lbl hot" x="480" y="287" text-anchor="middle">answer</text>
 </svg>
 </div>
-<figcaption><strong>Status sends no key.</strong> It only asks the Coder and GitHub CLIs who they are logged in as.</figcaption>
+<figcaption><strong>Status sends no key.</strong> It only asks the GitHub CLI who it is logged in as.</figcaption>
 </figure>
 <h3 id="cmd-your-account">Your account</h3>
 <p>Answered by the xo server itself, with the Clerk Secret Key only it holds.</p>
@@ -1715,89 +1654,8 @@ html { scroll-behavior: smooth; }
 </div>
 <figcaption><strong>Anything else gets the server&#x27;s 404.</strong> To reach XO directly, add <code>--url https://dev.xo.builders</code> with <code>XO_API_KEY</code> or <code>--api-key -</code>. <code>--dry-run</code> sends nothing and hides provider keys.</figcaption>
 </figure>
-<h3 id="cmd-coder-and-the-server">Coder and the server</h3>
-<p>Coder keeps its own login; xo checks where it points before every call.</p>
-<h4><code>xo coder github URL</code></h4>
-<figure>
-<div class="canvas">
-<svg class="d" viewBox="0 0 960 542" role="img" aria-label="xo coder github URL: The app on port 3000 is public.">
-<defs>
-<marker id="c25a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
-<marker id="c25h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
-</defs>
-<line class="life" x1="360" y1="40" x2="360" y2="536"/>
-<rect class="hdr" x="255" y="12" width="210" height="28" rx="7"/>
-<text class="t" x="360" y="31" text-anchor="middle">You: xo CLI</text>
-<line class="life" x1="600" y1="40" x2="600" y2="536"/>
-<rect class="hdr" x="495" y="12" width="210" height="28" rx="7"/>
-<text class="t" x="600" y="31" text-anchor="middle">coder · Coder</text>
-<rect class="box" x="255" y="58" width="210" height="46" rx="8"/>
-<text class="m" x="360" y="78" text-anchor="middle">xo coder github URL</text>
-<text class="s" x="360" y="95" text-anchor="middle">--name, --ref, --start-command</text>
-<rect class="box" x="495" y="142" width="210" height="46" rx="8"/>
-<text class="m" x="600" y="162" text-anchor="middle">coder whoami</text>
-<text class="s" x="600" y="179" text-anchor="middle">where is it logged in?</text>
-<path class="edge" d="M360,104 V124 H600 V140" marker-end="url(#c25a)"/>
-<text class="lbl" x="480" y="119" text-anchor="middle">check</text>
-<rect class="box" x="255" y="226" width="210" height="46" rx="8"/>
-<text class="t" x="360" y="246" text-anchor="middle">xo&#x27;s deployment?</text>
-<text class="s" x="360" y="263" text-anchor="middle">else stop</text>
-<path class="edge dash" d="M600,188 V208 H360 V224" marker-end="url(#c25a)"/>
-<text class="lbl" x="480" y="203" text-anchor="middle">where</text>
-<rect class="box hot" x="495" y="310" width="210" height="46" rx="8"/>
-<text class="t" x="600" y="330" text-anchor="middle">create workspace</text>
-<text class="s" x="600" y="347" text-anchor="middle">template xo-github</text>
-<path class="edge hot" d="M360,272 V292 H600 V308" marker-end="url(#c25h)"/>
-<text class="lbl hot" x="480" y="287" text-anchor="middle">runs coder</text>
-<rect class="box" x="495" y="394" width="210" height="46" rx="8"/>
-<text class="t" x="600" y="414" text-anchor="middle">wait for the build</text>
-<text class="s" x="600" y="431" text-anchor="middle">up to 600 s</text>
-<line class="edge" x1="600" y1="356" x2="600" y2="392" marker-end="url(#c25a)"/>
-<rect class="box" x="255" y="478" width="210" height="46" rx="8"/>
-<text class="t" x="360" y="498" text-anchor="middle">print URLs</text>
-<text class="s" x="360" y="515" text-anchor="middle">workspace + public app</text>
-<path class="edge dash" d="M600,440 V460 H360 V476" marker-end="url(#c25a)"/>
-<text class="lbl" x="480" y="455" text-anchor="middle">done</text>
-</svg>
-</div>
-<figcaption><strong>The app on port 3000 is public.</strong> <code>--dry-run</code> prints the plan without Coder. Provisioner logs are never printed, since they can hold credentials.</figcaption>
-</figure>
-<h4><code>xo coder login | logout | list | ssh | ...</code></h4>
-<figure>
-<div class="canvas">
-<svg class="d" viewBox="0 0 960 374" role="img" aria-label="xo coder login | logout | list | ssh | ...: No Coder command runs against another deployment.">
-<defs>
-<marker id="c26a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
-<marker id="c26h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
-</defs>
-<line class="life" x1="360" y1="40" x2="360" y2="368"/>
-<rect class="hdr" x="255" y="12" width="210" height="28" rx="7"/>
-<text class="t" x="360" y="31" text-anchor="middle">You: xo CLI</text>
-<line class="life" x1="600" y1="40" x2="600" y2="368"/>
-<rect class="hdr" x="495" y="12" width="210" height="28" rx="7"/>
-<text class="t" x="600" y="31" text-anchor="middle">coder · Coder</text>
-<rect class="box" x="255" y="58" width="210" height="46" rx="8"/>
-<text class="m" x="360" y="78" text-anchor="middle">xo coder ssh my-app</text>
-<text class="s" x="360" y="95" text-anchor="middle">caught before argparse</text>
-<rect class="box" x="495" y="142" width="210" height="46" rx="8"/>
-<text class="m" x="600" y="162" text-anchor="middle">coder whoami</text>
-<text class="s" x="600" y="179" text-anchor="middle">asked without a URL</text>
-<path class="edge" d="M360,104 V124 H600 V140" marker-end="url(#c26a)"/>
-<text class="lbl" x="480" y="119" text-anchor="middle">check</text>
-<rect class="box" x="255" y="226" width="210" height="46" rx="8"/>
-<text class="t" x="360" y="246" text-anchor="middle">xo&#x27;s deployment?</text>
-<text class="s" x="360" y="263" text-anchor="middle">else stop</text>
-<path class="edge dash" d="M600,188 V208 H360 V224" marker-end="url(#c26a)"/>
-<text class="lbl" x="480" y="203" text-anchor="middle">where</text>
-<rect class="box hot" x="495" y="310" width="210" height="46" rx="8"/>
-<text class="m" x="600" y="330" text-anchor="middle">coder --url DEP ssh</text>
-<text class="s" x="600" y="347" text-anchor="middle">in your terminal</text>
-<path class="edge hot" d="M360,272 V292 H600 V308" marker-end="url(#c26h)"/>
-<text class="lbl hot" x="480" y="287" text-anchor="middle">runs</text>
-</svg>
-</div>
-<figcaption><strong>No Coder command runs against another deployment.</strong> Options that change the deployment, token or login store are refused anywhere after the verb. xo has no delete.</figcaption>
-</figure>
+<h3 id="cmd-run-the-server">Run the server</h3>
+<p><code>xo serve</code> runs the same server on your machine.</p>
 <h4><code>xo serve</code></h4>
 <figure>
 <div class="canvas">
@@ -2093,7 +1951,7 @@ html { scroll-behavior: smooth; }
 	<ul class="facts">
 		<li><strong>Branches move before refs are recorded.</strong> <code>update</code> pushes each tracked branch first; <code>sync</code> rebases each on its upstream and pushes it, undoing a rebase that conflicts. Tags and commits stay where they are.</li>
 		<li><strong>Single projects use git only.</strong> <code>xo install project:P</code> clones, or fetches and fast-forwards, <code>./P</code>; <code>update</code> pushes its branch, never forced; <code>sync</code> runs <code>pull --rebase</code>, then that push.</li>
-		<li><strong>Your git, locked down.</strong> Every call sets <code>GIT_ALLOW_PROTOCOL=https</code>, turns submodules off, puts <code>--end-of-options</code> before any name or ref, and drops XO, Clerk, Coder and gh tokens from git's environment. xo never reads a git credential.</li>
+		<li><strong>Your git, locked down.</strong> Every call sets <code>GIT_ALLOW_PROTOCOL=https</code>, turns submodules off, puts <code>--end-of-options</code> before any name or ref, and drops XO, Clerk and gh tokens from git's environment. xo never reads a git credential.</li>
 		<li><strong>A narrow race remains.</strong> Two updates on different instances that both read rev N within the 0.3 s settle can both get 200; the later write stands, and the other client's next update is refused because the space no longer holds its <code>base</code>. If a stale write sends the rev backwards, <code>xo sync</code> stops and names the projects that differ.</li>
 	</ul>
 </section>
@@ -2106,7 +1964,6 @@ html { scroll-behavior: smooth; }
 		<li><strong>Your own metadata is readable.</strong> <code>/me</code> returns your email and both metadata buckets, with values under credential-like names (or that look like keys) masked to their last 4 characters or <code>(hidden)</code>. <code>XO_ME_PRIVATE_KEYS</code> can narrow which private keys it shows.</li>
 		<li><strong>Three keys are writable by you, and one key of anyone else's.</strong> A normal key writes only <code>projects</code>, <code>spaces</code> and <code>shared</code> on its own user (accept writes all three in one merge), and on another user only its own invite in their <code>shared</code> (<code>xo share</code>). Every change is one audit line (a count, never a value; a share names the recipient only by a hash).</li>
 		<li><strong>Admin is two locks.</strong> A Clerk API key with the claim <code>xo_admin: true</code> <em>and</em> an id listed in <code>XO_ADMIN_KEY_IDS</code>. None is issued yet, so <code>/user-metadata</code> answers 403 to everyone.</li>
-		<li><strong>Coder is checked before each call.</strong> xo asks Coder where it is logged in and stops unless it is xo's deployment, so the Coder token goes nowhere else.</li>
 	</ul>
 	<div class="scroll">
 		<table class="tokens">
@@ -2114,7 +1971,6 @@ html { scroll-behavior: smooth; }
 			<tbody>
 				<tr><td>XO API key</td><td><code>~/.config/xo/credentials</code> (owner only) or <code>XO_API_KEY</code></td><td>The xo server it was saved with, which forwards it to XO (also for <code>xo create space</code> and <code>connect --id</code>). Every create except <code>nebius-openclaw</code> also stores it in the new space.</td></tr>
 				<tr><td>CLERK_SECRET_KEY</td><td>The server's environment (Vercel, Production, Sensitive)</td><td><code>api.clerk.com</code> only</td></tr>
-				<tr><td>Coder session token</td><td>Coder's own store or keyring</td><td>Only xo's Coder deployment, after the check above</td></tr>
 				<tr><td>GitHub token</td><td>gh's store, or your git credential helper</td><td>github.com over https; xo never reads it and strips its own tokens from git's environment</td></tr>
 				<tr class="unused"><td>Admin key</td><td>Not issued yet</td><td>Would be passed with <code>--api-key -</code></td></tr>
 			</tbody>
@@ -2145,34 +2001,34 @@ html { scroll-behavior: smooth; }
 
 <section id="folders">
 	<h2><span class="num">09</span>Folder map</h2>
-	<p>44 tracked files. Rows are tagged by which half of the package they serve.</p>
+	<p>41 tracked files. Rows are tagged by which half of the package they serve.</p>
 	<div class="tree">
 		<div class="key"><span class="chip agent">CLI</span><span class="chip org">server</span><span class="chip shared">shared</span></div>
 		<ol>
 			<li class="dir" style="--d:0"><span class="p">src/xo/</span><span class="chip shared">shared</span><span class="why">The one package, <code>quirq-xo</code></span></li>
-			<li style="--d:1"><span class="p">cli.py</span><span class="chip agent">CLI</span><span class="why">argparse; built-ins: login, status, projects, create (every space and project), connect, list, install, update, sync, share, accept, reject, coder</span></li>
+			<li style="--d:1"><span class="p">cli.py</span><span class="chip agent">CLI</span><span class="why">argparse; built-ins: login, status, projects, create (every space and project), connect, list, install, update, sync, share, accept, reject</span></li>
 			<li style="--d:1"><span class="p">workspace.py</span><span class="chip agent">CLI</span><span class="why">install, update and sync for a project or a space</span></li>
 			<li style="--d:1"><span class="p">gitops.py</span><span class="chip agent">CLI</span><span class="why">The user's git, https only, no submodules, no xo tokens</span></li>
-			<li style="--d:1"><span class="p">client.py</span><span class="chip agent">CLI</span><span class="why">The only XO network code: Client, CoderClient, saved key, redaction</span></li>
+			<li style="--d:1"><span class="p">client.py</span><span class="chip agent">CLI</span><span class="why">The only XO network code: Client, saved key, redaction</span></li>
 			<li style="--d:1"><span class="p">commands.py · spec.py</span><span class="chip agent">CLI</span><span class="why">Spec operations to commands and flags; load and check the spec</span></li>
-			<li style="--d:1"><span class="p">coder.py · github.py</span><span class="chip agent">CLI</span><span class="why"><code>xo-github</code> template inputs; gh login, status, logout</span></li>
+			<li style="--d:1"><span class="p">github.py</span><span class="chip agent">CLI</span><span class="why">gh login, status, logout</span></li>
 			<li style="--d:1"><span class="p">names.py</span><span class="chip shared">shared</span><span class="why">Project, space and ref rules and the space kinds; the only module both sides import</span></li>
 			<li style="--d:1"><span class="p">services.py · services.json · openapi.json</span><span class="chip shared">shared</span><span class="why">Services list and saved addresses; the bundled core API spec</span></li>
 			<li style="--d:1"><span class="p">server.py</span><span class="chip org">server</span><span class="why">App, Clerk, Core forward, <code>/me</code> masking, the write engine, sharing, limits, servers</span></li>
 			<li style="--d:1"><span class="p">status_page.py</span><span class="chip org">server</span><span class="why">Self-contained status page, CSP pinned by hash</span></li>
 			<li style="--d:0"><span class="p">app.py · Dockerfile</span><span class="chip org">server</span><span class="why">Vercel entry (<code>app = wsgi_app()</code>); non-root image running <code>xo serve</code></span></li>
 			<li class="dir" style="--d:0"><span class="p">tests/</span><span class="chip shared">shared</span><span class="why">pytest on loopback only: fake XO, fake Clerk, local git remotes</span></li>
-			<li style="--d:1"><span class="p">test_cli · test_server · test_coder · test_github · test_services</span><span class="chip shared">shared</span><span class="why">One file per module group</span></li>
+			<li style="--d:1"><span class="p">test_cli · test_server · test_github · test_services</span><span class="chip shared">shared</span><span class="why">One file per module group</span></li>
 			<li style="--d:1"><span class="p">test_workspace.py</span><span class="chip shared">shared</span><span class="why">install, update, sync against local remotes</span></li>
 			<li style="--d:1"><span class="p">conftest.py · fixtures/</span><span class="chip shared">shared</span><span class="why">Fake servers, a synthetic spec, a closed port for GitHub</span></li>
-			<li class="dir" style="--d:0"><span class="p">docs/</span><span class="chip shared">shared</span><span class="why">quickstart, guide, server, coder, deploy-vercel, test script</span></li>
+			<li class="dir" style="--d:0"><span class="p">docs/</span><span class="chip shared">shared</span><span class="why">quickstart, guide, server, deploy-vercel, test script</span></li>
 			<li style="--d:0"><span class="p">.github/workflows/presubmit.yml</span><span class="chip shared">shared</span><span class="why">The required check: pytest on Python 3.14</span></li>
 			<li style="--d:0"><span class="p">pyproject.toml · .python-version</span><span class="chip shared">shared</span><span class="why">No dependencies; Vercel runs Python 3.12</span></li>
 		</ol>
 	</div>
 </section>
 
-<footer>Describes <code>quirq-ai/xo</code> main as of this change: through #37 (sharing) plus the unified <code>xo create</code>. Setup is in <code>docs/quickstart.md</code>; the server's settings in <code>docs/server.md</code>.</footer>
+<footer>Describes <code>quirq-ai/xo</code> main as of this change: through #40. Setup is in <code>docs/quickstart.md</code>; the server's settings in <code>docs/server.md</code>.</footer>
 </main>
 </body>
 </html>

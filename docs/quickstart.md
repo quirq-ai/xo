@@ -31,13 +31,13 @@ The install is pinned to the reviewed commit of xo. The pin covers xo's own code
 xo login
 ```
 
-xo first prints the services it logs in to, on rows `me`, `xo`, `coder` and `github`: the xo server (`https://xo.quirq.dev`), XO's platform (`https://dev.xo.builders`, reached through the xo server with the same key), Coder (`https://dev-coder.xo.builders`) and GitHub (`https://github.com`, through the GitHub CLI). Run `xo login` on its own, not pasted together with other commands: the prompt drops anything typed before it. Paste your key at the `XO API key (hidden: paste it, then press Enter):` prompt and press Enter. Nothing shows while you type, and the key stays out of your shell history. xo refuses anything that isn't an XO API key (those start with `ak_`) without sending it anywhere. Otherwise it prints `checking the key with XO` and checks the key with XO, through that address; the check can take up to a minute when XO is slow. If the check passes, xo saves the key and the address in `~/.config/xo/credentials`, which only you can read; if it fails, nothing is saved. It also prints the account the key belongs to, when the xo server can tell. If the [Coder CLI](https://coder.com/docs/install/cli) is installed, `xo login` then runs Coder's own sign-in in your browser. If the [GitHub CLI](https://cli.github.com) (`gh`) is installed, it then checks that gh is connected to github.com, and runs gh's own sign-in in your browser if it isn't; gh asks whether to use that login for git too (see the [user guide](guide.md#log-in)). Without either CLI, its step says `skipped`. `xo status` shows where you are logged in.
+xo first prints the services it logs in to, on rows `me`, `xo` and `github`: the xo server (`https://xo.quirq.dev`), XO's platform (`https://dev.xo.builders`, reached through the xo server with the same key) and GitHub (`https://github.com`, through the GitHub CLI). Run `xo login` on its own, not pasted together with other commands: the prompt drops anything typed before it. Paste your key at the `XO API key (hidden: paste it, then press Enter):` prompt and press Enter. Nothing shows while you type, and the key stays out of your shell history. xo refuses anything that isn't an XO API key (those start with `ak_`) without sending it anywhere. Otherwise it prints `checking the key with XO` and checks the key with XO, through that address; the check can take up to a minute when XO is slow. If the check passes, xo saves the key and the address in `~/.config/xo/credentials`, which only you can read; if it fails, nothing is saved. It also prints the account the key belongs to, when the xo server can tell. If the [GitHub CLI](https://cli.github.com) (`gh`) is installed, it then checks that gh is connected to github.com, and runs gh's own sign-in in your browser if it isn't; gh asks whether to use that login for git too (see the [user guide](guide.md#log-in)). Without gh, its step says `skipped`. `xo status` shows where you are logged in.
 
 Every later XO API command, in any terminal, uses the saved key and sends it only to the saved address. To use a different key, run `xo login` again. `xo logout` deletes the saved key. A key in `XO_API_KEY` wins over the saved one, so a terminal where you set that variable uses it instead.
 
 ### One address for everything
 
-XO API commands go to one address: your creates, `xo spaces`, `xo me` and `xo user-metadata` alike. The xo server answers `xo me` and `xo user-metadata` itself and passes the rest on to XO's platform (`dev.xo.builders`). To use another address, log in to it with `xo login --url https://...`. `XO_URL` or `--url` changes it for one terminal or one command, and the saved key is never sent to a different address than the one you logged in to. Coder commands use their own login and deployment setting; see [Deploy a GitHub repository](coder.md).
+XO API commands go to one address: your creates, `xo spaces`, `xo me` and `xo user-metadata` alike. The xo server answers `xo me` and `xo user-metadata` itself and passes the rest on to XO's platform (`dev.xo.builders`). To use another address, log in to it with `xo login --url https://...`. `XO_URL` or `--url` changes it for one terminal or one command, and the saved key is never sent to a different address than the one you logged in to.
 
 ## 3. Check it works (creates nothing)
 
@@ -76,10 +76,6 @@ xo spaces --space-id THE_ID
 ```
 
 ## The commands
-
-To deploy a GitHub repository through Coder instead of the XO core API, see
-[Deploy a GitHub repository](coder.md). `xo coder github URL` uses Coder's own login (`xo login
-coder`) and needs no XO API key.
 
 | Command | Creates |
 |---|---|

@@ -2,11 +2,11 @@
 
 The xo server serves the list at /config, without a key. It never holds keys, tokens or passwords:
 only an address and a line about each service. Names follow the commands: "xo" is XO's platform
-(the creates and xo spaces), with "coder" nested inside it because `xo coder` is a subcommand, and
-"me" is the xo server that answers `xo me` and `xo user-metadata`. Every XO API command still goes
-to the xo server xo logged in to (the "me" address in xo's own copy is its default); the server
-passes creates on to the "xo" address. xo ships the same file (services.json), checks a served list
-exactly as it checks its own copy, and uses its own copy when the server cannot give a good one.
+(the creates and xo spaces), and "me" is the xo server that answers `xo me` and `xo user-metadata`.
+Every XO API command still goes to the xo server xo logged in to (the "me" address in xo's own copy
+is its default); the server passes creates on to the "xo" address. xo ships the same file
+(services.json), checks a served list exactly as it checks its own copy, and uses its own copy when
+the server cannot give a good one.
 """
 from __future__ import annotations
 
@@ -27,9 +27,9 @@ from xo import __version__
 from xo.client import Client, XoError, _private, credentials_path, xo_url
 
 SCHEMA = "xo-services/2"
-KNOWN = ("me", "xo", "coder")
+KNOWN = ("me", "xo")
 # Where each entry sits in the list, and the keys an entry may hold besides nested services.
-_PLACES = {"me": ("me",), "xo": ("xo",), "coder": ("xo", "coder")}
+_PLACES = {"me": ("me",), "xo": ("xo",)}
 _FIELDS = ("url", "about")
 # Names the addresses file used before xo-services/2, read under the new names until the file is next saved.
 _OLD_NAMES = {"xo-server": "me", "xo-platform": "xo"}
@@ -99,9 +99,8 @@ def parse(data: object) -> tuple[dict[str, Service], list[str]]:
                 notes.append(f"{e}; xo does not use it, so it is skipped")
         else:
             found[name] = Service(name, listed_url(name, entry.get("url")), _clean(entry.get("about")))
-        nested = {"xo": ("coder",)}.get(name, ())
         for key in entry:
-            if key not in _FIELDS and key not in nested:
+            if key not in _FIELDS:
                 skip(_PLACES[name], key)
     return found, notes
 
@@ -164,7 +163,7 @@ def addresses_path() -> Path:
 def saved_addresses() -> dict[str, str]:
     """The address xo last logged in to, per service; {} when there is none or the file is unusable."""
     # Read like the credentials file: no symlink, a regular file the user alone owns and can read,
-    # and non-blocking, so a FIFO put there cannot hang xo status or a Coder command.
+    # and non-blocking, so a FIFO put there cannot hang xo status.
     try:
         fd = os.open(addresses_path(), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
     except OSError:
@@ -185,7 +184,7 @@ def saved_addresses() -> dict[str, str]:
         if old in data and new not in data:
             data[new] = data[old]
     out = {}
-    for name in ("xo", "coder"):
+    for name in ("xo",):
         try:
             out[name] = listed_url(name, data.get(name))
         except XoError:
@@ -228,9 +227,3 @@ def forget_addresses() -> None:
         pass
     except OSError as e:
         raise XoError(f"cannot delete {addresses_path()} ({e.strerror})") from None
-
-
-def coder_default() -> str:
-    """The Coder deployment `xo coder` uses when no flag or $XO_CODER_URL says: the one xo login
-    last logged in to, else xo's own list."""
-    return saved_addresses().get("coder") or builtin()["coder"].url
