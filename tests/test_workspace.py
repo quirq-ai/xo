@@ -11,7 +11,7 @@ import pytest
 
 from conftest import git
 from test_server import USER_KEY, _Core, _space, _Store
-from xo import cli, server, workspace
+from xo import cli, names, server, workspace
 from xo.client import XoError
 
 
@@ -224,6 +224,60 @@ def test_a_space_with_a_fork_and_its_upstream_keeps_both_by_owner(space):
     assert workspace.update(space.client, "space", "dev")["rev"] == 2
     assert _stored(space)["projects"][1] == {"p/A": "feature"}
     assert workspace.sync(space.client, "space", "dev")["rev"] == 2
+
+
+@pytest.mark.parametrize("projects, folders", [
+    (["suraj/react", "facebook/react", "suraj/suraj"], ["suraj/react", "facebook/react", "suraj/suraj"]),
+    (["supabase/cli", "suraj/cli", "supabase/supabase", "o/b"], ["supabase/cli", "suraj/cli", "supabase/supabase", "b"]),
+    (["a/b", "b/c", "x/c", "c/d"], ["a/b", "b/c", "x/c", "d"]),  # b/c's owner b pulls a/b under a/ too
+    (["juanfont/headscale", "o/b"], ["headscale", "b"]),
+])
+def test_no_project_folder_is_ever_inside_another(projects, folders):
+    for order in (projects, projects[::-1]):
+        got = [names.folder(p, order) for p in projects]
+        assert got == folders
+        tops = {f.casefold() for f in got if "/" not in f}
+        assert not any(f.partition("/")[0].casefold() in tops for f in got if "/" in f)
+
+
+@pytest.mark.parametrize("order", [0, 1])
+def test_a_space_whose_owner_is_also_a_repo_name_installs_every_project_side_by_side(space, order):
+    for repo in ("suraj/react", "facebook/react", "suraj/suraj"):
+        space.hub.repo(repo)
+    entries = [{"suraj/react": "main"}, {"facebook/react": "main"}, {"suraj/suraj": "main"}]
+    entries = entries if order == 0 else entries[::-1]
+    space.store.stored["private_metadata"]["projects"] = [p for e in entries for p in e]
+    space.store.stored["private_metadata"]["spaces"] = [_space("dev", projects=entries)]
+    workspace.install(space.client, "space", "dev")
+    for repo in ("suraj/react", "facebook/react", "suraj/suraj"):
+        assert git("remote", "get-url", "origin", cwd=f"dev/{repo}").endswith(f"/{repo}")
+        assert git("status", "--porcelain", cwd=f"dev/{repo}") == ""
+    assert workspace.update(space.client, "space", "dev")["rev"] == 1
+
+
+def test_a_project_is_never_cloned_inside_another_checkout(space):
+    for repo in ("suraj/react", "facebook/react", "suraj/suraj"):
+        space.hub.repo(repo)
+    git("clone", "-q", f"file://{space.hub.root}/suraj/suraj", "dev/suraj")  # before the two reacts came
+    entries = [{"suraj/suraj": "main"}, {"suraj/react": "main"}, {"facebook/react": "main"}]
+    space.store.stored["private_metadata"]["spaces"] = [_space("dev", projects=entries)]
+    with pytest.raises(XoError, match=r"./dev/suraj is a git checkout, and suraj/suraj goes in ./dev/suraj/suraj"):
+        workspace.install(space.client, "space", "dev")
+    assert git("status", "--porcelain", cwd="dev/suraj") == ""
+
+
+def test_a_plain_project_never_pushes_a_github_projects_checkout(space):
+    git("clone", "-q", f"file://{space.hub.root}/o/a", "a")
+    Path("a/NEW").write_text("x")
+    git("add", "NEW", cwd="a")
+    git("commit", "-q", "-m", "mine", cwd="a")
+    space.store.stored["private_metadata"]["projects"] = ["o/a", "a"]  # the plain a added later
+    for verb in (workspace.update, workspace.sync):
+        with pytest.raises(XoError, match="./a is a checkout of o/a, not of a"):
+            verb(space.client, "project", "a")
+    assert git("log", "-1", "--format=%s", "main", cwd=space.hub.root / "o/a") != "mine"
+    assert workspace.update(space.client, "project", "o/a") == {"project": "o/a"}
+    assert git("log", "-1", "--format=%s", "main", cwd=space.hub.root / "o/a") == "mine"
 
 
 def test_install_never_fetches_another_repo_that_has_the_same_folder(space):

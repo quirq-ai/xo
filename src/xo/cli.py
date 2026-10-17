@@ -857,20 +857,41 @@ def _local_repo(dest: Path, repo: str, projects: Any) -> None:
     target = Path(names.folder(repo, projects if isinstance(projects, list) else []))
     if str(target) == str(dest):
         return  # already called after its repo
+    taken = (target.exists() or target.is_symlink()) and not (target.exists() and os.path.samefile(dest, target))
+    if taken:
+        print(f"xo: ./{target} already exists, so ./{dest} was not moved there; move it yourself", file=sys.stderr)
+        return
+    holder = next((p for p in target.parents if p != Path(".") and (p / ".git").exists()), None)
+    if holder is not None:
+        print(f"xo: ./{holder} is a git checkout, so ./{dest} was not moved into it at ./{target}; move it yourself",
+              file=sys.stderr)
+        return
     if str(target).casefold() == str(dest).casefold():
         # Only the case differs: move through another name, which works on a filesystem that ignores case.
         step = dest.with_name(f"{dest.name}.xo-moving")
+        if step.exists() or step.is_symlink():
+            print(f"xo: ./{step} already exists, so ./{dest} was not renamed ./{target}; rename it yourself",
+                  file=sys.stderr)
+            return
         try:
             dest.rename(step)
-            step.rename(target)
         except OSError as e:
             print(f"xo: ./{dest} could not be renamed ./{target} ({e.strerror or type(e).__name__}); rename it "
                   "yourself", file=sys.stderr)
             return
+        try:
+            step.rename(target)
+        except OSError as e:
+            why = e.strerror or type(e).__name__
+            try:
+                step.rename(dest)
+            except OSError:
+                print(f"xo: ./{dest} could not be renamed ./{target} ({why}), and is now ./{step}; rename it "
+                      "yourself", file=sys.stderr)
+                return
+            print(f"xo: ./{dest} could not be renamed ./{target} ({why}); rename it yourself", file=sys.stderr)
+            return
         print(f"xo: ./{dest} renamed ./{target}", file=sys.stderr)
-        return
-    if target.exists() or target.is_symlink():
-        print(f"xo: ./{target} already exists, so ./{dest} was not moved there; move it yourself", file=sys.stderr)
         return
     try:
         target.parent.mkdir(parents=True, exist_ok=True)

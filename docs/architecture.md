@@ -451,7 +451,7 @@ sequenceDiagram
   Git-->>Cli: done / save state.json: rev N and refs
 ```
 
-The installed rev and refs are the base for later updates. A project with no GitHub remote is left as it is. A branch that has moved on from its remote is refused, never merged. Each GitHub project goes in `./S/REPO`, or `./S/OWNER/REPO` when another project in the space has that name, and an existing checkout is used only if its origin is that repo. `./S/.xo/state.json` is never written through a link, and a `./S/.xo` that is a link or a checkout is refused.
+The installed rev and refs are the base for later updates. A project with no GitHub remote is left as it is. A branch that has moved on from its remote is refused, never merged. Each GitHub project goes in `./S/REPO`, or `./S/OWNER/REPO` when another project in the space has that name or it is named like such an OWNER folder (so no folder is inside another), and an existing checkout is used only if its origin is that repo; a plain project's folder is refused when its origin is one of the GitHub projects. `./S/.xo/state.json` is never written through a link, and a `./S/.xo` that is a link or a checkout is refused.
 
 #### `xo install project:P`
 

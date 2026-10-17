@@ -84,19 +84,28 @@ def dest(root: Path, project: str, projects: list) -> Path:
     want = root / names.folder(project, projects)
     if not names.is_github(project):
         return want
+    owners = names.owner_folders([*projects, project])
     for there in dict.fromkeys((want, root / names.folder(project), root / project)):
+        if there != want and there.relative_to(root).parts[0].casefold() in owners:
+            continue  # another project's OWNER/REPO goes in there, so it is no checkout's home now
         if (there / ".git").exists() and gitops.origin_is(there, project):
             return there
     return want
 
 
-def _mine(there: Path, project: str) -> None:
+def _mine(there: Path, project: str, projects: list = ()) -> None:
     """Refuse a folder that is not project's own checkout: a GitHub project's origin must be its repo,
-    so another repo with the same name is never fetched, moved or pushed."""
+    and a plain project's must not be one of projects' GitHub repos, so another project with the same
+    name is never fetched, moved or pushed."""
     gitops.own_checkout(there)
-    if names.is_github(project) and not gitops.origin_is(there, project):
-        raise XoError(f"./{there} is not a checkout of {project} (its origin is not one xo can confirm is that "
-                      "repo); move it and try again")
+    if names.is_github(project):
+        if not gitops.origin_is(there, project):
+            raise XoError(f"./{there} is not a checkout of {project} (its origin is not one xo can confirm is "
+                          "that repo); move it and try again")
+        return
+    for other in projects:
+        if isinstance(other, str) and names.is_github(other) and gitops.origin_is(there, other):
+            raise XoError(f"./{there} is a checkout of {other}, not of {project}; move it and try again")
 
 
 def resolve(projects: Any, typed: str) -> str:
@@ -130,7 +139,7 @@ def _project_here(client: Client, typed: str, checkout: bool = False) -> tuple[s
             raise XoError(f"{name} has no checkout here (looked in ./{here}" + (
                 f" and ./{name}" if names.is_github(name) and Path(name) != here else "") +
                 f"); xo install project:{typed} makes one")
-        _mine(here, name)
+        _mine(here, name, projects)
     return name, here
 
 
@@ -189,6 +198,10 @@ def _place(dest: Path, project: str, ref: str | None) -> bool:
             raise XoError(f"./{dest} has changes that are not committed; commit or stash them first")
         gitops.fetch(dest)
     else:
+        holder = next((p for p in dest.parents if p != Path(".") and (p / ".git").exists()), None)
+        if holder is not None:
+            raise XoError(f"./{holder} is a git checkout, and {project} goes in ./{dest} inside it; move ./{holder} "
+                          "and try again")
         gitops.clone(project, dest)
     if ref is not None:
         gitops.checkout(dest, ref)
@@ -266,7 +279,7 @@ def _checkouts(root: Path, pairs: list[tuple[str, str]]) -> list[Path]:
     found = [(dest(root, p, [q for q, _ in pairs]), p) for p, _ in pairs]
     found = [(there, p) for there, p in found if there.exists()]
     for there, project in found:
-        _mine(there, project)
+        _mine(there, project, [p for p, _ in pairs])
         if gitops.dirty(there):
             raise XoError(f"./{there} has changes that are not committed; commit or stash them first. Nothing "
                           "was changed")

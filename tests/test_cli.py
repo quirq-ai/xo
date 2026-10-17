@@ -1699,6 +1699,27 @@ def test_connect_repo_renames_a_folder_whose_name_differs_only_in_case(xs, capsy
     assert sorted(p.name for p in Path(".").iterdir() if p.name.lower() == "notes") == ["notes"]
 
 
+def test_connect_repo_leaves_both_folders_when_the_case_only_rename_cannot_finish(xs, capsys, github, monkeypatch):
+    xs.route("POST", "/me/projects/connect", body={"success": True, "data": {"projects": ["quirq-ai/notes"]}})
+    git("init", "-q", "Notes")
+    Path("notes").mkdir()
+    Path("notes/keep").write_text("x")
+    code, _, err = run(capsys, "connect", "project:Notes", "--repo", "https://github.com/quirq-ai/notes")
+    assert code == 0 and "./notes already exists, so ./Notes was not moved there" in err
+    assert Path("Notes/.git").exists() and Path("notes/keep").exists() and not Path("Notes.xo-moving").exists()
+    shutil.rmtree("notes")
+    real = Path.rename
+
+    def second_step_fails(self, target):
+        if self.name.endswith(".xo-moving") and Path(target).name == "notes":
+            raise OSError(13, "Permission denied")
+        return real(self, target)
+    monkeypatch.setattr(Path, "rename", second_step_fails)
+    code, _, err = run(capsys, "connect", "project:Notes", "--repo", "https://github.com/quirq-ai/notes")
+    assert code == 0 and "./Notes could not be renamed ./notes (Permission denied); rename it yourself" in err
+    assert Path("Notes/.git").exists() and not Path("Notes.xo-moving").exists()
+
+
 def test_connect_project_and_space(xs, capsys):
     xs.route("POST", "/me/spaces/dev/projects", body={"success": True, "data": {"space": SPACE}})
     xs.route("POST", "/me/spaces/connect", body={"success": True, "data": {"space": SPACE}})

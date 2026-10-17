@@ -1385,7 +1385,7 @@ html { scroll-behavior: smooth; }
 <text class="lbl" x="480" y="623" text-anchor="middle">done</text>
 </svg>
 </div>
-<figcaption><strong>The installed rev and refs are the base for later updates.</strong> A project with no GitHub remote is left as it is. A branch that has moved on from its remote is refused, never merged. Each GitHub project goes in <code>./S/REPO</code>, or <code>./S/OWNER/REPO</code> when another project in the space has that name, and an existing checkout is used only if its origin is that repo. <code>./S/.xo/state.json</code> is never written through a link, and a <code>./S/.xo</code> that is a link or a checkout is refused.</figcaption>
+<figcaption><strong>The installed rev and refs are the base for later updates.</strong> A project with no GitHub remote is left as it is. A branch that has moved on from its remote is refused, never merged. Each GitHub project goes in <code>./S/REPO</code>, or <code>./S/OWNER/REPO</code> when another project in the space has that name or it is named like such an OWNER folder (so no folder is inside another), and an existing checkout is used only if its origin is that repo; a plain project's folder is refused when its origin is one of the GitHub projects. <code>./S/.xo/state.json</code> is never written through a link, and a <code>./S/.xo</code> that is a link or a checkout is refused.</figcaption>
 </figure>
 <h4><code>xo install project:P</code></h4>
 <figure>

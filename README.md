@@ -69,7 +69,9 @@ xo spaces --space-id 6f1c2c1e-...   # connection URLs for a space you own
 
 A GitHub project is called by its repo's name in every command (`project:headscale`); when another
 of your projects has that name, call it by its `OWNER/REPO` (its folder is then `./OWNER/REPO`). A
-checkout an older xo put in `./OWNER/REPO` is still used there.
+repo named like such an `OWNER` folder goes in `./OWNER/REPO` too (`suraj/suraj` beside `suraj/react`),
+so no project's folder is ever inside another's. A checkout an older xo put in `./OWNER/REPO` is still
+used there.
 
 `xo projects`, `xo list projects`, `xo create project` and `xo connect project:P --repo` print your
 projects as `[{"name": "headscale", "repo": "https://github.com/juanfont/headscale"}, {"name":
