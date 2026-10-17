@@ -1770,14 +1770,21 @@ def test_list_spaces_and_projects(xs, capsys):
     assert json.loads(run(capsys, "list", "projects")[1]) == [{"name": "a"}]
 
 
-def test_lists_show_a_github_project_by_its_repo_name_with_the_repo_beside_it(xs, capsys):
+def test_spaces_alone_lists_the_spaces_linked_to_your_account(xs, capsys):
+    xs.route("GET", "/me/spaces", body={"success": True, "data": {"spaces": [SPACE]}})
+    code, out, _ = run(capsys, "spaces")
+    assert code == 0 and json.loads(out) == [SPACE]
+    assert [(r["method"], r["path"]) for r in xs.requests] == [("GET", "/me/spaces")]
+
+
+def test_lists_show_a_github_project_by_its_repo_name_with_its_owner_beside_it(xs, capsys):
     from xo import gitops
     xs.route("GET", "/me/projects", body={"success": True, "data": {
         "projects": ["juanfont/headscale", "notes", "alice/tool", "bob/Tool"]}})
     assert json.loads(run(capsys, "list", "projects")[1]) == [
-        {"name": "headscale", "repo": f"{gitops.GITHUB}/juanfont/headscale"}, {"name": "notes"},
-        {"name": "alice/tool", "repo": f"{gitops.GITHUB}/alice/tool"},
-        {"name": "bob/Tool", "repo": f"{gitops.GITHUB}/bob/Tool"}]
+        {"name": "headscale", "owner": "juanfont"}, {"name": "notes"},
+        {"name": "tool", "owner": "alice"},
+        {"name": "Tool", "owner": "bob"}]
 
 
 def test_create_project_from_a_github_url_records_it_and_clones_it(xs, capsys, github):
@@ -1786,7 +1793,7 @@ def test_create_project_from_a_github_url_records_it_and_clones_it(xs, capsys, g
     xs.route("POST", "/me/projects", body={"success": True, "data": {"projects": ["quirq-ai/xo"]}})
     code, out, err = run(capsys, "create", "project", "https://github.com/quirq-ai/xo.git")
     from xo import gitops
-    assert code == 0 and json.loads(out) == [{"name": "xo", "repo": f"{gitops.GITHUB}/quirq-ai/xo"}]
+    assert code == 0 and json.loads(out) == [{"name": "xo", "owner": "quirq-ai"}]
     assert [(r["method"], r["body"]) for r in xs.requests] == [("GET", None), ("POST", {"name": "quirq-ai/xo"})]
     assert Path("xo/README").read_text() == "hi\n" and not Path("quirq-ai").exists()
     assert "./xo: cloned" in err
@@ -1806,7 +1813,7 @@ def test_create_project_puts_a_second_repo_of_one_name_under_its_owner(xs, capsy
     assert "call this one alice/headscale in xo commands" in err
     assert git("remote", "get-url", "origin", cwd="headscale").endswith("/juanfont/headscale")
     assert git("remote", "get-url", "origin", cwd="alice/headscale").endswith("/alice/headscale")
-    assert [p["name"] for p in json.loads(out)] == ["juanfont/headscale", "alice/headscale"]
+    assert json.loads(out) == [{"name": "headscale", "owner": "juanfont"}, {"name": "headscale", "owner": "alice"}]
 
 
 def test_a_plain_project_keeps_its_name_beside_a_repo_called_the_same(xs, capsys, github):
@@ -1818,7 +1825,7 @@ def test_a_plain_project_keeps_its_name_beside_a_repo_called_the_same(xs, capsys
     code, out, err = run(capsys, "create", "project", "https://github.com/juanfont/headscale")
     assert code == 0 and Path("juanfont/headscale/.git").is_dir() and not Path("headscale").exists()
     assert "call this one juanfont/headscale in xo commands" in err
-    assert [p["name"] for p in json.loads(out)] == ["headscale", "juanfont/headscale"]
+    assert json.loads(out) == [{"name": "headscale"}, {"name": "headscale", "owner": "juanfont"}]
     xs.route("GET", "/me/projects", body={"success": True, "data": {"projects": ["headscale", "juanfont/headscale"]}})
     assert run(capsys, "connect", "project:headscale", "space:dev")[0] == 0
     assert xs.requests[-1]["body"] == {"project": "headscale"}
@@ -1862,7 +1869,7 @@ def test_connect_repo_records_it_and_points_the_folder_at_github(xs, capsys, git
     xs.route("POST", "/me/projects/connect", body={"success": True, "data": {"projects": ["quirq-ai/notes"]}})
     assert run(capsys, "create", "project", "my-notes")[0] == 0
     code, out, err = run(capsys, "connect", "project:my-notes", "--repo", "https://github.com/quirq-ai/notes")
-    assert code == 0 and json.loads(out) == [{"name": "notes", "repo": f"{gitops.GITHUB}/quirq-ai/notes"}]
+    assert code == 0 and json.loads(out) == [{"name": "notes", "owner": "quirq-ai"}]
     assert xs.requests[2]["body"] == {"name": "my-notes", "repo": "quirq-ai/notes"}
     assert not Path("my-notes").exists() and Path("notes/.git").is_dir()
     assert git("remote", "get-url", "origin", cwd="notes") == f"{gitops.GITHUB}/quirq-ai/notes"

@@ -65,7 +65,7 @@ xo projects                                      # the projects list in your pri
 xo projects add my-app                           # add one; the server writes only that list
 xo create project https://github.com/juanfont/headscale
                                                  # called headscale, cloned into ./headscale; your
-                                                 # projects list shows it with its repo beside it
+                                                 # projects list shows it with its owner beside it
 xo create project headscale https://github.com/juanfont/headscale   # the same: a name and a URL must match
 xo create project notes                          # a project with no GitHub remote: ./notes, git init
 xo connect project:notes --repo https://github.com/OWNER/REPO
@@ -76,7 +76,7 @@ xo connect project:headscale space:my-cc --ref main  # put a project in a space,
 xo connect space:dev                             # a new space entry in your metadata, no XO space
 xo connect space:old --id THE_ID                 # an entry for an XO space you already have, or
                                                  # the id for an entry made without one
-xo list spaces                                   # your spaces, with their projects and refs
+xo spaces                                        # your spaces, with their projects and refs (also xo list spaces)
 xo install space:dev                             # ./dev/REPO for each project, at its ref
 xo update space:dev                              # push each branch under ./dev, record the refs
 xo sync space:dev                                # rebase and push each branch, merge the refs, record

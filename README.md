@@ -59,7 +59,8 @@ xo spaces --space-id 6f1c2c1e-...   # connection URLs for a space you own
 | `xo create project NAME [URL]` | `GET` and `POST /me/projects`, then clones `https://github.com/OWNER/REPO` into `./REPO` (`./OWNER/REPO` when another of your projects is called `REPO`), or `git init ./NAME` for a plain name, with your own git. A project with a repo is recorded as `OWNER/REPO` and called `REPO`, so give a URL alone, or a NAME that is its `REPO` or `OWNER/REPO` | the name only |
 | `xo connect project:P space:S` / `xo connect space:S` | `POST /me/spaces/S/projects` / `POST /me/spaces/connect`: a project's ref in a space, or a new space entry in your metadata | `--ref` (default main) / `--id` for an XO space you already have |
 | `xo connect project:P --repo URL` | `POST /me/projects/connect`: a project made with a name only gets its repo and is recorded as `OWNER/REPO`; `./P` gets that origin if it has none and moves to `./REPO` (left in place unless its origin, fetch and push, is that repository) | the name and `OWNER/REPO` |
-| `xo list projects\|spaces\|shared` | `GET /me/projects` / `GET /me/spaces` / `GET /me/shared`; projects show as `{"name": "headscale", "repo": "https://github.com/juanfont/headscale"}` (by `OWNER/REPO` when two of yours share a repo name) | none |
+| `xo list projects\|spaces\|shared` | `GET /me/projects` / `GET /me/spaces` / `GET /me/shared`; projects show as `{"name": "headscale", "owner": "juanfont"}` | none |
+| `xo spaces` | `GET /me/spaces`: the spaces linked to your account, as `xo list spaces` shows them (with `--space-id ID` it is XO's `GET /spaces/{spaceId}`) | none |
 | `xo share space:S\|project:O/R USERNAME` | `POST /me/share`: an invite in that user's `shared` list, holding the space's name and projects (never its id) | none |
 | `xo accept ID` / `xo reject ID` | `GET /me/shared` and a y/N, then `POST /me/shared/accept`: in one write, a shared space into your spaces or a shared project into the space you name, its projects into your projects, the invite off / `POST /me/shared/reject`: the invite off (the sender can share again) | `--as NAME` (accept a space under another name), `--space NAME` and `--ref REF` (where a shared project goes), `--yes` |
 | `xo install space:S` / `project:P` | `GET /me/spaces`, then your own git: each project cloned or fetched into `./S/REPO` at its ref / P cloned, or fetched and fast-forwarded | none |
@@ -74,13 +75,14 @@ so no project's folder is ever inside another's. A checkout an older xo put in `
 used there.
 
 `xo projects`, `xo list projects`, `xo create project` and `xo connect project:P --repo` print your
-projects as `[{"name": "headscale", "repo": "https://github.com/juanfont/headscale"}, {"name":
-"notes"}]`; before short names they printed `["juanfont/headscale", "notes"]`.
+projects as `[{"name": "headscale", "owner": "juanfont"}, {"name": "notes"}]`; a plain project has
+no owner. Your metadata still records a GitHub project as `juanfont/headscale`, so nothing stored
+changes.
 
 Every space on XO is created with `xo create space NAME KIND`; the old `xo claude-code`, `xo codex`, ...
 commands are gone and say so. It prints the recorded space and XO's answer, `id` included, and
-`xo list spaces` shows it again later. The API has no list, delete, start or stop endpoint, so
-`xo spaces --space-id ID` is the only way to XO's own view of a space.
+`xo spaces` (or `xo list spaces`) shows it again later. The API has no list, delete, start or stop
+endpoint, so `xo spaces --space-id ID` is the only way to XO's own view of a space.
 
 The API is XO's platform, `https://dev.xo.builders/api/core/v1` (the `xo` service); xo
 reaches it through the xo server (see Server mode and Services). Its spec is bundled with xo as
