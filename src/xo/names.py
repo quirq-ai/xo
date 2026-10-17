@@ -40,6 +40,20 @@ def is_github(name: str) -> bool:
     return "/" in name
 
 
+def folder(project: str) -> str:
+    """The folder a project gets: a GitHub project's repo name (juanfont/headscale is ./headscale), a
+    plain name as it is. The project is still recorded as OWNER/REPO."""
+    return project.partition("/")[2] if is_github(project) else project
+
+
+def named(projects: list, typed: str) -> list[str]:
+    """The projects a typed name means: OWNER/REPO names one exactly; a plain name means the plain
+    project of that name or any GitHub project whose repo has it (any case)."""
+    key = typed.casefold()
+    return [p for p in projects if isinstance(p, str)
+            and (p.casefold() == key or (not is_github(typed) and folder(p).casefold() == key))]
+
+
 def project_ok(name: str) -> bool:
     if not isinstance(name, str):
         return False

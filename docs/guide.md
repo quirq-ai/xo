@@ -55,6 +55,7 @@ xo create space my-cc claude-code --volume-size 20 --providers-anthropic-api-key
                                                  # my-cc on XO, recorded in your spaces as my-cc
 xo create space my-codex codex --volume-size 20
 xo create space my-ag antigravity --volume-size 20
+xo create space dev                              # no KIND: a space here only, ./dev, nothing on XO
 xo create space NAME openclaw --help             # needs a provider key and a chat-channel token
 xo create space NAME hermes --help
 xo create space NAME xo-cowork --help
@@ -62,19 +63,21 @@ xo spaces --space-id THE_ID                      # a space you created, with its
 xo me                                            # your profile: name, image, email, public and private metadata
 xo projects                                      # the projects list in your private metadata
 xo projects add my-app                           # add one; the server writes only that list
-xo create project https://github.com/OWNER/REPO  # named OWNER/REPO, added to your projects, cloned here
-xo create project OWNER/REPO https://github.com/OWNER/REPO   # the same: a name and a URL must match
+xo create project https://github.com/juanfont/headscale
+                                                 # called headscale, cloned into ./headscale; your
+                                                 # projects list shows it with its repo beside it
+xo create project headscale https://github.com/juanfont/headscale   # the same: a name and a URL must match
 xo create project notes                          # a project with no GitHub remote: ./notes, git init
 xo connect project:notes --repo https://github.com/OWNER/REPO
-                                                 # give it its repo later: renamed OWNER/REPO; ./notes
-                                                 # gets that origin if it has none and moves to
-                                                 # ./OWNER/REPO (not moved if its origin is another repo)
-xo connect project:OWNER/REPO space:my-cc --ref main  # put a project in a space, at a branch, tag or sha
+                                                 # give it its repo later: called REPO from then on;
+                                                 # ./notes gets that origin if it has none and moves
+                                                 # to ./REPO (not moved if its origin is another repo)
+xo connect project:headscale space:my-cc --ref main  # put a project in a space, at a branch, tag or sha
 xo connect space:dev                             # a new space entry in your metadata, no XO space
 xo connect space:old --id THE_ID                 # an entry for an XO space you already have, or
                                                  # the id for an entry made without one
 xo list spaces                                   # your spaces, with their projects and refs
-xo install space:dev                             # ./dev/OWNER/REPO for each project, at its ref
+xo install space:dev                             # ./dev/REPO for each project, at its ref
 xo update space:dev                              # push each branch under ./dev, record the refs
 xo sync space:dev                                # rebase and push each branch, merge the refs, record
 xo share space:dev bob                           # invite bob to a copy of dev (its name and projects)
@@ -83,14 +86,19 @@ xo accept 0123abcd0123abcd                       # a shared space: show it, ask,
 xo accept 0123abcd0123abcd --as dev2             # the same, when you already have a space called dev
 xo accept 4567cdef4567cdef --space dev           # a shared project: into your space dev, at main
 xo reject 0123abcd0123abcd                       # take it off (its sender can share it again)
-xo install project:OWNER/REPO                    # clone it here, or fetch and fast-forward it
-xo update project:OWNER/REPO                     # git push its branch (never forced)
-xo sync project:OWNER/REPO                       # git pull --rebase, then push
+xo install project:headscale                     # clone it here, or fetch and fast-forward it
+xo update project:headscale                      # git push its branch (never forced)
+xo sync project:headscale                        # git pull --rebase, then push
 ```
 
 - `xo install`, `update` and `sync` use your own git and its login, over https only and without
-  submodules. A space's projects go in `./SPACE/OWNER/REPO`; `./SPACE/.xo/state.json` remembers the
+  submodules. A space's projects go in `./SPACE/REPO`; `./SPACE/.xo/state.json` remembers the
   space's rev and refs as installed. A project with no GitHub remote is left as it is.
+  - A GitHub project is recorded as `OWNER/REPO` and called by its `REPO` in every command. When
+    two of your projects share a repo name, call each by its `OWNER/REPO`; only one of them can be
+    in a space or in one folder here. A checkout an older xo put in `./OWNER/REPO` is still used.
+  - `xo create space NAME` with no KIND makes the space entry and `./NAME` here, already
+    installed, so `xo connect project:P space:NAME` and `xo update space:NAME` work on it.
   - `update` first pushes each checkout's branch to its upstream (refused if the remote is ahead:
     run `xo sync`). Then it sends the branch (or, when detached, the commit) each checkout is on,
     and is refused when the space changed since: run `xo sync`. A ref its remote does not have is
@@ -114,7 +122,7 @@ xo sync project:OWNER/REPO                       # git pull --rebase, then push
   - A share to a username that does not exist, or to someone whose list is full, gets the same
     "could not share" answer. After a reject the sender can share again. A share that works
     does tell you the username exists.
-  - Only GitHub (OWNER/REPO) projects can be shared, since nobody else could install a local one.
+  - Only GitHub projects can be shared, since nobody else could install a local one.
   - `xo list shared` shows each sender's username now. An invite sent again gets a new id, so
     `xo accept` never takes something other than what you saw.
 - `xo claude-code`, `xo codex` and the other old create commands are gone; each says to use

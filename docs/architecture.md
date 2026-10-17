@@ -72,12 +72,13 @@ flowchart LR
 | `xo spaces --space-id ID` | server, then XO | `GET /spaces/{spaceId}`: connection URLs with a session token |
 | `xo me` | server only | your profile, primary email and both metadata buckets, as `{"xo": {..., "public_data", "private_data"}}`; credential-looking values masked |
 | `xo projects [add NAME]` | server only | read or append to the `projects` list in your private metadata |
-| `xo create project NAME [URL]` | server, then git | add the project, then clone `OWNER/REPO` here or `git init` a plain name; a NAME given with a URL must match it |
+| `xo create space NAME` | server only, then a folder | no KIND: a space entry with no projects and nothing on XO (`POST /me/spaces/connect`), then `./NAME` here, marked installed |
+| `xo create project NAME [URL]` | server, then git | add the project, then clone `OWNER/REPO` into `./REPO` or `git init` a plain name; a NAME given with a URL must be its `REPO` or `OWNER/REPO` |
 | `xo connect project:P space:S [--ref R]` | server only | set P in space S at R (default `main`) |
-| `xo connect project:P --repo URL` | server, then git | a project made with a name only gets its repo and is renamed `OWNER/REPO` (refused while P is in a space); `./P` gets that origin only if it has none, and moves to `./OWNER/REPO` only if its origin is that repo |
+| `xo connect project:P --repo URL` | server, then git | a project made with a name only gets its repo and is recorded as `OWNER/REPO` (refused while P is in a space); `./P` gets that origin only if it has none, and moves to `./REPO` only if its origin is that repo |
 | `xo connect space:S [--id ID]` | server, then XO | record a space entry; `--id` ties it to an XO space your key can read |
 | `xo list projects\|spaces\|shared` | server only | show your projects, your spaces, or the invites shared with you (each with an id) |
-| `xo share space:S\|project:OWNER/REPO USERNAME` | server only | an invite in that user's `shared`: a space's name and GitHub projects, or one GitHub project |
+| `xo share space:S\|project:REPO USERNAME` | server only | an invite in that user's `shared`: a space's name and GitHub projects, or one GitHub project |
 | `xo accept ID [--as NAME \| --space S [--ref R]] [--yes]` | server only | show the invite and ask, then add a shared space as your own (`--as` renames it), or a shared project to your space S at R |
 | `xo reject ID` | server only | take the invite off your `shared`; its sender can share again |
 | `xo install project:P\|space:S` | server, git | clone, or fetch and fast-forward, P; for a space, each project into `./S/` at its ref |
@@ -278,10 +279,10 @@ sequenceDiagram
   Srv->>Clerk: write / verify, read, merge: (projects), then read back
   Clerk-->>Srv: written / listed
   Srv-->>Cli: 200 / make ./NAME
-  Cli->>Git: runs git / clone or git init: OWNER/REPO: clone
+  Cli->>Git: runs git / clone or git init: OWNER/REPO: clone into ./REPO
 ```
 
-A project is named after its repo. Give a name (`git init ./notes`), a GitHub URL (cloned as `OWNER/REPO`), or both when they name the same repository; a different name with a URL is refused before anything is sent. Record first, then make the folder.
+A project is named after its repo. Give a name (`git init ./notes`), a GitHub URL (recorded as `OWNER/REPO`, cloned into `./REPO` and called `REPO` in every command), or both when they name the same repository; a different name with a URL is refused before anything is sent. Record first, then make the folder. When two of your projects share a repo name, each is called by its `OWNER/REPO`, and the second cannot be cloned while the first's folder is here.
 
 #### `xo connect project:P --repo URL`
 
@@ -299,10 +300,10 @@ sequenceDiagram
   Clerk-->>Srv: written / read back: after 0.3 s
   Srv-->>Cli: 200 / ./notes here?
   Cli->>Git: if ./notes is here / git remote: origin set only if none
-  Git-->>Cli: origin / move if origin matches: to ./OWNER/REPO
+  Git-->>Cli: origin / move if origin matches: to ./REPO
 ```
 
-A project made with a name gets its repo later. The name is replaced in place, through the same engine as an add. Refused while the project is in a space, since the space would still name it the old way. If `./notes` is here, it gets the origin only when it has none, and moves to `./OWNER/REPO` when its origin is that repository (https or git@ form). A folder whose origin xo cannot confirm is that repository (every fetch and push URL) is not moved, and xo says so.
+A project made with a name gets its repo later. The name is replaced in place, through the same engine as an add. Refused while the project is in a space, since the space would still name it the old way. If `./notes` is here, it gets the origin only when it has none, and moves to `./REPO` when its origin is that repository (https or git@ form). A folder whose origin xo cannot confirm is that repository (every fetch and push URL) is not moved, and xo says so.
 
 #### `xo connect space:S [--id ID]`
 
@@ -420,7 +421,7 @@ sequenceDiagram
   Srv->>Clerk: verify / verify, read user
   Clerk-->>Srv: user / mask: refs shown as stored
   Srv-->>Cli: spaces / space S: dirty checkout: refuse
-  Cli->>Git: each project / clone or fetch: ./S/OWNER/REPO, https
+  Cli->>Git: each project / clone or fetch: ./S/REPO, https
   Note over Git: checkout ref: fast-forward only
   Git-->>Cli: done / save state.json: rev N and refs
 ```
@@ -593,7 +594,7 @@ kind, id, project and ref, item and username, or invite id, never metadata; the 
 change and writes through one engine, `App._change()` and `App._change_keys()`.
 
 ```
-projects: ["quirq-ai/xo", "notes"]            OWNER/REPO is cloned; a plain name gets git init (max 30)
+projects: ["quirq-ai/xo", "notes"]            OWNER/REPO is cloned into ./REPO; a plain name gets git init (max 30)
 spaces:   [{"name": "dev", "kind": "claude-code", "id": "<XO space id>", "rev": 2,
             "projects": [{"quirq-ai/xo": "main"}, {"notes": "v1.2"}]}]   (max 10, 10 projects each)
 shared:   [{"from": "<user id>", "fromName": "alice", "item": "space:dev",
@@ -628,7 +629,7 @@ sequenceDiagram
 | `POST /me/projects` | `xo projects add`, `xo create project` | append a name |
 | `POST /me/projects/connect` | `xo connect project:P --repo URL` | replace a plain name with its `OWNER/REPO`, in place; refused while P is in a space |
 | `POST /me/spaces` | `xo create space` | check name and budget, create on XO with your key, record `{name, kind, id, rev: 1}` |
-| `POST /me/spaces/connect` | `xo connect space:S [--id]` | new entry; with an id, only after XO confirms your key can read it |
+| `POST /me/spaces/connect` | `xo connect space:S [--id]`, `xo create space NAME` (no KIND) | new entry; with an id, only after XO confirms your key can read it |
 | `POST /me/spaces/{name}/projects` | `xo connect project:P space:S` | set one project's ref |
 | `PUT /me/spaces/{name}` | `xo update`, `xo sync` | replace projects and refs if the space is still at `rev` holding `base`, else 409 "run xo sync" |
 | `GET /me/projects`, `GET /me/spaces` | `xo projects`, `xo list` | read, masked as `/me` is (refs shown as stored) |
@@ -645,7 +646,7 @@ A new `workspace.py` drives `gitops.py`. The metadata is only changed by the ser
 ```mermaid
 flowchart LR
   meta[space S in metadata<br/>rev N, project: ref]
-  local[./S/OWNER/REPO<br/>./S/.xo/state.json]
+  local[./S/REPO<br/>./S/.xo/state.json]
   meta -- read --> install[xo install space:S] -- clone, checkout, save rev N --> local
   local -- push, read refs --> update[xo update space:S] -- PUT rev N + base, 409 if moved --> meta
   meta <-- read, then PUT --> sync[xo sync space:S] <-- rebase, push, checkout --> local

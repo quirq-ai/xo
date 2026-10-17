@@ -34,15 +34,19 @@
                                             NAME to it. The xo server makes the change and writes only
                                             that list; xo sends just the name.
     xo create project NAME [GITHUB-URL]     add a project and make its folder here. Give a name, a
-                                            GitHub URL, or both: a GitHub project is named OWNER/REPO and
-                                            cloned, any other name gets `git init` (its repo can be added
-                                            later with xo connect project:NAME --repo URL).
-    xo create space NAME KIND [flags]       create a space on XO (KIND: claude-code, codex, antigravity,
-                                            hermes, openclaw, xo-cowork, nebius-openclaw) named NAME there
-                                            too, and record it in your spaces.
+                                            GitHub URL, or both: a GitHub project is called by its repo's
+                                            name (headscale, from juanfont/headscale), cloned into
+                                            ./headscale and listed with its repo; any other name gets
+                                            `git init` (its repo can be added later with xo connect
+                                            project:NAME --repo URL).
+    xo create space NAME [KIND [flags]]     with a KIND (claude-code, codex, antigravity, hermes,
+                                            openclaw, xo-cowork, nebius-openclaw): create a space on XO
+                                            named NAME there too, and record it in your spaces. With no
+                                            KIND: a space here only, the folder ./NAME, recorded in your
+                                            spaces with no projects and nothing on XO.
     xo connect project:P space:S [--ref R]  set project P in space S at ref R (default main).
     xo connect project:P --repo URL         give project P, made with a name only, its GitHub repo; P
-                                            is renamed OWNER/REPO.
+                                            is recorded as OWNER/REPO and its folder becomes ./REPO.
     xo connect space:S [--id ID]            a new space entry S in your metadata; --id ties it to an
                                             XO space you already have.
     xo list projects | spaces | shared      show your projects, your spaces, or the invites shared
@@ -55,7 +59,9 @@
                                             ref R (default main).
     xo reject ID                            take invite ID off your list (its sender can share again).
     xo install project:P | space:S          clone or fetch P here; for a space, each of its projects
-                                            into ./S/ at its ref.
+                                            into ./S/ at its ref. A GitHub project's folder is its repo's
+                                            name; call it by that name, or by OWNER/REPO when two of
+                                            your projects share it.
     xo update project:P | space:S           push P's branch (never forced); for a space, record the
                                             refs checked out under ./S/ (refused if the space moved on).
     xo sync project:P | space:S             pull --rebase and push P; for a space, take its changes,
@@ -640,7 +646,7 @@ def _projects(args: argparse.Namespace) -> int:
         else None
     if projects is None:
         raise XoError("the xo server did not answer with a projects list (is it older than xo projects?)")
-    print(client.scrub(_json(projects)))
+    print(client.scrub(_json(_shown_projects(projects))))
     return 0
 
 
@@ -658,22 +664,23 @@ def _post_server(client: Client, path: str, body: dict) -> Any:
 
 def _create_project(args: argparse.Namespace) -> int:
     """`xo create project NAME [URL]`: the server adds the project to your projects, then its folder
-    is made here. A GitHub project is named OWNER/REPO and cloned; any other name gets an empty
-    repository, and can get its repo later with `xo connect project:NAME --repo URL`. NAME and URL
-    may both be given only when they name the same repository."""
+    is made here. A GitHub project is recorded as OWNER/REPO, called by REPO and cloned into ./REPO;
+    any other name gets an empty repository, and can get its repo later with `xo connect
+    project:NAME --repo URL`. NAME and URL may both be given only when they name the same
+    repository (NAME as REPO or OWNER/REPO)."""
     name = _project_target(args.target.strip())
     if args.repo is not None:
         repo = _project_target(args.repo.strip())
         if not names.is_github(repo):
             raise XoError("a project URL must be https://github.com/OWNER/REPO")
-        if repo.casefold() != name.casefold():
-            raise XoError(f"a project with a repo is named after it ({repo}): run xo create project {repo}, "
-                          f"or keep {name} without one and add it later with xo connect project:{name} --repo "
-                          f"{gitops.GITHUB}/{repo}")
+        if name.casefold() not in (repo.casefold(), names.folder(repo).casefold()):
+            raise XoError(f"a project with a repo is called after it ({names.folder(repo)}): run xo create project "
+                          f"{gitops.GITHUB}/{repo}, or keep {name} without one and add it later with xo connect "
+                          f"project:{name} --repo {gitops.GITHUB}/{repo}")
         name = repo
-    dest = Path(name)
+    dest = Path(names.folder(name))
     if dest.exists() or dest.is_symlink():
-        raise XoError(f"./{name} already exists here; nothing was changed")
+        raise XoError(f"./{dest} already exists here; nothing was changed")
     client = _client(args, server=True)
     projects = _answer(_post_server(client, "/me/projects", {"name": name}), "projects", "a projects list")
     try:
@@ -681,9 +688,27 @@ def _create_project(args: argparse.Namespace) -> int:
     except XoError as e:
         raise XoError(f"{name} is in your projects, but its folder was not made: {e}") from None
     how = f"cloned {gitops.GITHUB}/{name}" if names.is_github(name) else "an empty git repository"
-    print(f"xo: ./{name}: {how}", file=sys.stderr)
-    print(client.scrub(_json(projects)))
+    print(f"xo: ./{dest}: {how}", file=sys.stderr)
+    if len(names.named(projects, names.folder(name))) > 1:
+        print(f"xo: more than one of your projects is called {names.folder(name)}; call this one {name} in xo "
+              "commands", file=sys.stderr)
+    print(client.scrub(_json(_shown_projects(projects))))
     return 0
+
+
+def _shown_projects(projects: Any) -> Any:
+    """Your projects as xo shows them: each one's name, and a GitHub project's repo beside it. Two
+    GitHub projects with one repo name are both shown by OWNER/REPO, which is how to call them."""
+    if not isinstance(projects, list):
+        return projects
+    out = []
+    for p in projects:
+        if not isinstance(p, str) or not names.is_github(p):
+            out.append({"name": p})
+            continue
+        short = names.folder(p)
+        out.append({"name": short if len(names.named(projects, short)) == 1 else p, "repo": f"{gitops.GITHUB}/{p}"})
+    return out
 
 
 def _project_target(text: str) -> str:
@@ -699,7 +724,9 @@ def _project_target(text: str) -> str:
 def _create_space(args: argparse.Namespace) -> int:
     """`xo create space NAME KIND [flags]`: the body KIND's create takes, with NAME as the space's
     name on XO too, sent to the xo server, which creates the space through XO with your key and
-    records it in your spaces as NAME."""
+    records it in your spaces as NAME. With no KIND, see _create_local_space."""
+    if getattr(args, "kind", None) is None:
+        return _create_local_space(args)
     if not names.xo_name_ok(args.space_name):
         raise XoError(names.XO_NAME_RULE)
     name = args.space_name.lower()
@@ -710,6 +737,30 @@ def _create_space(args: argparse.Namespace) -> int:
     wrapped = {"kind": op.path.strip("/"), "name": name, "body": body if body is not None else {}}
     return _send(client, args, "POST", "/me/spaces", query={}, body=wrapped,
                  paths=[("body", *p) for p in op.secret_paths], copies=op.copies_key)
+
+
+def _create_local_space(args: argparse.Namespace) -> int:
+    """`xo create space NAME`: a space here only. The server records it in your spaces with no
+    projects (the same entry xo connect space:NAME makes, nothing on XO), then ./NAME is made and
+    marked installed, so xo connect, xo install and xo update work on it."""
+    name = args.space_name
+    if not names.space_ok(name):
+        raise XoError(names.SPACE_RULE)
+    root = Path(name)
+    if root.exists() or root.is_symlink():
+        raise XoError(f"./{name} already exists here; nothing was changed")
+    client = _client(args, server=True)
+    space = _answer(_post_server(client, "/me/spaces/connect", {"name": name}), "space", "a space")
+    try:
+        workspace.made(name, space)
+    except (OSError, XoError) as e:
+        why = e.strerror or type(e).__name__ if isinstance(e, OSError) else str(e)
+        raise XoError(f"space {name} is in your spaces, but ./{name} was not made ({why}); run xo install "
+                      f"space:{name}") from None
+    print(f"xo: ./{name}: a new space with no projects (add one with xo connect project:P space:{name}; "
+          f"to make it on XO, use xo create space with a KIND instead)", file=sys.stderr)
+    print(client.scrub(_json(space)))
+    return 0
 
 
 def _moved(kind: str) -> str:
@@ -733,7 +784,7 @@ def _connect(args: argparse.Namespace) -> int:
         data = _post_server(client, "/me/projects/connect", {"name": value, "repo": repo})
         projects = _answer(data, "projects", "a projects list")
         _local_repo(Path(value), repo)
-        print(client.scrub(_json(projects)))
+        print(client.scrub(_json(_shown_projects(projects))))
         return 0
     if kind == "project":
         where, _, space = (args.second or "").partition(":")
@@ -746,6 +797,12 @@ def _connect(args: argparse.Namespace) -> int:
         if args.ref is not None and not names.ref_ok(args.ref):
             raise XoError(names.REF_RULE)
         client = _client(args, server=True)
+        value = _which(client, value)
+        held = workspace.space_projects(client, space)
+        clash = [p for p in held if p != value and names.folder(p).casefold() == names.folder(value).casefold()]
+        if clash:
+            raise XoError(f"space {space} already holds {clash[0]}, which goes in the same folder "
+                          f"{names.folder(value)}; nothing was changed")
         body = {"project": value, **({"ref": args.ref} if args.ref is not None else {})}
         data = _post_server(client, f"/me/spaces/{quote(space, safe='')}/projects", body)
     elif kind == "space":
@@ -764,9 +821,18 @@ def _connect(args: argparse.Namespace) -> int:
     return 0
 
 
+def _which(client: Client, typed: str) -> str:
+    """The project a typed name means: OWNER/REPO as it is, a plain name looked up in your projects
+    (a GitHub project is called by its repo's name)."""
+    if names.is_github(typed):
+        return typed
+    return workspace.resolve(_answer(client.request("GET", "/me/projects").data, "projects", "a projects list"),
+                             typed)
+
+
 def _local_repo(dest: Path, repo: str) -> None:
-    """After the project is renamed OWNER/REPO: point its folder here, if any, at the repo, and move it
-    to ./OWNER/REPO, where xo install and xo sync look for it."""
+    """After the project is recorded as OWNER/REPO: point its folder here, if any, at the repo, and move
+    it to ./REPO, where xo install and xo sync look for it."""
     if not dest.is_dir():
         print(f"xo: ./{dest} is not here; xo install project:{repo} clones it", file=sys.stderr)
         return
@@ -775,7 +841,9 @@ def _local_repo(dest: Path, repo: str) -> None:
     except XoError as e:
         print(f"xo: ./{dest} was left as it is and not moved: {e}", file=sys.stderr)
         return
-    target = Path(repo)
+    target = Path(names.folder(repo))
+    if str(target).casefold() == str(dest).casefold():
+        return  # already called after its repo
     if target.exists() or target.is_symlink():
         print(f"xo: ./{target} already exists, so ./{dest} was not moved there; move it yourself", file=sys.stderr)
         return
@@ -803,9 +871,11 @@ def _share(args: argparse.Namespace) -> int:
     """`xo share space:S|project:OWNER/REPO USERNAME`: an invite in that user's `shared`, which they
     accept or reject. The xo server writes it; the invite holds the space's name and projects."""
     kind, name = workspace.target(args.target)
-    if kind == "project" and not names.is_github(name):
-        raise XoError("only an OWNER/REPO project can be shared: nobody else could install a local one")
     client = _client(args, server=True)
+    if kind == "project":
+        name = _which(client, name)
+        if not names.is_github(name):
+            raise XoError("only a GitHub project can be shared: nobody else could install a local one")
     data = _post_server(client, "/me/share", {"item": f"{kind}:{name}", "to": args.username})
     print(client.scrub(_json(_answer(data, "shared", "the invite"))))
     return 0
@@ -867,7 +937,7 @@ def _list(args: argparse.Namespace) -> int:
     """`xo list projects | spaces | shared`: that list in your private metadata."""
     client = _client(args, server=True)
     found = _answer(client.request("GET", f"/me/{args.what}").data, args.what, f"a {args.what} list")
-    print(client.scrub(_json(found)))
+    print(client.scrub(_json(_shown_projects(found) if args.what == "projects" else found)))
     return 0
 
 
@@ -1122,16 +1192,21 @@ def main(argv: list[str] | None = None) -> int:
                                                          "private metadata (the xo server makes the change)")
     mksub = mk.add_subparsers(dest="what", required=True, metavar="WHAT")
     mp = mksub.add_parser("project", parents=[common],
-                          help="add a project and make its folder here: a GitHub URL or OWNER/REPO is cloned, "
-                               "any other name gets an empty git repository (add its repo later with xo connect)")
+                          help="add a project and make its folder here: a GitHub URL or OWNER/REPO is cloned into "
+                               "./REPO and called REPO, any other name gets an empty git repository (add its repo "
+                               "later with xo connect)")
     mp.add_argument("target", metavar="NAME|URL", help=names.PROJECT_RULE + ", or https://github.com/OWNER/REPO")
     mp.add_argument("repo", nargs="?", metavar="URL",
-                    help="the project's https://github.com/OWNER/REPO, when NAME is also given (they must match)")
+                    help="the project's https://github.com/OWNER/REPO, when NAME is also given (NAME must be REPO "
+                         "or OWNER/REPO)")
     mp.set_defaults(run=_create_project)
     ms = mksub.add_parser("space", parents=[common],
-                          help="create a space on XO and record it in your spaces: xo create space NAME KIND")
-    ms.add_argument("space_name", metavar="NAME", help=names.XO_NAME_RULE)
-    space_kinds = ms.add_subparsers(dest="kind", required=True, metavar="KIND")
+                          help="create a space and record it in your spaces: on XO with xo create space NAME KIND, "
+                               "or here only (./NAME, nothing on XO) with xo create space NAME")
+    ms.add_argument("space_name", metavar="NAME", help=names.XO_NAME_RULE + "; with no KIND, " + names.SPACE_RULE)
+    ms.set_defaults(run=_create_space)
+    space_kinds = ms.add_subparsers(dest="kind", required=False, metavar="KIND",
+                                    help="the kind of space XO makes; leave it out for a space here only")
     cn = sub.add_parser("connect", parents=[common],
                         help="set a project's ref in one of your spaces, give a project its repo, or make a new "
                              "space entry")
@@ -1141,7 +1216,7 @@ def main(argv: list[str] | None = None) -> int:
     cn.add_argument("--id", help="with space:NAME, an XO space you already have (XO must confirm your key "
                                  "can read it)")
     cn.add_argument("--repo", metavar="URL", help="with project:NAME alone, the project's GitHub repo; the project "
-                                                  "is renamed OWNER/REPO")
+                                                  "is recorded as OWNER/REPO, its folder becomes ./REPO")
     cn.set_defaults(run=_connect)
     for verb, about in (("install", "clone or fetch a project here, or each of a space's projects into ./SPACE at its "
                                     "ref"),

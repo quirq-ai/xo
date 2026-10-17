@@ -1582,7 +1582,7 @@ def test_xo_projects_end_to_end(xo_server, clerk, alice, monkeypatch, capfd):
     assert cli.main(["projects", "add", "my app"]) == 0
     out, err = capfd.readouterr()
     _no_secret(out, err)
-    assert json.loads(out) == ["my app"] and "POST" in err
+    assert json.loads(out) == [{"name": "my app"}] and "POST" in err
     assert cli.main(["projects", "add", "My App"]) == 1
     assert "already in your projects" in capfd.readouterr().err
     assert alice["private_metadata"] == {"stripeId": "cus_1", "notes": {"a": [1, 2]}, "flag": True,

@@ -1,7 +1,8 @@
 """`xo install`, `xo update` and `xo sync`: a space's projects on this machine, kept in step with
 the space recorded in your private metadata.
 
-    xo install space:S    ./S/<project> for each project, at its ref; ./S/.xo/state.json remembers
+    xo install space:S    ./S/<folder> for each project, at its ref (a GitHub project's folder is
+                          its repo name: juanfont/headscale is ./S/headscale); ./S/.xo/state.json remembers
                           the space's rev and refs as installed
     xo update space:S     push each checkout's branch to its upstream (refused if the remote is
                           ahead), then record each checkout's branch (or commit) in the space, if the
@@ -9,7 +10,9 @@ the space recorded in your private metadata.
     xo sync space:S       rebase each checkout's branch on its upstream and push it, take the
                           space's changes, keep yours, stop on a project both changed, then record
                           the result
-    xo install project:P  ./P cloned from GitHub, or fetched and fast-forwarded
+    xo install project:P  ./headscale cloned from GitHub, or fetched and fast-forwarded (P is
+                          juanfont/headscale or, when only one of your projects is called that,
+                          headscale)
     xo update project:P   git push of ./P's branch to its upstream, never forced
     xo sync project:P     git pull --rebase, then that push
 
@@ -67,7 +70,48 @@ def _pairs(entries: Any, where: str) -> list[tuple[str, str]]:
         if not names.ref_ok(ref):
             raise XoError(f"{where}: {ref!r} for {project} is not a ref xo uses")
         out.append((project, ref))
+    seen: dict[str, str] = {}
+    for project, _ in out:
+        other = seen.setdefault(names.folder(project).casefold(), project)
+        if other != project:
+            raise XoError(f"{where}: {other} and {project} would both go in the folder {names.folder(project)}, "
+                          "so xo cannot put both here")
     return out
+
+
+def dest(root: Path, project: str) -> Path:
+    """Where a project's checkout is under root: root/REPO for a GitHub project. An older xo put it in
+    root/OWNER/REPO; that one is still used while it is there and root/REPO is not."""
+    new, old = root / names.folder(project), root / project
+    if new != old and not (new.exists() or new.is_symlink()) and (old / ".git").exists():
+        return old
+    return new
+
+
+def resolve(projects: Any, typed: str) -> str:
+    """The one project of yours a typed name means (see names.named)."""
+    if not isinstance(projects, list):
+        raise XoError("the xo server's projects list is not a list")
+    found = names.named(projects, typed)
+    if len(found) > 1:
+        raise XoError(f"{typed} could be " + " or ".join(found) + "; say which with its OWNER/REPO")
+    if not found:
+        raise XoError(f"{typed} is not in your projects (xo list projects shows them)")
+    return found[0]
+
+
+def made(name: str, space: dict) -> Path:
+    """A new space with no projects, made with no kind: its folder ./NAME here, recorded as installed."""
+    root = Path(name)
+    root.mkdir()
+    _save(root, name, _rev(space), [])
+    return root
+
+
+def space_projects(client: Client, name: str) -> list[str]:
+    """The projects your space NAME holds now, as the server has them."""
+    entries = _space(client, name).get("projects")
+    return [p for e in entries if isinstance(e, dict) for p in e] if isinstance(entries, list) else []
 
 
 def _space(client: Client, name: str) -> dict:
@@ -115,6 +159,11 @@ def _place(dest: Path, project: str, ref: str | None) -> bool:
     if dest.exists():
         if not (dest / ".git").exists():
             raise XoError(f"./{dest} exists and is not a git checkout; move it and try again")
+        gitops.own_checkout(dest)
+        if not gitops.origin_is(dest, project):
+            # Two repos with one name share a folder name: never fetch or move the other one.
+            raise XoError(f"./{dest} is not a checkout of {project} (its origin is not one xo can confirm is "
+                          "that repo); move it and try again")
         if gitops.dirty(dest):
             raise XoError(f"./{dest} has changes that are not committed; commit or stash them first")
         gitops.fetch(dest)
@@ -127,21 +176,19 @@ def _place(dest: Path, project: str, ref: str | None) -> bool:
 
 def install(client: Client, kind: str, name: str) -> Any:
     if kind == "project":
-        projects = _data(client.request("GET", "/me/projects").data, "projects")
-        if name not in projects:
-            raise XoError(f"{name} is not in your projects (xo list projects shows them)")
-        dest = Path(name)
-        existed = dest.exists()
-        if not _place(dest, name, None):
+        name = resolve(_data(client.request("GET", "/me/projects").data, "projects"), name)
+        here = dest(Path("."), name)
+        existed = here.exists()
+        if not _place(here, name, None):
             raise XoError(f"{name} has no GitHub remote, so there is nothing to install")
-        _say(f"./{name}: " + (gitops.fast_forward(dest) if existed else f"cloned from {gitops.GITHUB}/{name}"))
+        _say(f"./{here}: " + (gitops.fast_forward(here) if existed else f"cloned from {gitops.GITHUB}/{name}"))
         return {"project": name}
     space = _space(client, name)
     pairs = _pairs(space.get("projects"), f"space {name}")
     root = Path(name)
     for project, ref in pairs:
-        if _place(root / project, project, ref):
-            _say(f"./{root / project}: {ref}")
+        if _place(dest(root, project), project, ref):
+            _say(f"./{dest(root, project)}: {ref}")
     rev = _rev(space)
     _save(root, name, rev, pairs)
     return {"space": name, "rev": rev, "projects": [{p: r} for p, r in pairs]}
@@ -151,19 +198,19 @@ def _local(root: Path, base: list[tuple[str, str]]) -> list[tuple[str, str]]:
     """Each project's ref as checked out under root; the installed ref when it is not here."""
     out = []
     for project, ref in base:
-        dest = root / project
-        if not (dest / ".git").exists():
+        there = dest(root, project)
+        if not (there / ".git").exists():
             out.append((project, ref))
             continue
-        gitops.own_checkout(dest)
-        here = gitops.current(dest)
-        if gitops.branch(dest) is None:  # detached: still the installed tag or commit, if HEAD is there
+        gitops.own_checkout(there)
+        here = gitops.current(there)
+        if gitops.branch(there) is None:  # detached: still the installed tag or commit, if HEAD is there
             try:
-                here = ref if gitops.resolve(dest, ref)[1] == here else here
+                here = ref if gitops.resolve(there, ref)[1] == here else here
             except XoError:
                 pass
         if not names.ref_ok(here):
-            raise XoError(f"./{dest} is on {here!r}, which is not a ref xo can record ({names.REF_RULE})")
+            raise XoError(f"./{there} is on {here!r}, which is not a ref xo can record ({names.REF_RULE})")
         out.append((project, here))
     return out
 
@@ -171,14 +218,14 @@ def _local(root: Path, base: list[tuple[str, str]]) -> list[tuple[str, str]]:
 def _published(root: Path, pairs: list[tuple[str, str]], base: dict[str, str]) -> None:
     """Refuse to record a ref others could not install: it must be on the project's remote."""
     for project, ref in pairs:
-        dest = root / project
-        if base.get(project) == ref or not (dest / ".git").exists():
+        there = dest(root, project)
+        if base.get(project) == ref or not (there / ".git").exists():
             continue
-        gitops.fetch(dest)
+        gitops.fetch(there)
         try:
-            gitops.resolve(dest, ref)
+            gitops.resolve(there, ref)
         except XoError:
-            raise XoError(f"./{dest} is at {ref}, which its remote does not have; push it first "
+            raise XoError(f"./{there} is at {ref}, which its remote does not have; push it first "
                           "(xo update project:" + project + ")") from None
 
 
@@ -195,11 +242,11 @@ def _record(client: Client, name: str, rev: int, pairs: list[tuple[str, str]],
 def _checkouts(root: Path, pairs: list[tuple[str, str]]) -> list[Path]:
     """The space's projects that have a checkout here, each refused if it is not a checkout of its
     own or holds changes not committed, before anything is changed."""
-    found = [root / p for p, _ in pairs if (root / p).exists()]
-    for dest in found:
-        gitops.own_checkout(dest)
-        if gitops.dirty(dest):
-            raise XoError(f"./{dest} has changes that are not committed; commit or stash them first. Nothing "
+    found = [dest(root, p) for p, _ in pairs if dest(root, p).exists()]
+    for there in found:
+        gitops.own_checkout(there)
+        if gitops.dirty(there):
+            raise XoError(f"./{there} has changes that are not committed; commit or stash them first. Nothing "
                           "was changed")
     return found
 
@@ -209,19 +256,20 @@ def _git_step(dests: list[Path], rebase: bool) -> list[Path]:
     (never forced, so git refuses when the remote is ahead). Tags and commits are left as they are.
     The checkouts pushed."""
     pushed = []
-    for dest in dests:
-        if gitops.tracking(dest):
+    for there in dests:
+        if gitops.tracking(there):
             if rebase:
-                gitops.pull_rebase(dest)
-            gitops.push(dest)
-            pushed.append(dest)
+                gitops.pull_rebase(there)
+            gitops.push(there)
+            pushed.append(there)
     return pushed
 
 
 def update(client: Client, kind: str, name: str) -> Any:
     if kind == "project":
-        gitops.push(Path(name))
-        _say(f"./{name}: pushed")
+        here = dest(Path("."), name)
+        gitops.push(here)
+        _say(f"./{here}: pushed")
         return {"project": name}
     root = Path(name)
     state = _state(root)
@@ -239,10 +287,10 @@ def update(client: Client, kind: str, name: str) -> Any:
 
 def sync(client: Client, kind: str, name: str) -> Any:
     if kind == "project":
-        dest = Path(name)
-        gitops.pull_rebase(dest)
-        gitops.push(dest)
-        _say(f"./{name}: rebased on its upstream and pushed")
+        here = dest(Path("."), name)
+        gitops.pull_rebase(here)
+        gitops.push(here)
+        _say(f"./{here}: rebased on its upstream and pushed")
         return {"project": name}
     root = Path(name)
     state = _state(root)
@@ -279,7 +327,7 @@ def sync(client: Client, kind: str, name: str) -> Any:
         raise XoError("both you and the space changed " + "; ".join(clashes) + "." + left)
     for project, ref in merged:
         if local.get(project) != ref:
-            _place(root / project, project, ref)
+            _place(dest(root, project), project, ref)
     # The checkouts now hold the space's refs and yours: save the space as read, so that if recording
     # fails below, the next sync still counts your refs as yours and the space's as its own.
     _save(root, name, _rev(space), remote)

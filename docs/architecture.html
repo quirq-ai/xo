@@ -348,12 +348,13 @@ html { scroll-behavior: smooth; }
 				<tr><td>xo spaces --space-id ID</td><td>server, then XO</td><td><code>GET /spaces/{spaceId}</code>: connection URLs; they carry a session token</td></tr>
 				<tr><td>xo me</td><td>server only</td><td>Your profile, primary email and both metadata buckets, printed as <code>{"xo": {..., "public_data", "private_data"}}</code>; credential-looking values masked</td></tr>
 				<tr><td>xo projects [add NAME]</td><td>server only</td><td>Read or append to the <code>projects</code> list in your private metadata</td></tr>
-				<tr><td>xo create project NAME [URL]</td><td>server, then git</td><td>Adds the project, then clones <code>OWNER/REPO</code> here or runs <code>git init</code> for a plain name; a NAME given with a URL must match it</td></tr>
+				<tr><td>xo create space NAME</td><td>server only, then a folder</td><td>No KIND: a space entry with no projects and nothing on XO (<code>POST /me/spaces/connect</code>), then <code>./NAME</code> here, marked installed</td></tr>
+				<tr><td>xo create project NAME [URL]</td><td>server, then git</td><td>Adds the project, then clones <code>OWNER/REPO</code> into <code>./REPO</code> or runs <code>git init</code> for a plain name; a NAME given with a URL must be its <code>REPO</code> or <code>OWNER/REPO</code></td></tr>
 				<tr><td>xo connect project:P space:S [--ref R]</td><td>server only</td><td>Sets P in space S at <code>--ref</code> (default <code>main</code>)</td></tr>
-				<tr><td>xo connect project:P --repo URL</td><td>server, then git</td><td>A project made with a name only gets its repo and is renamed <code>OWNER/REPO</code> (refused while P is in a space); <code>./P</code> gets that origin only if it has none, and moves to <code>./OWNER/REPO</code> only if its origin is that repo</td></tr>
+				<tr><td>xo connect project:P --repo URL</td><td>server, then git</td><td>A project made with a name only gets its repo and is recorded as <code>OWNER/REPO</code> (refused while P is in a space); <code>./P</code> gets that origin only if it has none, and moves to <code>./REPO</code> only if its origin is that repo</td></tr>
 				<tr><td>xo connect space:S [--id ID]</td><td>server, then XO</td><td>Records a space entry; <code>--id</code> ties it to an XO space your key can read</td></tr>
 				<tr><td>xo list projects | spaces | shared</td><td>server only</td><td>Shows your projects, your spaces, or the invites shared with you (each with an id)</td></tr>
-				<tr><td>xo share space:S | project:OWNER/REPO USERNAME</td><td>server only</td><td>An invite in that user's <code>shared</code>: a space's name and GitHub projects, or one GitHub project</td></tr>
+				<tr><td>xo share space:S | project:REPO USERNAME</td><td>server only</td><td>An invite in that user's <code>shared</code>: a space's name and GitHub projects, or one GitHub project</td></tr>
 				<tr><td>xo accept ID [--as NAME | --space S [--ref R]] [--yes]</td><td>server only</td><td>Shows the invite and asks, then adds a shared space as your own (<code>--as</code> renames it), or a shared project to your space S at R</td></tr>
 				<tr><td>xo reject ID</td><td>server only</td><td>Takes the invite off your <code>shared</code>; its sender can share again</td></tr>
 				<tr><td>xo install project:P | space:S</td><td>server, git</td><td>Clones or fetches P here; for a space, each project into <code>./S/</code> at its ref</td></tr>
@@ -859,12 +860,12 @@ html { scroll-behavior: smooth; }
 <text class="lbl" x="250" y="455" text-anchor="middle">200</text>
 <rect class="box hot" x="722" y="562" width="206" height="46" rx="8"/>
 <text class="t" x="825" y="582" text-anchor="middle">clone or git init</text>
-<text class="s" x="825" y="599" text-anchor="middle">OWNER/REPO: clone</text>
+<text class="s" x="825" y="599" text-anchor="middle">clone into ./REPO</text>
 <path class="edge hot" d="M135,524 V544 H825 V560" marker-end="url(#c10h)"/>
 <text class="lbl hot" x="480" y="539" text-anchor="middle">runs git</text>
 </svg>
 </div>
-<figcaption><strong>A project is named after its repo.</strong> Give a name (<code>git init ./notes</code>), a GitHub URL (cloned as <code>OWNER/REPO</code>), or both when they name the same repository; a different name with a URL is refused before anything is sent. Record first, then make the folder.</figcaption>
+<figcaption><strong>A project is named after its repo.</strong> Give a name (<code>git init ./notes</code>), a GitHub URL (recorded as <code>OWNER/REPO</code>, cloned into <code>./REPO</code> and called <code>REPO</code>), or both when they name the same repository; a different name with a URL is refused before anything is sent. Record first, then make the folder.</figcaption>
 </figure>
 <h4><code>xo connect project:P --repo URL</code></h4>
 <figure>
@@ -925,12 +926,12 @@ html { scroll-behavior: smooth; }
 <text class="lbl" x="480" y="623" text-anchor="middle">if ./notes is here</text>
 <rect class="box" x="32" y="730" width="206" height="46" rx="8"/>
 <text class="t" x="135" y="750" text-anchor="middle">move if origin matches</text>
-<text class="s" x="135" y="767" text-anchor="middle">to ./OWNER/REPO</text>
+<text class="s" x="135" y="767" text-anchor="middle">to ./REPO</text>
 <path class="edge dash" d="M825,692 V712 H135 V728" marker-end="url(#c11a)"/>
 <text class="lbl" x="480" y="707" text-anchor="middle">origin</text>
 </svg>
 </div>
-<figcaption><strong>A project made with a name gets its repo later.</strong> The name is replaced in place, through the same engine as an add. Refused while the project is in a space, since the space would still name it the old way. If <code>./notes</code> is here, it gets the origin only when it has none, and moves to <code>./OWNER/REPO</code> when its origin is that repository (https or git@ form). A folder whose origin xo cannot confirm is that repository (every fetch and push URL) is not moved, and xo says so.</figcaption>
+<figcaption><strong>A project made with a name gets its repo later.</strong> The name is replaced in place, through the same engine as an add. Refused while the project is in a space, since the space would still name it the old way. If <code>./notes</code> is here, it gets the origin only when it has none, and moves to <code>./REPO</code> when its origin is that repository (https or git@ form). A folder whose origin xo cannot confirm is that repository (every fetch and push URL) is not moved, and xo says so.</figcaption>
 </figure>
 <h4><code>xo connect space:S [--id ID]</code></h4>
 <figure>
@@ -1282,7 +1283,7 @@ html { scroll-behavior: smooth; }
 <text class="lbl" x="250" y="371" text-anchor="middle">spaces</text>
 <rect class="box hot" x="722" y="478" width="206" height="46" rx="8"/>
 <text class="t" x="825" y="498" text-anchor="middle">clone or fetch</text>
-<text class="s" x="825" y="515" text-anchor="middle">./S/OWNER/REPO, https</text>
+<text class="s" x="825" y="515" text-anchor="middle">./S/REPO, https</text>
 <path class="edge hot" d="M135,440 V460 H825 V476" marker-end="url(#c17h)"/>
 <text class="lbl hot" x="480" y="455" text-anchor="middle">each project</text>
 <rect class="box" x="722" y="562" width="206" height="46" rx="8"/>
@@ -1882,7 +1883,7 @@ html { scroll-behavior: smooth; }
 		<table class="tokens">
 			<thead><tr><th>Route</th><th>Command</th><th>Change</th></tr></thead>
 			<tbody>
-				<tr><td>POST /me/projects</td><td>xo projects add · xo create project</td><td>Appends a name; <code>create project</code> then clones it (OWNER/REPO) or runs <code>git init</code> here</td></tr>
+				<tr><td>POST /me/projects</td><td>xo projects add · xo create project</td><td>Appends a name; <code>create project</code> then clones it (OWNER/REPO, into ./REPO) or runs <code>git init</code> here</td></tr>
 				<tr><td>POST /me/projects/connect</td><td>xo connect project:P --repo URL</td><td>Replaces a plain name with its <code>OWNER/REPO</code>, in place; refused while P is in a space</td></tr>
 				<tr><td>POST /me/spaces</td><td>xo create space NAME KIND</td><td>Checks the name and budget first, creates the space on XO with your key, then records <code>{name, kind, id, rev: 1}</code></td></tr>
 				<tr><td>POST /me/spaces/connect</td><td>xo connect space:S [--id ID]</td><td>A new entry; with an id, only after XO confirms your key can read that space</td></tr>
@@ -1927,7 +1928,7 @@ html { scroll-behavior: smooth; }
 				<text class="s" x="346" y="248">rebase, push, merge, record</text>
 
 				<rect class="box" x="720" y="20" width="220" height="244" rx="8"/>
-				<text class="m" x="830" y="124" text-anchor="middle">./S/OWNER/REPO</text>
+				<text class="m" x="830" y="124" text-anchor="middle">./S/REPO</text>
 				<text class="s" x="830" y="144" text-anchor="middle">one checkout per project</text>
 				<text class="m" x="830" y="164" text-anchor="middle">./S/.xo/state.json</text>
 
