@@ -97,7 +97,8 @@ from urllib.parse import quote
 
 from xo import __version__, commands, github, gitops, names, services, spec, workspace
 from xo.client import (CORE_PATH, DEFAULT_TIMEOUT, KEY_ENV, MAYBE_RECEIVED, MIN_SECRET, Client, Login, XoError,
-                       api_key, check_key, credentials_path, forget_login, read_key, redact, save_login, saved_login, xo_url)
+                       api_key, check_key, credentials_path, forget_login, read_key, redact, save_login, saved_login,
+                       xo_url)
 
 GLOBAL_DEFAULTS = {"api_key": None, "url": None, "spec": None, "timeout": DEFAULT_TIMEOUT}
 # Global options that take a value, so the word after one is never read as the command.
