@@ -19,8 +19,8 @@
                                             only the creates and GET /spaces/{id} pass; for the
                                             rest, add --url https://dev.xo.builders with
                                             $XO_API_KEY or --api-key - (not the saved key).
-    xo serve [--host H] [--port P]          run the xo server: it answers `xo me` and
-                                            `xo user-metadata` with the Clerk credentials it holds,
+    xo serve [--host H] [--port P]          run the xo server: it answers `xo me` (and the admin-only
+                                            /user-metadata route) with the Clerk credentials it holds,
                                             and passes the creates and GET /spaces/{id} on to XO's
                                             core API.
     xo login [xo|me|github] [--url URL]
@@ -49,8 +49,8 @@
                                             is recorded as OWNER/REPO and its folder becomes ./REPO.
     xo connect space:S [--id ID]            a new space entry S in your metadata; --id ties it to an
                                             XO space you already have.
-    xo list projects | spaces | shared      show your projects, your spaces, or the invites shared
-                                            with you.
+    xo list [projects | spaces | shared]    show your projects, your spaces, or the invites shared
+                                            with you; with nothing after it, your projects and spaces.
     xo spaces                               the spaces linked to your account (xo list spaces); with
                                             --space-id ID, XO's connection URLs for that space.
     xo share space:S|project:P USERNAME     invite that user to a copy of the space (its name and
@@ -994,8 +994,14 @@ def _invite(args: argparse.Namespace) -> int:
 
 
 def _list(args: argparse.Namespace) -> int:
-    """`xo list projects | spaces | shared`: that list in your private metadata."""
+    """`xo list projects | spaces | shared`: that list in your private metadata. `xo list` alone: your
+    projects and your spaces, as {"projects": [...], "spaces": [...]}."""
     client = _client(args, server=True)
+    if args.what is None:
+        both = {what: _answer(client.request("GET", f"/me/{what}").data, what, f"a {what} list")
+                for what in ("projects", "spaces")}
+        print(client.scrub(_json({"projects": _shown_projects(both["projects"]), "spaces": both["spaces"]})))
+        return 0
     found = _answer(client.request("GET", f"/me/{args.what}").data, args.what, f"a {args.what} list")
     print(client.scrub(_json(_shown_projects(found) if args.what == "projects" else found)))
     return 0
@@ -1305,8 +1311,9 @@ def main(argv: list[str] | None = None) -> int:
             iv.add_argument("--ref", metavar="REF", help="the shared project's branch, tag or sha (default main)")
             iv.add_argument("--yes", action="store_true", help="accept without asking")
         iv.set_defaults(run=_invite)
-    ls = sub.add_parser("list", parents=[common], help="show your projects, your spaces or the invites shared with you")
-    ls.add_argument("what", choices=("projects", "spaces", "shared"))
+    ls = sub.add_parser("list", parents=[common], help="show your projects and spaces, or one of them, or the invites "
+                                                       "shared with you")
+    ls.add_argument("what", nargs="?", choices=("projects", "spaces", "shared"))
     ls.set_defaults(run=_list)
 
     _endpoints(sub, common, argv, space_kinds)

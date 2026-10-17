@@ -77,6 +77,7 @@ xo connect space:dev                             # a new space entry in your met
 xo connect space:old --id THE_ID                 # an entry for an XO space you already have, or
                                                  # the id for an entry made without one
 xo spaces                                        # your spaces, with their projects and refs (also xo list spaces)
+xo list                                          # your projects and your spaces together
 xo install space:dev                             # ./dev/REPO for each project, at its ref
 xo update space:dev                              # push each branch under ./dev, record the refs
 xo sync space:dev                                # rebase and push each branch, merge the refs, record

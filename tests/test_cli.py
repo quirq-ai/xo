@@ -703,8 +703,9 @@ def test_every_core_endpoint_is_a_command_and_every_create_a_kind(core, capsys):
     with pytest.raises(SystemExit):
         cli.main(["--help"])
     out = capsys.readouterr().out
-    for name in ("spaces", "me", "user-metadata", "create"):
+    for name in ("spaces", "me", "create"):
         assert f"\n    {name}" in out
+    assert "\n    user-metadata" not in out
     for kind in names.SPACE_KINDS:
         assert f"\n    {kind} " not in out
     with pytest.raises(SystemExit):
@@ -1089,50 +1090,15 @@ def test_core_commands_go_under_the_core_path(xs, capsys):
     assert xs.requests[0]["path"] == "/api/core/v1/spaces/s1"
 
 
-def test_user_metadata_get(xs, capsys):
-    xs.route("GET", "/user-metadata/user_1",
-             body={"success": True, "data": {"publicMetadata": {"plan": "pro"}, "privateMetadata": {}}})
-    code, out, _ = run(capsys, "user-metadata", "get", "--user-id", "user_1")
-    assert code == 0 and json.loads(out)["data"]["publicMetadata"] == {"plan": "pro"}
-
-
-def test_user_metadata_update_sends_both_buckets_as_json(xs, capsys):
-    xs.route("PATCH", "/user-metadata/user_1", body={"success": True, "data": {}})
-    code, _, err = run(capsys, "user-metadata", "update", "--user-id", "user_1",
-                       "--public-metadata", '{"plan": "pro", "beta": null}',
-                       "--private-metadata", '{"stripeId": "cus_1"}')
-    assert code == 0
-    assert err == f"xo: PATCH {xs.base}/user-metadata/user_1\n"
-    assert xs.requests[0]["body"] == {"publicMetadata": {"plan": "pro", "beta": None},
-                                      "privateMetadata": {"stripeId": "cus_1"}}
-
-
-def test_user_metadata_update_dry_run_sends_nothing(xs, capsys):
-    code, out, _ = run(capsys, "user-metadata", "update", "--user-id", "user_1",
-                       "--private-metadata", '{"stripeId": "cus_1"}', "--dry-run")
-    assert code == 0 and json.loads(out)["body"] == {"privateMetadata": {"stripeId": "cus_1"}}
-    assert json.loads(out)["url"] == f"{xs.base}/user-metadata/user_1"
+def test_user_metadata_is_not_a_command_any_more(xs, capsys):
+    assert "invalid choice" in _argparse_err(capsys, "user-metadata", "get", "--user-id", "u")
     assert xs.requests == []
 
 
-@pytest.mark.parametrize("value", ["{plan: pro}", "null", "[]", '"pro"', "3"])
-def test_user_metadata_update_refuses_a_bucket_that_is_not_an_object(xs, capsys, value):  # B-SF1
-    code, _, err = run(capsys, "user-metadata", "update", "--user-id", "user_1", "--public-metadata", value)
-    assert code != 0 and xs.requests == []
-    assert err == "xo: --public-metadata must be a JSON object, like '{\"plan\": \"pro\"}'\n"
-
-
-def test_user_metadata_update_refuses_a_non_object_bucket_in_data(xs, capsys):  # B-SF1
-    code, _, err = run(capsys, "user-metadata", "update", "--user-id", "user_1",
-                       "--data", '{"privateMetadata": null}')
-    assert code != 0 and xs.requests == []
-    assert "--private-metadata must be a JSON object" in err
-
-
 def test_an_empty_path_parameter_is_refused(xs, capsys):  # B-N4
-    code, _, err = run(capsys, "user-metadata", "get", "--user-id", "")
+    code, _, err = run(capsys, "spaces", "--space-id", "")
     assert code != 0 and xs.requests == []
-    assert err == "xo: --user-id can't be empty\n"
+    assert err == "xo: --space-id can't be empty\n"
 
 
 def test_a_secret_with_a_space_is_redacted_in_its_form_encoded_form():  # #8 audit nit
@@ -1768,6 +1734,15 @@ def test_list_spaces_and_projects(xs, capsys):
     xs.route("GET", "/me/projects", body={"success": True, "data": {"projects": ["a"]}})
     assert json.loads(run(capsys, "list", "spaces")[1]) == [SPACE]
     assert json.loads(run(capsys, "list", "projects")[1]) == [{"name": "a"}]
+
+
+def test_list_alone_shows_your_projects_and_spaces(xs, capsys):
+    xs.route("GET", "/me/spaces", body={"success": True, "data": {"spaces": [SPACE]}})
+    xs.route("GET", "/me/projects", body={"success": True, "data": {"projects": ["juanfont/headscale", "notes"]}})
+    code, out, _ = run(capsys, "list")
+    assert code == 0 and json.loads(out) == {
+        "projects": [{"name": "headscale", "owner": "juanfont"}, {"name": "notes"}], "spaces": [SPACE]}
+    assert [(r["method"], r["path"]) for r in xs.requests] == [("GET", "/me/projects"), ("GET", "/me/spaces")]
 
 
 def test_spaces_alone_lists_the_spaces_linked_to_your_account(xs, capsys):

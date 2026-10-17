@@ -37,7 +37,7 @@ Every later XO API command, in any terminal, uses the saved key and sends it onl
 
 ### One address for everything
 
-XO API commands go to one address: your creates, `xo spaces`, `xo me` and `xo user-metadata` alike. The xo server answers `xo me` and `xo user-metadata` itself and passes the rest on to XO's platform (`dev.xo.builders`). To use another address, log in to it with `xo login --url https://...`. `XO_URL` or `--url` changes it for one terminal or one command, and the saved key is never sent to a different address than the one you logged in to.
+XO API commands go to one address: your creates, `xo spaces` and `xo me` alike. The xo server answers `xo me` itself and passes the rest on to XO's platform (`dev.xo.builders`). To use another address, log in to it with `xo login --url https://...`. `XO_URL` or `--url` changes it for one terminal or one command, and the saved key is never sent to a different address than the one you logged in to.
 
 ## 3. Check it works (creates nothing)
 

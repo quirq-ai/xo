@@ -353,7 +353,7 @@ html { scroll-behavior: smooth; }
 				<tr><td>xo connect project:P space:S [--ref R]</td><td>server only</td><td>Sets P in space S at <code>--ref</code> (default <code>main</code>)</td></tr>
 				<tr><td>xo connect project:P --repo URL</td><td>server, then git</td><td>A project made with a name only gets its repo and is recorded as <code>OWNER/REPO</code> (refused while P is in a space); <code>./P</code> gets that origin only if it has none, and moves to <code>./REPO</code> only if its origin is that repo</td></tr>
 				<tr><td>xo connect space:S [--id ID]</td><td>server, then XO</td><td>Records a space entry; <code>--id</code> ties it to an XO space your key can read</td></tr>
-				<tr><td>xo list projects | spaces | shared</td><td>server only</td><td>Shows your projects (a GitHub one as <code>{"name": "headscale", "owner": "juanfont"}</code>), your spaces, or the invites shared with you (each with an id)</td></tr>
+				<tr><td>xo list [projects | spaces | shared]</td><td>server only</td><td>Alone: your projects and spaces in one answer. Otherwise shows your projects (a GitHub one as <code>{"name": "headscale", "owner": "juanfont"}</code>), your spaces, or the invites shared with you (each with an id)</td></tr>
 				<tr><td>xo spaces</td><td>server only</td><td>The same as <code>xo list spaces</code>; with <code>--space-id ID</code> it is XO's <code>GET /spaces/{spaceId}</code></td></tr>
 				<tr><td>xo share space:S | project:P USERNAME</td><td>server only</td><td>An invite in that user's <code>shared</code>: a space's name and GitHub projects, or one GitHub project</td></tr>
 				<tr><td>xo accept ID [--as NAME | --space S [--ref R]] [--yes]</td><td>server only</td><td>Shows the invite and asks, then adds a shared space as your own (<code>--as</code> renames it), or a shared project to your space S at R</td></tr>
@@ -361,8 +361,6 @@ html { scroll-behavior: smooth; }
 				<tr><td>xo install project:P | space:S</td><td>server, git</td><td>Looks P up, then clones or fetches it into <code>./REPO</code>; for a space, each project into <code>./S/</code> at its ref</td></tr>
 				<tr><td>xo update project:P | space:S</td><td>server, git</td><td>Looks P up, then pushes its checkout (never forced); for a space, records the refs checked out under <code>./S/</code></td></tr>
 				<tr><td>xo sync project:P | space:S</td><td>server, git</td><td>Looks P up, then <code>pull --rebase</code> and push its checkout; for a space, merges its changes with yours, then records</td></tr>
-				<tr><td>xo user-metadata get --user-id ID</td><td>server only</td><td>Admin keys only: both metadata buckets</td></tr>
-				<tr><td>xo user-metadata update --user-id ID --private-metadata JSON</td><td>server only</td><td>Admin keys only; deep merges into allow-listed keys (also <code>--public-metadata</code>); try <code>--dry-run</code> first</td></tr>
 				<tr><td>xo login [xo|me|github]</td><td>server, gh</td><td>Reads <code>/config</code>, checks and saves the XO key, runs gh's login</td></tr>
 				<tr><td>xo logout</td><td>local, gh</td><td>Deletes the saved key and addresses; asks before logging gh out</td></tr>
 				<tr><td>xo status</td><td>local, gh</td><td>Each service, its address, whether you are logged in; never a key</td></tr>
@@ -375,7 +373,7 @@ html { scroll-behavior: smooth; }
 	</div>
 	<ul class="facts">
 		<li><strong>Every non-GET prints a warning line first</strong>, and creates that copy your key into the new space say so on a second line.</li>
-		<li><strong><code>--dry-run</code></strong> needs no key, sends nothing and shows provider keys as <code>&lt;hidden&gt;</code>. Each create row, and each endpoint row (<code>xo spaces</code>, <code>xo me</code>, <code>xo user-metadata</code>), runs as shown with <code>--dry-run</code> added; the other commands have no <code>--dry-run</code>.</li>
+		<li><strong><code>--dry-run</code></strong> needs no key, sends nothing and shows provider keys as <code>&lt;hidden&gt;</code>. Each create row, and each endpoint row (<code>xo spaces</code>, <code>xo me</code>), runs as shown with <code>--dry-run</code> added; the other commands have no <code>--dry-run</code>.</li>
 		<li><strong>Space names are lowercase.</strong> XO lowercases space names, so <code>xo create space</code> lowercases NAME before sending it, and says so when that changes it.</li>
 		<li><strong>Give a secret as <code>-</code></strong> to type it without echo; only one <code>-</code> works per command.</li>
 		<li><strong>No list, delete, start or stop for spaces</strong> exists in the API. Keep the <code>data.id</code> a create prints.</li>
@@ -573,60 +571,8 @@ html { scroll-behavior: smooth; }
 </div>
 <figcaption><strong>You see your own metadata, masked.</strong> Values under credential-like names, or that look like keys, show only their last 4 characters or <code>(hidden)</code>. <code>XO_ME_PRIVATE_KEYS</code> can narrow the private keys shown.</figcaption>
 </figure>
-<h4><code>xo user-metadata get | update</code></h4>
-<figure>
-<div class="canvas">
-<svg class="d" viewBox="0 0 960 626" role="img" aria-label="xo user-metadata get | update: Admin needs two locks, and none is issued yet.">
-<defs>
-<marker id="c5a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
-<marker id="c5h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
-</defs>
-<line class="life" x1="240" y1="40" x2="240" y2="620"/>
-<rect class="hdr" x="135" y="12" width="210" height="28" rx="7"/>
-<text class="t" x="240" y="31" text-anchor="middle">You: xo CLI</text>
-<line class="life" x1="480" y1="40" x2="480" y2="620"/>
-<rect class="hdr" x="375" y="12" width="210" height="28" rx="7"/>
-<text class="t" x="480" y="31" text-anchor="middle">xo server</text>
-<line class="life" x1="720" y1="40" x2="720" y2="620"/>
-<rect class="hdr" x="615" y="12" width="210" height="28" rx="7"/>
-<text class="t" x="720" y="31" text-anchor="middle">Clerk</text>
-<rect class="box" x="135" y="58" width="210" height="46" rx="8"/>
-<text class="m" x="240" y="78" text-anchor="middle">xo user-metadata</text>
-<text class="s" x="240" y="95" text-anchor="middle">--api-key - (admin key)</text>
-<rect class="box" x="375" y="142" width="210" height="46" rx="8"/>
-<text class="m" x="480" y="162" text-anchor="middle">/user-metadata/{id}</text>
-<text class="s" x="480" y="179" text-anchor="middle">20 a minute per key</text>
-<path class="edge" d="M240,104 V124 H480 V140" marker-end="url(#c5a)"/>
-<text class="lbl" x="360" y="119" text-anchor="middle">key</text>
-<rect class="box" x="615" y="226" width="210" height="46" rx="8"/>
-<text class="t" x="720" y="246" text-anchor="middle">verify key</text>
-<text class="s" x="720" y="263" text-anchor="middle">has claim xo_admin?</text>
-<path class="edge" d="M480,188 V208 H720 V224" marker-end="url(#c5a)"/>
-<text class="lbl" x="600" y="203" text-anchor="middle">verify</text>
-<rect class="box" x="375" y="310" width="210" height="46" rx="8"/>
-<text class="t" x="480" y="330" text-anchor="middle">admin check</text>
-<text class="s" x="480" y="347" text-anchor="middle">id in XO_ADMIN_KEY_IDS</text>
-<path class="edge dash" d="M720,272 V292 H480 V308" marker-end="url(#c5a)"/>
-<text class="lbl" x="600" y="287" text-anchor="middle">claims</text>
-<rect class="box hot" x="615" y="394" width="210" height="46" rx="8"/>
-<text class="t" x="720" y="414" text-anchor="middle">GET or PATCH user</text>
-<text class="s" x="720" y="431" text-anchor="middle">allow-listed keys only</text>
-<path class="edge hot" d="M480,356 V376 H720 V392" marker-end="url(#c5h)"/>
-<text class="lbl hot" x="600" y="371" text-anchor="middle">if admin</text>
-<rect class="box" x="375" y="478" width="210" height="46" rx="8"/>
-<text class="t" x="480" y="498" text-anchor="middle">audit line</text>
-<text class="s" x="480" y="515" text-anchor="middle">ids and key names only</text>
-<path class="edge dash" d="M720,440 V460 H480 V476" marker-end="url(#c5a)"/>
-<text class="lbl" x="600" y="455" text-anchor="middle">user</text>
-<rect class="box" x="135" y="562" width="210" height="46" rx="8"/>
-<text class="t" x="240" y="582" text-anchor="middle">print answer</text>
-<text class="s" x="240" y="599" text-anchor="middle">both buckets</text>
-<path class="edge dash" d="M480,524 V544 H240 V560" marker-end="url(#c5a)"/>
-<text class="lbl" x="360" y="539" text-anchor="middle">answer</text>
-</svg>
-</div>
-<figcaption><strong>Admin needs two locks, and none is issued yet.</strong> Until a key has the claim and its id is listed, every caller gets 403. PATCH changes only top-level keys named in <code>XO_EDITABLE_*_KEYS</code>.</figcaption>
-</figure>
+<h4><code>/user-metadata</code> (no xo command)</h4>
+<p>xo has no command for it since <code>xo me</code> covers your own profile. The server's admin-only route stays as it was: <code>GET</code> and <code>PATCH /user-metadata/{userId}</code>, 20 a minute per key, a key with the <code>xo_admin</code> claim whose id is in <code>XO_ADMIN_KEY_IDS</code>, allow-listed keys only, one audit line per request. Admin needs two locks, and none is issued yet: until a key has the claim and its id is listed, every caller gets 403. PATCH changes only top-level keys named in <code>XO_EDITABLE_*_KEYS</code>.</p>
 <h3 id="cmd-spaces-on-xo">Spaces on XO</h3>
 <p>Every space on XO is created one way, <code>xo create space NAME KIND</code>, and recorded in your spaces. With no KIND, <code>xo create space NAME</code> records a space here only, with nothing on XO. The old <code>xo claude-code</code>, <code>xo codex</code>, ... commands are gone and say so.</p>
 <h4><code>xo create space NAME KIND</code></h4>

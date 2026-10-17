@@ -59,14 +59,13 @@ xo spaces --space-id 6f1c2c1e-...   # connection URLs for a space you own
 | `xo create project NAME [URL]` | `GET` and `POST /me/projects`, then clones `https://github.com/OWNER/REPO` into `./REPO` (`./OWNER/REPO` when another of your projects is called `REPO`), or `git init ./NAME` for a plain name, with your own git. A project with a repo is recorded as `OWNER/REPO` and called `REPO`, so give a URL alone, or a NAME that is its `REPO` or `OWNER/REPO` | the name only |
 | `xo connect project:P space:S` / `xo connect space:S` | `POST /me/spaces/S/projects` / `POST /me/spaces/connect`: a project's ref in a space, or a new space entry in your metadata | `--ref` (default main) / `--id` for an XO space you already have |
 | `xo connect project:P --repo URL` | `POST /me/projects/connect`: a project made with a name only gets its repo and is recorded as `OWNER/REPO`; `./P` gets that origin if it has none and moves to `./REPO` (left in place unless its origin, fetch and push, is that repository) | the name and `OWNER/REPO` |
-| `xo list projects\|spaces\|shared` | `GET /me/projects` / `GET /me/spaces` / `GET /me/shared`; projects show as `{"name": "headscale", "owner": "juanfont"}` | none |
+| `xo list projects\|spaces\|shared` | `GET /me/projects` / `GET /me/spaces` / `GET /me/shared`; projects show as `{"name": "headscale", "owner": "juanfont"}`; `xo list` alone shows `{"projects": [...], "spaces": [...]}` | none |
 | `xo spaces` | `GET /me/spaces`: the spaces linked to your account, as `xo list spaces` shows them (with `--space-id ID` it is XO's `GET /spaces/{spaceId}`) | none |
 | `xo share space:S\|project:O/R USERNAME` | `POST /me/share`: an invite in that user's `shared` list, holding the space's name and projects (never its id) | none |
 | `xo accept ID` / `xo reject ID` | `GET /me/shared` and a y/N, then `POST /me/shared/accept`: in one write, a shared space into your spaces or a shared project into the space you name, its projects into your projects, the invite off / `POST /me/shared/reject`: the invite off (the sender can share again) | `--as NAME` (accept a space under another name), `--space NAME` and `--ref REF` (where a shared project goes), `--yes` |
 | `xo install space:S` / `project:P` | `GET /me/spaces`, then your own git: each project cloned or fetched into `./S/REPO` at its ref / P cloned, or fetched and fast-forwarded | none |
 | `xo update space:S` / `project:P` | `git push` of each branch under `./S`, then `PUT /me/spaces/S` with the refs checked out (refused if the space changed) / `git push` of P's branch | none |
 | `xo sync space:S` / `project:P` | `git pull --rebase` and push of each branch, then merges the space's changes with yours and `PUT`s them / `git pull --rebase` and push | none |
-| `xo user-metadata get` / `update` | `GET` / `PATCH /user-metadata/{userId}` on your xo server | publicMetadata, privateMetadata as JSON objects (admin keys only); try `--dry-run` first: a wrong `--user-id` edits another user |
 
 A GitHub project is called by its repo's name in every command (`project:headscale`); when another
 of your projects has that name, call it by its `OWNER/REPO` (its folder is then `./OWNER/REPO`). A
@@ -132,7 +131,7 @@ answers `xo me`:
 
 | Service | Address | How you log in | Commands |
 |---|---|---|---|
-| `me` | the xo server: `--url`, `XO_URL`, the one `xo login` saved, else `https://xo.quirq.dev` (the `me` address in xo's own list) | your XO API key | `xo me`, `xo user-metadata` |
+| `me` | the xo server: `--url`, `XO_URL`, the one `xo login` saved, else `https://xo.quirq.dev` (the `me` address in xo's own list) | your XO API key | `xo me` |
 | `xo` | `https://dev.xo.builders`, reached through the xo server | the same XO API key | `xo create space NAME KIND` and `xo spaces` |
 | `github` | `https://github.com` (not in the list; always github.com) | the GitHub CLI's own login (`gh auth login`), in your browser | `gh`, and git over https if you let gh set it up |
 
@@ -156,7 +155,7 @@ before logging gh out of github.com.
 ## Server mode
 
 XO API commands go to one address, the xo server (`https://xo.quirq.dev`, or `XO_URL`, or the one
-`xo login --url` saved). `xo me` and `xo user-metadata` read your Clerk account, which needs Clerk's
+`xo login --url` saved). `xo me` reads your Clerk account, which needs Clerk's
 Secret Key. That key never goes on a user's machine: the same package runs as a server, `xo serve`,
 on one deployment that holds it. The server passes every other command (the creates and
 `xo spaces`) on to XO's core API under its `/api/core/v1`, with your key, as sent. Until that

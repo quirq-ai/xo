@@ -27,7 +27,7 @@ from typing import Any
 
 from xo import __version__
 
-# One address for XO API calls: the server answers `xo me` and `xo user-metadata` itself and
+# One address for XO API calls: the server answers `xo me` (and /user-metadata) itself and
 # passes the core API on to XO's platform (dev.xo.builders/api/core/v1) under CORE_PATH.
 DEFAULT_URL = "https://xo.quirq.dev"
 CORE_PATH = "/api/core/v1"
