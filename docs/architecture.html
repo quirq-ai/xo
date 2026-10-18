@@ -181,7 +181,7 @@ html { scroll-behavior: smooth; }
 <body>
 <div class="wrap">
 	<header class="top">
-		<div class="eyebrow">quirq-ai/xo · main as of this change: through #47</div>
+		<div class="eyebrow">quirq-ai/xo · main as of this change: through #48</div>
 		<h1>xo: one package, a CLI and <span class="x">its server</span></h1>
 		<p class="lede">The command line for XO Cloud's core API. The same Python package runs on your machine as <code>xo</code> and on Vercel as the xo server, which holds the Clerk Secret Key so the CLI never needs it. Standard library only. It also keeps your <code>projects</code> and <code>spaces</code> in your own Clerk metadata, lets you share a space or project with another user as an invite they accept or reject, and installs those projects on your machine and keeps them in step. Every command has its own diagram in section 03. Left out: test internals, the redaction rules in detail, and the Vercel deploy steps (see <code>docs/</code>).</p>
 		<div class="scroll">
@@ -1978,7 +1978,7 @@ html { scroll-behavior: smooth; }
 				<tr><td>POST /me/spaces/connect</td><td>xo connect S [--id ID] · xo create space NAME (no KIND)</td><td>A new entry; with an id, only after XO confirms your key can read that space</td></tr>
 				<tr><td>POST /me/spaces/{name}/projects</td><td>xo connect P S</td><td>Sets one project's ref (default <code>main</code>); P must be in your projects</td></tr>
 				<tr><td>PUT /me/spaces/{name}</td><td>xo update · xo sync</td><td>Replaces the space's projects and refs if it is still at <code>rev</code> holding <code>base</code>, else 409 "run xo sync"</td></tr>
-				<tr><td>GET /me/projects · /me/spaces</td><td>xo projects · xo list; <code>GET /me/projects</code> also for xo create project, xo install, update and sync project:P, a plain P in xo share, and any bare name in xo connect but NAME --repo; <code>GET /me/spaces</code> also for xo connect when both names are your projects</td><td>Reads either list, masked as <code>/me</code> is (refs shown as stored)</td></tr>
+				<tr><td>GET /me/projects · /me/spaces</td><td>xo projects · xo list; <code>GET /me/projects</code> also for xo create project, xo install, update and sync project:P, a plain P in xo share and xo connect (with or without project:), and in xo connect a bare name alone or beside another bare name (not NAME --repo or a project-shaped name alone, which send none); <code>GET /me/spaces</code> also for xo connect when both names are your projects</td><td>Reads either list, masked as <code>/me</code> is (refs shown as stored)</td></tr>
 				<tr><td>POST /me/share</td><td>xo share</td><td><code>{item, to}</code>: the caller's invite into user <code>to</code>'s <code>shared</code>, and nothing else of theirs; anything about the recipient is the same 404</td></tr>
 				<tr><td>GET /me/shared</td><td>xo list shared · xo accept</td><td>The caller's invites, each with an id and its sender's username now</td></tr>
 				<tr><td>POST /me/shared/accept</td><td>xo accept</td><td><code>{id, as?}</code> or <code>{id, space, ref?}</code>: one write of <code>spaces</code>, <code>projects</code> and <code>shared</code> (the invite off)</td></tr>
@@ -2118,7 +2118,7 @@ html { scroll-behavior: smooth; }
 	</div>
 </section>
 
-<footer>Describes <code>quirq-ai/xo</code> main as of this change: through #47. Setup is in <code>docs/quickstart.md</code>; the server's settings in <code>docs/server.md</code>.</footer>
+<footer>Describes <code>quirq-ai/xo</code> main as of this change: through #48. Setup is in <code>docs/quickstart.md</code>; the server's settings in <code>docs/server.md</code>.</footer>
 </main>
 </body>
 </html>
