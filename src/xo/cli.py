@@ -1,9 +1,10 @@
 """xo: the command line for the XO Cloud core API (dev.xo.builders/api/core/v1, through the xo server).
 
     xo ENDPOINT [ACTION] [--flag VALUE ...]  one command per API endpoint, made from the spec:
-                                            GET /spaces/{spaceId} is `xo spaces --space-id ID`; the
-                                            space creates (POST /openclaw, ...) are kinds of
-                                            `xo create space` instead. Its parameters and body
+                                            GET /spaces/{spaceId} is `xo spaces --space-id ID` (bare
+                                            `xo spaces` lists your spaces); the space creates
+                                            (POST /openclaw, ...) are kinds of `xo create space`
+                                            instead. Its parameters and body
                                             fields are its flags, nested fields too
                                             (--providers-anthropic-api-key); `xo ENDPOINT --help`
                                             lists them. A path with several methods has actions
@@ -1202,6 +1203,9 @@ def _spaces_help(sub: argparse._SubParsersAction, ops: list) -> None:
     for action in p._actions:
         if action.option_strings == ["--space-id"] and action.help:
             action.help = action.help.replace(" (required)", " (leave it out to list your spaces)")
+    for choice in sub._choices_actions:
+        if choice.dest == "spaces":
+            choice.help = "the spaces linked to your account; with --space-id ID, " + (choice.help or "")
 
 
 def main(argv: list[str] | None = None) -> int:

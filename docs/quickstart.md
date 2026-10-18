@@ -15,7 +15,7 @@ Using bash? Before you paste, change `~/.zshrc` (twice) in the block to `~/.bash
 
 ```sh
 python3 -m venv ~/.xo \
-  && ~/.xo/bin/pip install "quirq-xo @ git+https://github.com/quirq-ai/xo@7f7f8884586476e146b35d14ccbe8f15d4cdac11" \
+  && ~/.xo/bin/pip install "quirq-xo @ git+https://github.com/quirq-ai/xo@3699cdc08c08da7ad8387837346fb18fea0d39a2" \
   && { grep -qxF 'export PATH="$HOME/.xo/bin:$PATH"' ~/.zshrc 2>/dev/null || echo 'export PATH="$HOME/.xo/bin:$PATH"' >> ~/.zshrc; } \
   && export PATH="$HOME/.xo/bin:$PATH" \
   && xo --version
@@ -37,7 +37,7 @@ Every later XO API command, in any terminal, uses the saved key and sends it onl
 
 ### One address for everything
 
-XO API commands go to one address: your creates, `xo spaces` and `xo me` alike (bare `xo spaces` lists the spaces linked to your account; `--space-id ID` asks XO for one). The xo server answers `xo me` itself and passes the rest on to XO's platform (`dev.xo.builders`). To use another address, log in to it with `xo login --url https://...`. `XO_URL` or `--url` changes it for one terminal or one command, and the saved key is never sent to a different address than the one you logged in to.
+XO API commands go to one address: your creates, `xo spaces` and `xo me` alike (bare `xo spaces` lists the spaces linked to your account; `--space-id ID` asks XO for one). The xo server answers `xo me` and bare `xo spaces` itself and passes the rest on to XO's platform (`dev.xo.builders`). To use another address, log in to it with `xo login --url https://...`. `XO_URL` or `--url` changes it for one terminal or one command, and the saved key is never sent to a different address than the one you logged in to.
 
 ## 3. Check it works (creates nothing)
 
