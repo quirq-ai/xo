@@ -698,7 +698,7 @@ def _create_project(args: argparse.Namespace) -> int:
         if name.casefold() not in (repo.casefold(), names.folder(repo).casefold()):
             raise XoError(f"a project with a repo is called after it ({names.folder(repo)}): run xo create project "
                           f"{gitops.GITHUB}/{repo}, or keep {name} without one and add it later with xo connect "
-                          f"{name} --repo {gitops.GITHUB}/{repo}")
+                          f"{shlex.quote(name)} --repo {gitops.GITHUB}/{repo}")
         name = repo
     if not names.is_github(name) and (Path(name).exists() or Path(name).is_symlink()):
         raise XoError(f"./{name} already exists here; nothing was changed")
@@ -932,12 +932,13 @@ def _which_order(client: Client, a: str, b: str) -> tuple[str, str]:
 
 def _make_space_hint(space: str) -> str:
     """How to make a space that is not in your spaces yet. xo connect space:S always can; xo create
-    space S only for a name it takes (no kind word, new or create, and no ./S here)."""
+    space S only for a name it takes (no kind word, new or create, and no ./S here), with a KIND only
+    for a name XO takes."""
     hint = f"make it with xo connect space:{space} (an entry only)"
     name = space.lower()
     if name in names.SPACE_KINDS or name in ("new", "create") or os.path.lexists(name):
         return hint
-    return hint + f" or xo create space {name} [KIND]"
+    return hint + f" or xo create space {name}" + (" [KIND]" if names.xo_name_ok(name) else "")
 
 
 def _which(client: Client, typed: str, projects: list | None = None) -> str:

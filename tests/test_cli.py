@@ -1788,6 +1788,8 @@ def test_connect_two_project_names_send_nothing_when_the_spaces_list_cannot_be_r
     xs.route("POST", "/me/spaces/headscale/projects", body={"success": True, "data": {"space": SPACE}})
     code, out, err = run(capsys, "connect", "dev", "headscale")
     assert code == 1 and out == "" and err.strip()
+    if answer["status"] == 200 and isinstance(answer["body"], dict):
+        assert "the xo server's spaces list is not a list of spaces" in err
     assert [(r["method"], r["path"]) for r in xs.requests] == [("GET", "/me/projects"), ("GET", "/me/spaces")]
 
 
@@ -1837,17 +1839,30 @@ def test_connect_to_a_missing_space_says_how_to_make_it(xs, capsys):
     assert "xo connect space:test9" in err and "xo create space test9" in err
 
 
-@pytest.mark.parametrize("space, here", [("codex", False), ("new", False), ("test9", True)])
+@pytest.mark.parametrize("space, here", [("codex", False), ("Codex", False), ("new", False), ("test9", True),
+                                         ("Test9", True)])
 def test_connect_missing_space_hint_leaves_out_a_create_that_would_be_refused(xs, capsys, space, here,
                                                                              tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     if here:
-        Path(space).mkdir()
+        Path(space.lower()).mkdir()
     xs.route("GET", "/me/projects", body={"success": True, "data": {"projects": ["notes"]}})
     xs.route("POST", f"/me/spaces/{space}/projects", status=404,
              body={"success": False, "error": f"You have no space named {space}"})
     code, _, err = run(capsys, "connect", "notes", space)
     assert code == 1 and f"xo connect space:{space}" in err and "xo create space" not in err
+
+
+@pytest.mark.parametrize("space, hint", [("NoSpace", "or xo create space nospace [KIND]"),
+                                         ("my_space.2", "or xo create space my_space.2\n"),
+                                         ("s" * 40, "or xo create space " + "s" * 40 + "\n")])
+def test_connect_missing_space_hint_names_the_create_xo_would_take(xs, capsys, space, hint, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    xs.route("GET", "/me/projects", body={"success": True, "data": {"projects": ["notes"]}})
+    xs.route("POST", f"/me/spaces/{space}/projects", status=404,
+             body={"success": False, "error": f"You have no space named {space}"})
+    code, _, err = run(capsys, "connect", "notes", space)
+    assert code == 1 and hint in err
 
 
 def test_connect_hints_quote_a_project_name_with_a_space(xs, capsys):
@@ -2005,6 +2020,8 @@ def test_create_project_takes_a_name_and_a_url_only_when_they_match(xs, capsys, 
     code, _, err = run(capsys, "create", "project", "notes", "https://github.com/quirq-ai/xo")
     assert code == 1 and xs.requests == [] and not Path("notes").exists()
     assert "xo connect notes --repo" in err
+    code, _, err = run(capsys, "create", "project", "my notes", "https://github.com/quirq-ai/xo")
+    assert code == 1 and xs.requests == [] and "xo connect 'my notes' --repo" in err
     assert run(capsys, "create", "project", "quirq-ai/XO", "https://github.com/quirq-ai/xo")[0] == 0
     assert xs.requests[1]["body"] == {"name": "quirq-ai/xo"}
     assert Path("xo/README").read_text() == "hi\n"
