@@ -1091,7 +1091,8 @@ def test_core_commands_go_under_the_core_path(xs, capsys):
 
 
 def test_user_metadata_is_not_a_command_any_more(xs, capsys):
-    assert "invalid choice" in _argparse_err(capsys, "user-metadata", "get", "--user-id", "u")
+    code, _, err = run(capsys, "user-metadata", "get", "--user-id", "u")
+    assert code == 1 and err == "xo: xo user-metadata is gone; xo me shows your own profile and metadata\n"
     assert xs.requests == []
 
 
@@ -1509,7 +1510,7 @@ def test_one_login_covers_every_service(login, capsys, monkeypatch, config_home)
     code, _, err = run(capsys, "login")
     assert code == 0
     assert f"xo:   me     {login.base} (the xo server; your XO key is only sent here)\n" in err
-    assert ("xo:   xo     https://dev.xo.builders (creates and xo spaces; your key reaches it through the "
+    assert ("xo:   xo     https://dev.xo.builders (creates and xo spaces --space-id; your key reaches it through the "
             "xo server)\n") in err
     assert "xo: me: logged in as sam (user_1)" in err and "coder" not in err
     saved = json.loads((config_home / "xo" / "services").read_text())
@@ -1745,6 +1746,17 @@ def test_list_alone_shows_your_projects_and_spaces(xs, capsys):
     assert [(r["method"], r["path"]) for r in xs.requests] == [("GET", "/me/projects"), ("GET", "/me/spaces")]
 
 
+def test_spaces_help_and_dry_run_cover_the_bare_form(xs, capsys):
+    with pytest.raises(SystemExit):
+        cli.main(["spaces", "--help"])
+    out = " ".join(capsys.readouterr().out.split())
+    assert "With nothing after it: the spaces linked to your account" in out
+    assert "(required)" not in out and "leave it out to list your spaces" in out
+    code, out, err = run(capsys, "spaces", "--dry-run")
+    assert code == 0 and json.loads(out)["method"] == "GET" and json.loads(out)["url"] == f"{xs.base}/me/spaces"
+    assert "dry run, nothing sent" in err and xs.requests == []
+
+
 def test_spaces_alone_lists_the_spaces_linked_to_your_account(xs, capsys):
     xs.route("GET", "/me/spaces", body={"success": True, "data": {"spaces": [SPACE]}})
     code, out, _ = run(capsys, "spaces")
@@ -1753,7 +1765,6 @@ def test_spaces_alone_lists_the_spaces_linked_to_your_account(xs, capsys):
 
 
 def test_lists_show_a_github_project_by_its_repo_name_with_its_owner_beside_it(xs, capsys):
-    from xo import gitops
     xs.route("GET", "/me/projects", body={"success": True, "data": {
         "projects": ["juanfont/headscale", "notes", "alice/tool", "bob/Tool"]}})
     assert json.loads(run(capsys, "list", "projects")[1]) == [
@@ -1767,7 +1778,6 @@ def test_create_project_from_a_github_url_records_it_and_clones_it(xs, capsys, g
     xs.route("GET", "/me/projects", body={"success": True, "data": {"projects": []}})
     xs.route("POST", "/me/projects", body={"success": True, "data": {"projects": ["quirq-ai/xo"]}})
     code, out, err = run(capsys, "create", "project", "https://github.com/quirq-ai/xo.git")
-    from xo import gitops
     assert code == 0 and json.loads(out) == [{"name": "xo", "owner": "quirq-ai"}]
     assert [(r["method"], r["body"]) for r in xs.requests] == [("GET", None), ("POST", {"name": "quirq-ai/xo"})]
     assert Path("xo/README").read_text() == "hi\n" and not Path("quirq-ai").exists()

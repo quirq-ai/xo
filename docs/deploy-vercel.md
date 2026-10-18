@@ -8,7 +8,7 @@ this repo deploys it, and the steps below are yours, followed by the test script
 
 Use **development** credentials only (`sk_test_...`) until the test passes and the production gate
 at the end is passed. Until then, `xo.quirq.dev` answers `xo me` with 401 to real XO keys, although
-`xo` already uses it by default; the creates and `xo spaces` work, since XO checks those keys
+`xo` already uses it by default; the creates and `xo spaces --space-id ID` work, since XO checks those keys
 itself. The Secret Key and the API key you test with must come from the same
 Clerk instance: a key from another instance is refused as "Invalid API key".
 
@@ -125,7 +125,7 @@ checks:
 | `/healthz` | `ok` |
 | your key's format | `ak_`, then letters, digits and `_ . - + / =` only (checked without showing it; anything else stops the script before the key is sent) |
 | `xo me` with your key | your profile under `xo`: `id`, `username`, `firstName`, `lastName`, `imageUrl`, `createdAt`, `email`, `public_data`, `private_data`, nothing else |
-| `xo spaces` with a made-up key | XO's 401 (or its 404 "Space not found"), passed back by the server; your key is not used. A bare "Not found" means the deployment is older than the forwarding |
+| `xo spaces --space-id ID` with a made-up key | XO's 401 (or its 404 "Space not found"), passed back by the server; your key is not used. A bare "Not found" means the deployment is older than the forwarding |
 | a wrong `ak_` key | 401 |
 | a string that is not a Clerk key | 401, without a call to Clerk |
 | `/user-metadata/user_test` with your key | 403 (no admin keys yet) |

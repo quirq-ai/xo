@@ -3,7 +3,7 @@
     xo <endpoint> [ACTION] [--flag VALUE ...]
 
 The command is the endpoint's path, without a leading /api or /vN and without its {placeholders},
-joined with dashes: GET /spaces/{spaceId} is `xo spaces`, GET /me is `xo me`. (XO's space creates,
+joined with dashes: GET /spaces/{spaceId} is `xo spaces --space-id ID`, GET /me is `xo me`. (XO's space creates,
 POST /claude-code and the rest, are kinds of `xo create space` instead; see cli._is_create.)
 When several operations share a command (say GET and DELETE on /spaces/{spaceId}), each is an
 action named for its method: list, get, create, update, replace, delete. Path, query and header

@@ -479,6 +479,8 @@ def _objects(args: argparse.Namespace, body: dict) -> None:
 
 def _endpoint(args: argparse.Namespace) -> int:
     if _lists_spaces(args):
+        if args.dry_run:
+            return _send(_client(args, need_key=False, server=True), args, "GET", "/me/spaces", query={}, body=None)
         args.what = "spaces"
         return _list(args)
     client, op, path, query, headers, body = _request(args)
@@ -491,7 +493,7 @@ def _lists_spaces(args: argparse.Namespace) -> bool:
     op = args.op
     params, fields = commands.values(args)
     return (op.method == "GET" and op.path == "/spaces/{spaceId}" and not params and not fields
-            and getattr(args, "data", None) is None and not args.dry_run)
+            and getattr(args, "data", None) is None)
 
 
 def _request(args: argparse.Namespace, *, server: bool = False, preset: dict | None = None) -> tuple:
@@ -558,7 +560,7 @@ def _login(args: argparse.Namespace) -> int:
     platform = listed["xo"].url
     print(f"xo: services from the xo server at {url}:", file=sys.stderr)
     print(f"xo:   me     {url} (the xo server; your XO key is only sent here)", file=sys.stderr)
-    print(f"xo:   xo     {platform} (creates and xo spaces; your key reaches it through the xo server)",
+    print(f"xo:   xo     {platform} (creates and xo spaces --space-id; your key reaches it through the xo server)",
           file=sys.stderr)
     print(f"xo:   github https://{github.HOST} (gh's own login; xo never sees the token)", file=sys.stderr)
     for note in notes:
@@ -1173,6 +1175,7 @@ def _endpoints(sub: argparse._SubParsersAction, common: argparse.ArgumentParser,
             ops = spec.operations(local)
             creates = [op for op in ops if _is_create(op)]
             commands.register(sub, [op for op in ops if op not in creates], [common], _add_send, _endpoint)
+            _spaces_help(sub, ops)
             for op in creates:  # `xo KIND` itself is gone: main() says what replaced it
                 kind = op.path.strip("/")
                 if space_kinds is not None:
@@ -1189,10 +1192,25 @@ def _endpoints(sub: argparse._SubParsersAction, common: argparse.ArgumentParser,
             sys.exit(1)
 
 
+def _spaces_help(sub: argparse._SubParsersAction, ops: list) -> None:
+    """`xo spaces --help` says what the command does with no --space-id too (see _lists_spaces)."""
+    p = sub.choices.get("spaces")
+    if p is None or not any(op.method == "GET" and op.path == "/spaces/{spaceId}" for op in ops):
+        return
+    p.description = ("With nothing after it: the spaces linked to your account, as xo list spaces shows them. "
+                     "With --space-id ID: " + (p.description or ""))
+    for action in p._actions:
+        if action.option_strings == ["--space-id"] and action.help:
+            action.help = action.help.replace(" (required)", " (leave it out to list your spaces)")
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if _command_word(argv) in names.SPACE_KINDS:  # nothing is parsed or sent, so no value is echoed
         print(f"xo: {_moved(_command_word(argv))}", file=sys.stderr)
+        return 1
+    if _command_word(argv) == "user-metadata":
+        print("xo: xo user-metadata is gone; xo me shows your own profile and metadata", file=sys.stderr)
         return 1
     _Parser.argv = argv
     _Parser.flags = set()

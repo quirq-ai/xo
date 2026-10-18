@@ -181,7 +181,7 @@ html { scroll-behavior: smooth; }
 <body>
 <div class="wrap">
 	<header class="top">
-		<div class="eyebrow">quirq-ai/xo · main as of this change: through #42</div>
+		<div class="eyebrow">quirq-ai/xo · main as of this change: through #45</div>
 		<h1>xo: one package, a CLI and <span class="x">its server</span></h1>
 		<p class="lede">The command line for XO Cloud's core API. The same Python package runs on your machine as <code>xo</code> and on Vercel as the xo server, which holds the Clerk Secret Key so the CLI never needs it. Standard library only. It also keeps your <code>projects</code> and <code>spaces</code> in your own Clerk metadata, lets you share a space or project with another user as an invite they accept or reject, and installs those projects on your machine and keeps them in step. Every command has its own diagram in section 03. Left out: test internals, the redaction rules in detail, and the Vercel deploy steps (see <code>docs/</code>).</p>
 		<div class="scroll">
@@ -331,7 +331,7 @@ html { scroll-behavior: smooth; }
 				<text class="s" x="746" y="103">Bearer key · no redirects</text>
 			</svg>
 		</div>
-		<figcaption><strong>The spec is the command list.</strong> <code>GET /spaces/{spaceId}</code> becomes <code>xo spaces</code>, and XO's seven space creates become the kinds of <code>xo create space NAME KIND</code>, where <code>providers.anthropic.apiKey</code> becomes <code>--providers-anthropic-api-key</code>. The spec is read from disk only, never fetched, so <code>--help</code> works offline.</figcaption>
+		<figcaption><strong>The spec is the command list.</strong> <code>GET /spaces/{spaceId}</code> becomes <code>xo spaces --space-id ID</code> (bare <code>xo spaces</code> lists your recorded spaces), and XO's seven space creates become the kinds of <code>xo create space NAME KIND</code>, where <code>providers.anthropic.apiKey</code> becomes <code>--providers-anthropic-api-key</code>. The spec is read from disk only, never fetched, so <code>--help</code> works offline.</figcaption>
 	</figure>
 
 	<div class="scroll">
@@ -373,7 +373,7 @@ html { scroll-behavior: smooth; }
 	</div>
 	<ul class="facts">
 		<li><strong>Every non-GET prints a warning line first</strong>, and creates that copy your key into the new space say so on a second line.</li>
-		<li><strong><code>--dry-run</code></strong> needs no key, sends nothing and shows provider keys as <code>&lt;hidden&gt;</code>. Each create row, and each endpoint row (<code>xo spaces</code>, <code>xo me</code>), runs as shown with <code>--dry-run</code> added; the other commands have no <code>--dry-run</code>.</li>
+		<li><strong><code>--dry-run</code></strong> needs no key, sends nothing and shows provider keys as <code>&lt;hidden&gt;</code>. Each create row, and each endpoint row (<code>xo spaces --space-id ID</code>, <code>xo me</code>, and <code>xo spaces</code> alone), runs as shown with <code>--dry-run</code> added; the other commands have no <code>--dry-run</code>.</li>
 		<li><strong>Space names are lowercase.</strong> XO lowercases space names, so <code>xo create space</code> lowercases NAME before sending it, and says so when that changes it.</li>
 		<li><strong>Give a secret as <code>-</code></strong> to type it without echo; only one <code>-</code> works per command.</li>
 		<li><strong>No list, delete, start or stop for spaces</strong> exists in the API. Keep the <code>data.id</code> a create prints.</li>
@@ -2098,7 +2098,7 @@ html { scroll-behavior: smooth; }
 	</div>
 </section>
 
-<footer>Describes <code>quirq-ai/xo</code> main as of this change: through #42. Setup is in <code>docs/quickstart.md</code>; the server's settings in <code>docs/server.md</code>.</footer>
+<footer>Describes <code>quirq-ai/xo</code> main as of this change: through #45. Setup is in <code>docs/quickstart.md</code>; the server's settings in <code>docs/server.md</code>.</footer>
 </main>
 </body>
 </html>

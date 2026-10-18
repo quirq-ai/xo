@@ -104,7 +104,7 @@ Things to know:
   included, of every space you own, so anything that can read the new space's environment (an
   agent steered by a message, say) can act as you. xo prints a line saying so before each such
   create, and cannot turn it off. If XO will issue you a second key, use that one for creates.
-- `xo spaces` prints `spaceApiUrl` and `openClawRestartUrl`, which carry a session token that
+- `xo spaces --space-id ID` prints `spaceApiUrl` and `openClawRestartUrl`, which carry a session token that
   expires within the hour. Treat them as secrets.
 - Provider keys and bot tokens given as flags land in your shell history, and even from a variable
   (`"$ANTHROPIC_API_KEY"`) they show in the process list for as long as the request runs. Give the
@@ -132,7 +132,7 @@ answers `xo me`:
 | Service | Address | How you log in | Commands |
 |---|---|---|---|
 | `me` | the xo server: `--url`, `XO_URL`, the one `xo login` saved, else `https://xo.quirq.dev` (the `me` address in xo's own list) | your XO API key | `xo me` |
-| `xo` | `https://dev.xo.builders`, reached through the xo server | the same XO API key | `xo create space NAME KIND` and `xo spaces` |
+| `xo` | `https://dev.xo.builders`, reached through the xo server | the same XO API key | `xo create space NAME KIND` and `xo spaces --space-id ID` |
 | `github` | `https://github.com` (not in the list; always github.com) | the GitHub CLI's own login (`gh auth login`), in your browser | `gh`, and git over https if you let gh set it up |
 
 Every XO API command, creates included, goes to the xo server you logged in to: xo sends your key
@@ -158,7 +158,7 @@ XO API commands go to one address, the xo server (`https://xo.quirq.dev`, or `XO
 `xo login --url` saved). `xo me` reads your Clerk account, which needs Clerk's
 Secret Key. That key never goes on a user's machine: the same package runs as a server, `xo serve`,
 on one deployment that holds it. The server passes every other command (the creates and
-`xo spaces`) on to XO's core API under its `/api/core/v1`, with your key, as sent. Until that
+`xo spaces --space-id ID`) on to XO's core API under its `/api/core/v1`, with your key, as sent. Until that
 deployment holds XO's production Clerk key, `xo me` answers 401 to real XO keys; the creates do not
 need it. See
 [docs/server.md](docs/server.md) and, to deploy it, [docs/deploy-vercel.md](docs/deploy-vercel.md).

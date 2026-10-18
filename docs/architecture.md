@@ -5,7 +5,7 @@ Vercel at `xo.quirq.dev` through `app.py`), which holds the Clerk Secret Key so 
 it. Standard library only. Setup is in [quickstart.md](quickstart.md); the server's settings in
 [server.md](server.md).
 
-This describes main as of this change: through #42.
+This describes main as of this change: through #45.
 Every command has its own sequence diagram in section 3. [architecture.html](architecture.html) is the same doc as a page with drawn diagrams;
 GitHub shows it as source, so open it locally or from a static host.
 
@@ -90,7 +90,7 @@ flowchart LR
 | `xo ops`, `xo call`, `xo api` | local / server | list operations; run one by id; send any request |
 | `xo serve` | local | run the server on 127.0.0.1:8787 |
 
-Each create row, and each endpoint row (`xo spaces`, `xo me`), runs as shown
+Each create row, and each endpoint row (`xo spaces --space-id ID`, `xo me`, and `xo spaces` alone), runs as shown
 with `--dry-run` added, which needs no key and sends nothing. XO lowercases space names, so
 `xo create space` lowercases NAME before sending it and says so when that changes it.
 

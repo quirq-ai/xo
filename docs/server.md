@@ -7,7 +7,7 @@ One package, two deployments:
   the only place that key exists.
 
 Every command goes to the server (`https://xo.quirq.dev`, `XO_URL`, or the address `xo login`
-saved). It answers `xo me` (and the admin-only `/user-metadata`, which has no xo command) itself, and passes the creates and `xo spaces`
+saved). It answers `xo me` (and the admin-only `/user-metadata`, which has no xo command) itself, and passes the creates and `xo spaces --space-id ID`
 on to XO's core API, so the CLI needs one address.
 
 ```
