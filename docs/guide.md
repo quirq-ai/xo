@@ -68,13 +68,13 @@ xo create project https://github.com/juanfont/headscale
                                                  # projects list shows it with its owner beside it
 xo create project headscale https://github.com/juanfont/headscale   # the same: a name and a URL must match
 xo create project notes                          # a project with no GitHub remote: ./notes, git init
-xo connect project:notes --repo https://github.com/OWNER/REPO
+xo connect notes --repo https://github.com/OWNER/REPO
                                                  # give it its repo later: called REPO from then on;
                                                  # ./notes gets that origin if it has none and moves
                                                  # to ./REPO (not moved if its origin is another repo)
-xo connect project:headscale space:my-cc --ref main  # put a project in a space, at a branch, tag or sha
-xo connect space:dev                             # a new space entry in your metadata, no XO space
-xo connect space:old --id THE_ID                 # an entry for an XO space you already have, or
+xo connect headscale my-cc --ref main            # put a project in a space, at a branch, tag or sha
+xo connect dev                                   # a new space entry in your metadata, no XO space
+xo connect old --id THE_ID                       # an entry for an XO space you already have, or
                                                  # the id for an entry made without one
 xo spaces                                        # your spaces, with their projects and refs (also xo list spaces)
 xo list                                          # your projects and your spaces together
@@ -92,6 +92,11 @@ xo update project:headscale                      # git push its branch (never fo
 xo sync project:headscale                        # git pull --rebase, then push
 ```
 
+- `xo connect` takes plain names and works out which is which from your projects: `xo connect
+  headscale test2` puts the project headscale in the space test2 (`xo connect test2 headscale`
+  too), and `xo connect dev` makes a space entry. When both names are your projects, the one that
+  is also a space is the space (refused if both or neither are). For a space named like one of your
+  projects, say `xo connect space:NAME`; `project:` and `space:` in front still work everywhere.
 - `xo install`, `update` and `sync` use your own git and its login, over https only and without
   submodules. A space's projects go in `./SPACE/REPO`; `./SPACE/.xo/state.json` remembers the
   space's rev and refs as installed. A project with no GitHub remote is left as it is.
@@ -107,7 +112,7 @@ xo sync project:headscale                        # git pull --rebase, then push
   - `xo install`, `update` and `sync project:P` look P up in your projects first, so they need the
     xo server.
   - `xo create space NAME` with no KIND makes the space entry and `./NAME` here, already
-    installed, so `xo connect project:P space:NAME` and `xo update space:NAME` work on it. NAME is
+    installed, so `xo connect P NAME` and `xo update space:NAME` work on it. NAME is
     lowercased, as on XO. If the folder could not be made, `xo install space:NAME` makes it.
   - `update` first pushes each checkout's branch to its upstream (refused if the remote is ahead:
     run `xo sync`). Then it sends the branch (or, when detached, the commit) each checkout is on,
@@ -137,7 +142,7 @@ xo sync project:headscale                        # git pull --rebase, then push
     `xo accept` never takes something other than what you saw.
 - `xo claude-code`, `xo codex` and the other old create commands are gone; each says to use
   `xo create space NAME KIND`.
-- A project is named after its repo. `xo connect project:P --repo URL` is refused while P is in a
+- A project is named after its repo. `xo connect P --repo URL` is refused while P is in a
   space, since the space would still name it P. It gives `./P` that origin only when it has none,
   and leaves the folder where it is unless every fetch and push URL of its origin is that
   repository, so `xo update` never pushes to the wrong place.

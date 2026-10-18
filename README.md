@@ -57,8 +57,8 @@ xo spaces --space-id 6f1c2c1e-...   # connection URLs for a space you own
 | `xo me` | `GET /me` on your xo server; prints `{"xo": {username, imageUrl, ..., "public_data": {...}, "private_data": {...}}}` | none |
 | `xo projects` / `xo projects add NAME` | `GET` / `POST /me/projects` on your xo server: the `projects` list in your own private metadata; the server makes the change and writes only that list | the name only |
 | `xo create project NAME [URL]` | `GET` and `POST /me/projects`, then clones `https://github.com/OWNER/REPO` into `./REPO` (`./OWNER/REPO` when another of your projects is called `REPO`), or `git init ./NAME` for a plain name, with your own git. A project with a repo is recorded as `OWNER/REPO` and called `REPO`, so give a URL alone, or a NAME that is its `REPO` or `OWNER/REPO` | the name only |
-| `xo connect project:P space:S` / `xo connect space:S` | `POST /me/spaces/S/projects` / `POST /me/spaces/connect`: a project's ref in a space, or a new space entry in your metadata | `--ref` (default main) / `--id` for an XO space you already have |
-| `xo connect project:P --repo URL` | `POST /me/projects/connect`: a project made with a name only gets its repo and is recorded as `OWNER/REPO`; `./P` gets that origin if it has none and moves to `./REPO` (left in place unless its origin, fetch and push, is that repository) | the name and `OWNER/REPO` |
+| `xo connect P S` / `xo connect S` | `POST /me/spaces/S/projects` / `POST /me/spaces/connect`: a project's ref in a space, or a new space entry in your metadata | `--ref` (default main) / `--id` for an XO space you already have |
+| `xo connect P --repo URL` | `POST /me/projects/connect`: a project made with a name only gets its repo and is recorded as `OWNER/REPO`; `./P` gets that origin if it has none and moves to `./REPO` (left in place unless its origin, fetch and push, is that repository) | the name and `OWNER/REPO` |
 | `xo list projects\|spaces\|shared` | `GET /me/projects` / `GET /me/spaces` / `GET /me/shared`; projects show as `{"name": "headscale", "owner": "juanfont"}`; `xo list` alone shows `{"projects": [...], "spaces": [...]}` | none |
 | `xo spaces` | `GET /me/spaces`: the spaces linked to your account, as `xo list spaces` shows them (with `--space-id ID` it is XO's `GET /spaces/{spaceId}`) | none |
 | `xo share space:S\|project:O/R USERNAME` | `POST /me/share`: an invite in that user's `shared` list, holding the space's name and projects (never its id) | none |
@@ -73,7 +73,7 @@ repo named like such an `OWNER` folder goes in `./OWNER/REPO` too (`suraj/suraj`
 so no project's folder is ever inside another's. A checkout an older xo put in `./OWNER/REPO` is still
 used there.
 
-`xo projects`, `xo list projects`, `xo create project` and `xo connect project:P --repo` print your
+`xo projects`, `xo list projects`, `xo create project` and `xo connect P --repo` print your
 projects as `[{"name": "headscale", "owner": "juanfont"}, {"name": "notes"}]`; a plain project has
 no owner. Your metadata still records a GitHub project as `juanfont/headscale`, so nothing stored
 changes.
