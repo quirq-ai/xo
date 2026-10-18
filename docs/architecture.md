@@ -322,6 +322,8 @@ sequenceDiagram
   participant Clerk as Clerk
   participant Xo as XO core API
   Note over Cli: xo connect S: --id: an XO space
+  Cli->>Srv: if S is bare / GET /me/projects: your projects
+  Srv-->>Cli: projects / S one of your projects?: refused if so, else go on
   Cli->>Srv: name / POST /me/spaces/connect: ("name", "id"?)
   Srv->>Clerk: verify / verify key
   Clerk-->>Srv: user id / key is valid
@@ -342,8 +344,10 @@ sequenceDiagram
   participant Srv as xo server
   participant Clerk as Clerk
   Note over Cli: xo connect P: S --ref R
-  Cli->>Srv: if P is plain / GET /me/projects: your projects
+  Cli->>Srv: if P plain or bare / GET /me/projects: your projects
   Srv-->>Cli: projects / P is which project?: exact name, else its repo
+  Cli->>Srv: if both are projects / GET /me/spaces: which name is a space?
+  Srv-->>Cli: spaces / the one order that fits: else refused
   Cli->>Srv: P, ref / POST spaces/S/projects: ("project", "ref")
   Srv->>Clerk: verify / verify, read user: P must be in projects
   Clerk-->>Srv: user / set P at R: rev + 1
@@ -352,7 +356,7 @@ sequenceDiagram
   Srv-->>Cli: 200 / print the space
 ```
 
-One project, one ref, one more rev. A plain P is looked up in your projects first, so `headscale` sends `juanfont/headscale`. A missing ref is `main`. Connecting P again replaces its ref in place; a space holds at most 10 projects. With bare names, xo reads your projects to tell which name is which: `xo connect headscale test2` and `xo connect test2 headscale` both put headscale in test2, and one name alone is a new space entry unless it is one of your projects. `project:` or `space:` in front still says it outright.
+One project, one ref, one more rev. A plain P is looked up in your projects first, so `headscale` sends `juanfont/headscale`. A missing ref is `main`. Connecting P again replaces its ref in place; a space holds at most 10 projects. With bare names, xo reads your projects to tell which name is which: `xo connect headscale test2` and `xo connect test2 headscale` both put headscale in test2, and one name alone is a new space entry unless it is one of your projects. `project:` or `space:` in front still says it outright. When both names are your projects, xo reads your spaces too and takes the one order whose space exists, else refuses.
 
 #### `xo list projects | spaces | shared`
 
@@ -652,7 +656,7 @@ sequenceDiagram
 | `POST /me/spaces/connect` | `xo connect S [--id]`, `xo create space NAME` (no KIND) | new entry; with an id, only after XO confirms your key can read it |
 | `POST /me/spaces/{name}/projects` | `xo connect P S` | set one project's ref |
 | `PUT /me/spaces/{name}` | `xo update`, `xo sync` | replace projects and refs if the space is still at `rev` holding `base`, else 409 "run xo sync" |
-| `GET /me/projects`, `GET /me/spaces` | `xo projects`, `xo list`; `GET /me/projects` also for `xo create project`, `xo install`, `xo update` and `xo sync project:P`, and a plain P in `xo connect` and `xo share` | read, masked as `/me` is (refs shown as stored) |
+| `GET /me/projects`, `GET /me/spaces` | `xo projects`, `xo list`; `GET /me/projects` also for `xo create project`, `xo install`, `xo update` and `xo sync project:P`, a plain P in `xo share`, and any bare name in `xo connect` but `NAME --repo`; `GET /me/spaces` also for `xo connect` when both names are your projects | read, masked as `/me` is (refs shown as stored) |
 | `POST /me/share` | `xo share` | `{item, to}`: the caller's invite into user `to`'s `shared`, and nothing else of theirs; anything about the recipient is the same 404 |
 | `GET /me/shared` | `xo list shared`, `xo accept` | the caller's invites, each with an id and its sender's username now |
 | `POST /me/shared/accept` | `xo accept` | `{id, as?}` or `{id, space, ref?}`: one write of `spaces`, `projects` and `shared` (the invite off) |

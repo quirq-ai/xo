@@ -47,7 +47,8 @@
                                             spaces with no projects and nothing on XO.
     xo connect PROJECT SPACE [--ref R]      set PROJECT in SPACE at ref R (default main); the names
                                             need no project: or space: in front, and xo connect
-                                            SPACE PROJECT works too.
+                                            SPACE PROJECT works too (when both names are your
+                                            projects, the one that is a space is SPACE).
     xo connect PROJECT --repo URL           give PROJECT, made with a name only, its GitHub repo; it
                                             is recorded as OWNER/REPO and its folder becomes ./REPO.
     xo connect SPACE [--id ID]              a new space entry SPACE in your metadata (refused for a
@@ -843,7 +844,13 @@ def _connect(args: argparse.Namespace) -> int:
         client = client or _client(args, server=True)
         value = _which(client, value, projects)
         body = {"project": value, **({"ref": args.ref} if args.ref is not None else {})}
-        data = _post_server(client, f"/me/spaces/{quote(space, safe='')}/projects", body)
+        try:
+            data = _post_server(client, f"/me/spaces/{quote(space, safe='')}/projects", body)
+        except XoError as e:
+            if "You have no space named" not in str(e):
+                raise
+            raise XoError(f"{e}; make it with xo connect space:{space} (an entry only) or xo create space "
+                          f"{space} [KIND]") from None
     elif kind == "space":
         if second is not None or args.ref is not None or args.repo is not None:
             raise XoError("make a space entry with: xo connect SPACE [--id XO_SPACE_ID]")
@@ -873,28 +880,51 @@ def _tagged(text: str) -> tuple[str | None, str]:
 def _connect_kinds(args: argparse.Namespace, client: Client, name: str) -> tuple[str, str, str | None, list | None]:
     """What a bare first name is, from what is typed and your projects list:
     - with --repo, a project (only a project takes a repo);
-    - with a second name, a project and the space it goes in; the two names in either order, so
-      xo connect test2 headscale also puts headscale in test2;
+    - with a second name, a project and the space it goes in, in either order: the project is the
+      name in your projects, so xo connect test2 headscale also puts headscale in test2. When both
+      names are your projects, your spaces decide: the one order whose space exists, else refused;
     - alone, a new space entry, unless it is one of your projects (space:NAME makes that entry anyway).
-    Returns (kind, name, second, projects): the projects list when it was read, so it is read once."""
+    Returns (kind, name, second, projects): the projects list when it was read, so it is read once.
+    A list that cannot be read stops the command: nothing is guessed and nothing is sent."""
     second = args.second
     if args.repo is not None:
         return "project", name, second, None
+    if second is not None and _tagged(second)[0] == "project":
+        return "project", _tagged(second)[1], f"space:{name}", None  # S project:P, the other way round
     if second is not None and _tagged(second)[0] is not None:
         return "project", name, second, None
     if second is None and not names.space_ok(name):
+        if names.project_ok(name):
+            raise XoError(f"{name} looks like a project: put it in a space with xo connect {name} SPACE")
         return "space", name, None, None  # _connect refuses the name before anything is sent
     projects = _answer(client.request("GET", "/me/projects").data, "projects", "a projects list")
-    if not isinstance(projects, list):
-        raise XoError("the xo server's projects list is not a list")
+    if not isinstance(projects, list) or not all(isinstance(p, str) for p in projects):
+        raise XoError("the xo server's projects list is not a list of names")
     if second is not None:
-        if not names.named(projects, name) and names.named(projects, second):
+        first_is, second_is = bool(names.named(projects, name)), bool(names.named(projects, second))
+        if not first_is and second_is:
             return "project", second, name, projects
+        if first_is and second_is and name.casefold() != second.casefold():
+            name, second = _which_order(client, name, second)
         return "project", name, second, projects
     if names.named(projects, name):
         raise XoError(f"{name} is one of your projects: put it in a space with xo connect {name} SPACE, or "
                       f"make a space entry of that name with xo connect space:{name}")
     return "space", name, None, projects
+
+
+def _which_order(client: Client, a: str, b: str) -> tuple[str, str]:
+    """Both names are your projects: (project, space) is the one order whose space is one of yours."""
+    spaces = _answer(client.request("GET", "/me/spaces").data, "spaces", "a spaces list")
+    if not isinstance(spaces, list) or not all(isinstance(sp, dict) and isinstance(sp.get("name"), str)
+                                               for sp in spaces):
+        raise XoError("the xo server's spaces list is not a list of spaces")
+    have = {sp["name"].casefold() for sp in spaces}
+    fits = [(p, sp) for p, sp in ((a, b), (b, a)) if sp.casefold() in have]
+    if len(fits) == 1:
+        return fits[0]
+    which = "both spaces" if fits else "neither is a space"
+    raise XoError(f"{a} and {b} are both your projects and {which}: say which with xo connect project:P space:S")
 
 
 def _which(client: Client, typed: str, projects: list | None = None) -> str:
@@ -1349,7 +1379,9 @@ def main(argv: list[str] | None = None) -> int:
     cn.add_argument("first", metavar="PROJECT|SPACE",
                     help="a project or space name; xo tells which from your projects (project:NAME or "
                          "space:NAME says it outright)")
-    cn.add_argument("second", nargs="?", metavar="SPACE", help="the space the project goes in")
+    cn.add_argument("second", nargs="?", metavar="SPACE",
+                    help="the other name: the space the project goes in, or the project when the first "
+                         "name is the space")
     cn.add_argument("--ref", help="a branch, tag or commit sha for the project (default main)")
     cn.add_argument("--id", help="with a space name alone, an XO space you already have (XO must confirm your key "
                                  "can read it)")

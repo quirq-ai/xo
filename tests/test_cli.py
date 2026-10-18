@@ -1742,6 +1742,84 @@ def test_connect_bare_name_with_repo_is_a_project(xs, capsys, github):
     assert Path("notes/.git").is_dir()
 
 
+@pytest.mark.parametrize("answer", [
+    {"status": 401, "body": {"success": False, "error": "bad key"}},
+    {"status": 429, "body": {"success": False, "error": "slow down"}},
+    {"status": 500, "body": {"success": False, "error": "boom"}},
+    {"status": 200, "body": "<html>not json</html>"},
+    {"status": 200, "body": {"success": True, "data": {"projects": "x"}}},
+    {"status": 200, "body": {"success": True, "data": {"projects": [{"name": "headscale"}]}}}])
+@pytest.mark.parametrize("argv", [["headscale", "test2"], ["test2", "headscale"], ["test3"], ["headscale"]])
+def test_connect_bare_names_send_nothing_when_the_projects_list_cannot_be_read(xs, capsys, answer, argv):
+    xs.route("GET", "/me/projects", **answer)
+    xs.route("POST", "/me/spaces/connect", body={"success": True, "data": {"space": SPACE}})
+    xs.route("POST", "/me/spaces/test2/projects", body={"success": True, "data": {"space": SPACE}})
+    code, out, err = run(capsys, "connect", *argv)
+    assert code == 1 and out == "" and err.strip()
+    assert [r["method"] for r in xs.requests] == ["GET"]
+
+
+def test_connect_two_project_names_go_by_which_one_is_a_space(xs, capsys):
+    xs.route("GET", "/me/projects", body={"success": True, "data": {
+        "projects": ["notes", "dev", "juanfont/headscale"]}})
+    xs.route("GET", "/me/spaces", body={"success": True, "data": {"spaces": [
+        {"name": "dev", "rev": 1, "projects": []}, {"name": "test2", "rev": 1, "projects": []}]}})
+    xs.route("POST", "/me/spaces/dev/projects", body={"success": True, "data": {"space": SPACE}})
+    assert run(capsys, "connect", "dev", "headscale")[0] == 0  # dev is the space: headscale in dev
+    assert run(capsys, "connect", "headscale", "dev")[0] == 0
+    assert [(r["path"], r["body"]) for r in xs.requests if r["method"] == "POST"] == [
+        ("/me/spaces/dev/projects", {"project": "juanfont/headscale"})] * 2
+    xs.requests.clear()
+    code, _, err = run(capsys, "connect", "notes", "headscale")  # neither is a space
+    assert code == 1 and "notes and headscale are both your projects and neither is a space" in err
+    assert [r["path"] for r in xs.requests] == ["/me/projects", "/me/spaces"]
+
+
+def test_connect_two_project_names_that_are_both_spaces_are_refused(xs, capsys):
+    xs.route("GET", "/me/projects", body={"success": True, "data": {"projects": ["notes", "dev"]}})
+    xs.route("GET", "/me/spaces", body={"success": True, "data": {"spaces": [
+        {"name": "dev", "rev": 1, "projects": []}, {"name": "notes", "rev": 1, "projects": []}]}})
+    code, _, err = run(capsys, "connect", "dev", "notes")
+    assert code == 1 and "both spaces" in err and "project:P space:S" in err
+    assert all(r["method"] == "GET" for r in xs.requests)
+
+
+def test_connect_bare_names_ask_which_project_when_two_repos_share_a_name(xs, capsys):
+    xs.route("GET", "/me/projects", body={"success": True, "data": {"projects": ["alice/tool", "bob/Tool"]}})
+    code, _, err = run(capsys, "connect", "test2", "tool")
+    assert code == 1 and "tool could be alice/tool or bob/Tool" in err
+    assert [r["method"] for r in xs.requests] == ["GET"]
+
+
+def test_connect_one_bare_name_matches_projects_in_any_case(xs, capsys):
+    xs.route("GET", "/me/projects", body={"success": True, "data": {"projects": ["juanfont/headscale"]}})
+    code, _, err = run(capsys, "connect", "Headscale")
+    assert code == 1 and "Headscale is one of your projects" in err
+    assert [r["method"] for r in xs.requests] == ["GET"]
+
+
+def test_connect_a_project_shaped_name_alone_says_to_give_a_space(xs, capsys):
+    code, _, err = run(capsys, "connect", "juanfont/headscale")
+    assert code == 1 and "juanfont/headscale looks like a project" in err and xs.requests == []
+
+
+def test_connect_to_a_missing_space_says_how_to_make_it(xs, capsys):
+    xs.route("GET", "/me/projects", body={"success": True, "data": {"projects": ["notes"]}})
+    xs.route("POST", "/me/spaces/test9/projects", status=404,
+             body={"success": False, "error": "You have no space named test9"})
+    code, _, err = run(capsys, "connect", "notes", "test9")
+    assert code == 1 and "You have no space named test9" in err
+    assert "xo connect space:test9" in err and "xo create space test9" in err
+
+
+def test_connect_space_then_project_prefixed_the_other_way_round(xs, capsys):
+    xs.route("GET", "/me/projects", body={"success": True, "data": {"projects": ["notes"]}})
+    xs.route("POST", "/me/spaces/test2/projects", body={"success": True, "data": {"space": SPACE}})
+    assert run(capsys, "connect", "test2", "project:notes")[0] == 0
+    assert [(r["path"], r["body"]) for r in xs.requests if r["method"] == "POST"] == [
+        ("/me/spaces/test2/projects", {"project": "notes"})]
+
+
 def test_connect_asks_which_project_when_two_repos_share_a_name(xs, capsys):
     xs.route("GET", "/me/projects", body={"success": True, "data": {
         "projects": ["juanfont/headscale", "alice/headscale"]}})

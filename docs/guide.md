@@ -94,8 +94,9 @@ xo sync project:headscale                        # git pull --rebase, then push
 
 - `xo connect` takes plain names and works out which is which from your projects: `xo connect
   headscale test2` puts the project headscale in the space test2 (`xo connect test2 headscale`
-  too), and `xo connect dev` makes a space entry. For a space named like one of your projects, say
-  `xo connect space:NAME`; `project:` and `space:` in front still work everywhere.
+  too), and `xo connect dev` makes a space entry. When both names are your projects, the one that
+  is also a space is the space (refused if both or neither are). For a space named like one of your
+  projects, say `xo connect space:NAME`; `project:` and `space:` in front still work everywhere.
 - `xo install`, `update` and `sync` use your own git and its login, over https only and without
   submodules. A space's projects go in `./SPACE/REPO`; `./SPACE/.xo/state.json` remembers the
   space's rev and refs as installed. A project with no GitHub remote is left as it is.
