@@ -1752,6 +1752,10 @@ def test_spaces_help_and_dry_run_cover_the_bare_form(xs, capsys):
     out = " ".join(capsys.readouterr().out.split())
     assert "With nothing after it: the spaces linked to your account" in out
     assert "(required)" not in out and "leave it out to list your spaces" in out
+    with pytest.raises(SystemExit):
+        cli.main(["--help"])
+    out = " ".join(capsys.readouterr().out.split())
+    assert "spaces the spaces linked to your account; with --space-id ID, GET /spaces/{spaceId}" in out
     code, out, err = run(capsys, "spaces", "--dry-run")
     assert code == 0 and json.loads(out)["method"] == "GET" and json.loads(out)["url"] == f"{xs.base}/me/spaces"
     assert "dry run, nothing sent" in err and xs.requests == []
