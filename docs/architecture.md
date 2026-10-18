@@ -77,7 +77,8 @@ flowchart LR
 | `xo connect project:P space:S [--ref R]` | server only | set P in space S at R (default `main`) |
 | `xo connect project:P --repo URL` | server, then git | a project made with a name only gets its repo and is recorded as `OWNER/REPO` (refused while P is in a space); `./P` gets that origin only if it has none, and moves to `./REPO` only if its origin is that repo |
 | `xo connect space:S [--id ID]` | server, then XO | record a space entry; `--id` ties it to an XO space your key can read |
-| `xo list projects\|spaces\|shared` | server only | show your projects, your spaces, or the invites shared with you (each with an id) |
+| `xo list projects\|spaces\|shared` | server only | show your projects (a GitHub one as `{"name": "headscale", "owner": "juanfont"}`), your spaces, or the invites shared with you (each with an id) |
+| `xo spaces` | server only | the same as `xo list spaces`; with `--space-id ID` it is XO's `GET /spaces/{spaceId}` |
 | `xo share space:S\|project:P USERNAME` | server only | an invite in that user's `shared`: a space's name and GitHub projects, or one GitHub project |
 | `xo accept ID [--as NAME \| --space S [--ref R]] [--yes]` | server only | show the invite and ask, then add a shared space as your own (`--as` renames it), or a shared project to your space S at R |
 | `xo reject ID` | server only | take the invite off your `shared`; its sender can share again |

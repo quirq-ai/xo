@@ -353,7 +353,8 @@ html { scroll-behavior: smooth; }
 				<tr><td>xo connect project:P space:S [--ref R]</td><td>server only</td><td>Sets P in space S at <code>--ref</code> (default <code>main</code>)</td></tr>
 				<tr><td>xo connect project:P --repo URL</td><td>server, then git</td><td>A project made with a name only gets its repo and is recorded as <code>OWNER/REPO</code> (refused while P is in a space); <code>./P</code> gets that origin only if it has none, and moves to <code>./REPO</code> only if its origin is that repo</td></tr>
 				<tr><td>xo connect space:S [--id ID]</td><td>server, then XO</td><td>Records a space entry; <code>--id</code> ties it to an XO space your key can read</td></tr>
-				<tr><td>xo list projects | spaces | shared</td><td>server only</td><td>Shows your projects, your spaces, or the invites shared with you (each with an id)</td></tr>
+				<tr><td>xo list projects | spaces | shared</td><td>server only</td><td>Shows your projects (a GitHub one as <code>{"name": "headscale", "owner": "juanfont"}</code>), your spaces, or the invites shared with you (each with an id)</td></tr>
+				<tr><td>xo spaces</td><td>server only</td><td>The same as <code>xo list spaces</code>; with <code>--space-id ID</code> it is XO's <code>GET /spaces/{spaceId}</code></td></tr>
 				<tr><td>xo share space:S | project:P USERNAME</td><td>server only</td><td>An invite in that user's <code>shared</code>: a space's name and GitHub projects, or one GitHub project</td></tr>
 				<tr><td>xo accept ID [--as NAME | --space S [--ref R]] [--yes]</td><td>server only</td><td>Shows the invite and asks, then adds a shared space as your own (<code>--as</code> renames it), or a shared project to your space S at R</td></tr>
 				<tr><td>xo reject ID</td><td>server only</td><td>Takes the invite off your <code>shared</code>; its sender can share again</td></tr>

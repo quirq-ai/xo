@@ -36,7 +36,7 @@
     xo create project NAME [GITHUB-URL]     add a project and make its folder here. Give a name, a
                                             GitHub URL, or both: a GitHub project is called by its repo's
                                             name (headscale, from juanfont/headscale), cloned into
-                                            ./headscale and listed with its repo; any other name gets
+                                            ./headscale and listed with its owner; any other name gets
                                             `git init` (its repo can be added later with xo connect
                                             project:NAME --repo URL).
     xo create space NAME [KIND [flags]]     with a KIND (claude-code, codex, antigravity, hermes,
@@ -51,6 +51,8 @@
                                             XO space you already have.
     xo list projects | spaces | shared      show your projects, your spaces, or the invites shared
                                             with you.
+    xo spaces                               the spaces linked to your account (xo list spaces); with
+                                            --space-id ID, XO's connection URLs for that space.
     xo share space:S|project:P USERNAME     invite that user to a copy of the space (its name and
                                             projects) or the project.
     xo accept ID [--as NAME] [--yes]        show invite ID (from xo list shared), ask, then add a
@@ -476,8 +478,20 @@ def _objects(args: argparse.Namespace, body: dict) -> None:
 
 
 def _endpoint(args: argparse.Namespace) -> int:
+    if _lists_spaces(args):
+        args.what = "spaces"
+        return _list(args)
     client, op, path, query, headers, body = _request(args)
     return _send(client, args, op.method, path, query=query, body=body, headers=headers, op=op)
+
+
+def _lists_spaces(args: argparse.Namespace) -> bool:
+    """`xo spaces` with nothing else: XO's API has no list of spaces, so xo shows the spaces linked to
+    your account (as `xo list spaces` does). With --space-id it is GET /spaces/{spaceId} as before."""
+    op = args.op
+    params, fields = commands.values(args)
+    return (op.method == "GET" and op.path == "/spaces/{spaceId}" and not params and not fields
+            and getattr(args, "data", None) is None and not args.dry_run)
 
 
 def _request(args: argparse.Namespace, *, server: bool = False, preset: dict | None = None) -> tuple:
@@ -703,8 +717,8 @@ def _create_project(args: argparse.Namespace) -> int:
 
 
 def _shown_projects(projects: Any) -> Any:
-    """Your projects as xo shows them: each one's name, and a GitHub project's repo beside it. Two
-    GitHub projects with one repo name are both shown by OWNER/REPO, which is how to call them."""
+    """Your projects as xo shows them: each one's name, and a GitHub project's owner beside it
+    ({"name": "headscale", "owner": "juanfont"}). Two with one name are called OWNER/NAME."""
     if not isinstance(projects, list):
         return projects
     out = []
@@ -712,8 +726,8 @@ def _shown_projects(projects: Any) -> Any:
         if not isinstance(p, str) or not names.is_github(p):
             out.append({"name": p})
             continue
-        out.append({"name": names.short(p) if names.named(projects, names.short(p)) == [p] else p,
-                    "repo": f"{gitops.GITHUB}/{p}"})
+        owner, _, repo = p.partition("/")
+        out.append({"name": repo, "owner": owner})
     return out
 
 
