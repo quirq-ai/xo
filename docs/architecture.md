@@ -5,7 +5,7 @@ Vercel at `xo.quirq.dev` through `app.py`), which holds the Clerk Secret Key so 
 it. Standard library only. Setup is in [quickstart.md](quickstart.md); the server's settings in
 [server.md](server.md).
 
-This describes main as of this change: through #45.
+This describes main as of this change: through #47.
 Every command has its own sequence diagram in section 3. [architecture.html](architecture.html) is the same doc as a page with drawn diagrams;
 GitHub shows it as source, so open it locally or from a static host.
 
@@ -74,9 +74,9 @@ flowchart LR
 | `xo projects [add NAME]` | server only | read or append to the `projects` list in your private metadata |
 | `xo create space NAME` | server only, then a folder | no KIND: a space entry with no projects and nothing on XO (`POST /me/spaces/connect`), then `./NAME` here, marked installed |
 | `xo create project NAME [URL]` | server, then git | add the project, then clone `OWNER/REPO` into `./REPO` or `git init` a plain name; a NAME given with a URL must be its `REPO` or `OWNER/REPO` |
-| `xo connect project:P space:S [--ref R]` | server only | set P in space S at R (default `main`) |
-| `xo connect project:P --repo URL` | server, then git | a project made with a name only gets its repo and is recorded as `OWNER/REPO` (refused while P is in a space); `./P` gets that origin only if it has none, and moves to `./REPO` only if its origin is that repo |
-| `xo connect space:S [--id ID]` | server, then XO | record a space entry; `--id` ties it to an XO space your key can read |
+| `xo connect P S [--ref R]` | server only | set P in space S at R (default `main`) |
+| `xo connect P --repo URL` | server, then git | a project made with a name only gets its repo and is recorded as `OWNER/REPO` (refused while P is in a space); `./P` gets that origin only if it has none, and moves to `./REPO` only if its origin is that repo |
+| `xo connect S [--id ID]` | server, then XO | record a space entry; `--id` ties it to an XO space your key can read |
 | `xo list [projects\|spaces\|shared]` | server only | alone: your projects and spaces in one answer; else show your projects (a GitHub one as `{"name": "headscale", "owner": "juanfont"}`), your spaces, or the invites shared with you (each with an id) |
 | `xo spaces` | server only | the same as `xo list spaces`; with `--space-id ID` it is XO's `GET /spaces/{spaceId}` |
 | `xo share space:S\|project:P USERNAME` | server only | an invite in that user's `shared`: a space's name and GitHub projects, or one GitHub project |
@@ -220,7 +220,7 @@ sequenceDiagram
   Srv-->>Cli: 200 / make ./dev: .xo/state.json, rev 1
 ```
 
-A space here only: the same entry `xo connect space:S` makes, and nothing on XO. xo lowercases NAME, as XO does, and refuses a kind word (`codex`, ...), `new` or `create`, and a `./NAME` that is already here, before anything is sent. Then it makes `./NAME/.xo/state.json` at rev 1 with no projects, so the space counts as installed. If the entry is written but the folder is not made, xo says to run `xo install space:NAME`; a name already taken (409) gets the hint that `xo install space:NAME` makes the folder.
+A space here only: the same entry `xo connect S` makes, and nothing on XO. xo lowercases NAME, as XO does, and refuses a kind word (`codex`, ...), `new` or `create`, and a `./NAME` that is already here, before anything is sent. Then it makes `./NAME/.xo/state.json` at rev 1 with no projects, so the space counts as installed. If the entry is written but the folder is not made, xo says to run `xo install space:NAME`; a name already taken (409) gets the hint that `xo install space:NAME` makes the folder.
 
 #### `xo claude-code | codex | ... (removed)`
 
@@ -292,7 +292,7 @@ sequenceDiagram
 
 A project is named after its repo. Give a name (`git init ./notes`), a GitHub URL (recorded as `OWNER/REPO`, cloned into `./REPO` and called `REPO` in every command), or both when they name the same repository; a different name with a URL is refused before anything is sent. xo reads your projects first to pick the folder: `./REPO`, or `./OWNER/REPO` when another of your projects is called `REPO` or the repo is called `.xo` (a space's own state folder). Record next, then make the folder; a folder already there is refused before anything is recorded. When two of your projects share a repo name, each is called by its `OWNER/REPO`. A typed name that matches a project exactly wins: a plain project `headscale` is called `headscale`, and `juanfont/headscale` is then called by its `OWNER/REPO`.
 
-#### `xo connect project:P --repo URL`
+#### `xo connect P --repo URL`
 
 ```mermaid
 sequenceDiagram
@@ -300,7 +300,7 @@ sequenceDiagram
   participant Srv as xo server
   participant Clerk as Clerk
   participant Git as git · GitHub
-  Note over Cli: xo connect project:notes: --repo URL
+  Note over Cli: xo connect notes: --repo URL
   Cli->>Srv: name, repo / POST /me/projects/connect: ("name", "repo")
   Srv->>Clerk: verify / verify, read user: notes in no space?
   Clerk-->>Srv: user / replace in place: notes becomes OWNER/REPO
@@ -313,7 +313,7 @@ sequenceDiagram
 
 A project made with a name gets its repo later. The name is replaced in place, through the same engine as an add. Refused while the project is in a space, since the space would still name it the old way. If `./notes` is here, it gets the origin only when it has none, and moves to `./REPO` when its origin is that repository (https or git@ form). A folder whose origin xo cannot confirm is that repository (every fetch and push URL) is not moved, and xo says so.
 
-#### `xo connect space:S [--id ID]`
+#### `xo connect S [--id ID]`
 
 ```mermaid
 sequenceDiagram
@@ -321,7 +321,7 @@ sequenceDiagram
   participant Srv as xo server
   participant Clerk as Clerk
   participant Xo as XO core API
-  Note over Cli: xo connect space:S: --id: an XO space
+  Note over Cli: xo connect S: --id: an XO space
   Cli->>Srv: name / POST /me/spaces/connect: ("name", "id"?)
   Srv->>Clerk: verify / verify key
   Clerk-->>Srv: user id / key is valid
@@ -334,14 +334,14 @@ sequenceDiagram
 
 An entry without creating anything. With an id, XO must confirm your key can read that space (403 or 404 there is a 404 here). A name or id already recorded is refused.
 
-#### `xo connect project:P space:S [--ref R]`
+#### `xo connect P S [--ref R]`
 
 ```mermaid
 sequenceDiagram
   participant Cli as You · xo CLI
   participant Srv as xo server
   participant Clerk as Clerk
-  Note over Cli: xo connect project:P: space:S --ref R
+  Note over Cli: xo connect P: S --ref R
   Cli->>Srv: if P is plain / GET /me/projects: your projects
   Srv-->>Cli: projects / P is which project?: exact name, else its repo
   Cli->>Srv: P, ref / POST spaces/S/projects: ("project", "ref")
@@ -352,7 +352,7 @@ sequenceDiagram
   Srv-->>Cli: 200 / print the space
 ```
 
-One project, one ref, one more rev. A plain P is looked up in your projects first, so `headscale` sends `juanfont/headscale`. A missing ref is `main`. Connecting P again replaces its ref in place; a space holds at most 10 projects.
+One project, one ref, one more rev. A plain P is looked up in your projects first, so `headscale` sends `juanfont/headscale`. A missing ref is `main`. Connecting P again replaces its ref in place; a space holds at most 10 projects. With bare names, xo reads your projects to tell which name is which: `xo connect headscale test2` and `xo connect test2 headscale` both put headscale in test2, and one name alone is a new space entry unless it is one of your projects. `project:` or `space:` in front still says it outright.
 
 #### `xo list projects | spaces | shared`
 
@@ -647,10 +647,10 @@ sequenceDiagram
 | Route | Command | Change |
 |---|---|---|
 | `POST /me/projects` | `xo projects add`, `xo create project` | append a name |
-| `POST /me/projects/connect` | `xo connect project:P --repo URL` | replace a plain name with its `OWNER/REPO`, in place; refused while P is in a space |
+| `POST /me/projects/connect` | `xo connect P --repo URL` | replace a plain name with its `OWNER/REPO`, in place; refused while P is in a space |
 | `POST /me/spaces` | `xo create space` | check name and budget, create on XO with your key, record `{name, kind, id, rev: 1}` |
-| `POST /me/spaces/connect` | `xo connect space:S [--id]`, `xo create space NAME` (no KIND) | new entry; with an id, only after XO confirms your key can read it |
-| `POST /me/spaces/{name}/projects` | `xo connect project:P space:S` | set one project's ref |
+| `POST /me/spaces/connect` | `xo connect S [--id]`, `xo create space NAME` (no KIND) | new entry; with an id, only after XO confirms your key can read it |
+| `POST /me/spaces/{name}/projects` | `xo connect P S` | set one project's ref |
 | `PUT /me/spaces/{name}` | `xo update`, `xo sync` | replace projects and refs if the space is still at `rev` holding `base`, else 409 "run xo sync" |
 | `GET /me/projects`, `GET /me/spaces` | `xo projects`, `xo list`; `GET /me/projects` also for `xo create project`, `xo install`, `xo update` and `xo sync project:P`, and a plain P in `xo connect` and `xo share` | read, masked as `/me` is (refs shown as stored) |
 | `POST /me/share` | `xo share` | `{item, to}`: the caller's invite into user `to`'s `shared`, and nothing else of theirs; anything about the recipient is the same 404 |

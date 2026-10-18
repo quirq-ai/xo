@@ -39,17 +39,20 @@
                                             name (headscale, from juanfont/headscale), cloned into
                                             ./headscale and listed with its owner; any other name gets
                                             `git init` (its repo can be added later with xo connect
-                                            project:NAME --repo URL).
+                                            NAME --repo URL).
     xo create space NAME [KIND [flags]]     with a KIND (claude-code, codex, antigravity, hermes,
                                             openclaw, xo-cowork, nebius-openclaw): create a space on XO
                                             named NAME there too, and record it in your spaces. With no
                                             KIND: a space here only, the folder ./NAME, recorded in your
                                             spaces with no projects and nothing on XO.
-    xo connect project:P space:S [--ref R]  set project P in space S at ref R (default main).
-    xo connect project:P --repo URL         give project P, made with a name only, its GitHub repo; P
+    xo connect PROJECT SPACE [--ref R]      set PROJECT in SPACE at ref R (default main); the names
+                                            need no project: or space: in front, and xo connect
+                                            SPACE PROJECT works too.
+    xo connect PROJECT --repo URL           give PROJECT, made with a name only, its GitHub repo; it
                                             is recorded as OWNER/REPO and its folder becomes ./REPO.
-    xo connect space:S [--id ID]            a new space entry S in your metadata; --id ties it to an
-                                            XO space you already have.
+    xo connect SPACE [--id ID]              a new space entry SPACE in your metadata (refused for a
+                                            name in your projects: say space:NAME); --id ties it to
+                                            an XO space you already have.
     xo list [projects | spaces | shared]    show your projects, your spaces, or the invites shared
                                             with you; with nothing after it, your projects and spaces.
     xo spaces                               the spaces linked to your account (xo list spaces); with
@@ -683,7 +686,7 @@ def _create_project(args: argparse.Namespace) -> int:
     """`xo create project NAME [URL]`: the server adds the project to your projects, then its folder
     is made here. A GitHub project is recorded as OWNER/REPO, called by REPO and cloned into ./REPO;
     any other name gets an empty repository, and can get its repo later with `xo connect
-    project:NAME --repo URL`. NAME and URL may both be given only when they name the same
+    NAME --repo URL`. NAME and URL may both be given only when they name the same
     repository (NAME as REPO or OWNER/REPO)."""
     name = _project_target(args.target.strip())
     if args.repo is not None:
@@ -693,7 +696,7 @@ def _create_project(args: argparse.Namespace) -> int:
         if name.casefold() not in (repo.casefold(), names.folder(repo).casefold()):
             raise XoError(f"a project with a repo is called after it ({names.folder(repo)}): run xo create project "
                           f"{gitops.GITHUB}/{repo}, or keep {name} without one and add it later with xo connect "
-                          f"project:{name} --repo {gitops.GITHUB}/{repo}")
+                          f"{name} --repo {gitops.GITHUB}/{repo}")
         name = repo
     if not names.is_github(name) and (Path(name).exists() or Path(name).is_symlink()):
         raise XoError(f"./{name} already exists here; nothing was changed")
@@ -791,7 +794,7 @@ def _create_local_space(args: argparse.Namespace) -> int:
         why = e.strerror or type(e).__name__ if isinstance(e, OSError) else str(e)
         raise XoError(f"space {name} is in your spaces, but ./{name} was not made ({why}); run xo install "
                       f"space:{name}") from None
-    print(f"xo: ./{name}: a new space with no projects (add one with xo connect project:P space:{name}; "
+    print(f"xo: ./{name}: a new space with no projects (add one with xo connect PROJECT {name}; "
           f"to make it on XO, use xo create space with a KIND instead)", file=sys.stderr)
     print(client.scrub(_json(space)))
     return 0
@@ -804,59 +807,104 @@ def _moved(kind: str) -> str:
 
 
 def _connect(args: argparse.Namespace) -> int:
-    """`xo connect project:P space:S [--ref R]` or `xo connect space:S [--id ID]`."""
-    kind, _, value = args.first.partition(":")
+    """`xo connect PROJECT SPACE [--ref R]`, `xo connect PROJECT --repo URL` or `xo connect SPACE [--id ID]`.
+    Names need no project: or space: in front (see _connect_kinds); with one, xo takes it as written."""
+    (kind, value), second = _tagged(args.first), args.second
+    client, projects = None, None
+    if kind is None:
+        client = _client(args, server=True)
+        kind, value, second, projects = _connect_kinds(args, client, value)
+    elif kind == "space" and second is not None and _tagged(second)[0] in (None, "project"):
+        kind, value, second = "project", _tagged(second)[1], f"space:{value}"  # space:S P, the other way round
     if kind == "project" and args.repo is not None:
-        if args.second is not None or args.ref is not None or args.id is not None:
-            raise XoError("give a project its repo with: xo connect project:NAME --repo https://github.com/OWNER/REPO")
+        if second is not None or args.ref is not None or args.id is not None:
+            raise XoError("give a project its repo with: xo connect NAME --repo https://github.com/OWNER/REPO")
         if not names.project_ok(value) or names.is_github(value):
             raise XoError(f"{value} already names a repo" if names.project_ok(value) else names.PROJECT_RULE)
         repo = _project_target(args.repo.strip())
         if not names.is_github(repo):
             raise XoError("a project URL must be https://github.com/OWNER/REPO")
-        client = _client(args, server=True)
+        client = client or _client(args, server=True)
         data = _post_server(client, "/me/projects/connect", {"name": value, "repo": repo})
         projects = _answer(data, "projects", "a projects list")
         _local_repo(Path(value), repo, projects)
         print(client.scrub(_json(_shown_projects(projects))))
         return 0
     if kind == "project":
-        where, _, space = (args.second or "").partition(":")
-        if where != "space" or not space or args.id is not None:
-            raise XoError("connect a project with: xo connect project:NAME space:NAME [--ref REF]")
+        where, space = _tagged(second) if second is not None else ("space", "")
+        if where not in (None, "space") or not space or args.id is not None:
+            raise XoError("connect a project with: xo connect PROJECT SPACE [--ref REF]")
         if not names.project_ok(value):
             raise XoError(names.PROJECT_RULE)
         if not names.space_ok(space):
             raise XoError(names.SPACE_RULE)
         if args.ref is not None and not names.ref_ok(args.ref):
             raise XoError(names.REF_RULE)
-        client = _client(args, server=True)
-        value = _which(client, value)
+        client = client or _client(args, server=True)
+        value = _which(client, value, projects)
         body = {"project": value, **({"ref": args.ref} if args.ref is not None else {})}
         data = _post_server(client, f"/me/spaces/{quote(space, safe='')}/projects", body)
     elif kind == "space":
-        if args.second is not None or args.ref is not None:
-            raise XoError("make a space entry with: xo connect space:NAME [--id XO_SPACE_ID]")
+        if second is not None or args.ref is not None or args.repo is not None:
+            raise XoError("make a space entry with: xo connect SPACE [--id XO_SPACE_ID]")
         if not names.space_ok(value):
             raise XoError(names.SPACE_RULE)
         if args.id is not None and not names.SPACE_ID.fullmatch(args.id):
             raise XoError("a space id is letters, digits, _ or -")
-        client = _client(args, server=True)
+        client = client or _client(args, server=True)
         data = _post_server(client, "/me/spaces/connect",
                             {"name": value, **({"id": args.id} if args.id is not None else {})})
     else:
-        raise XoError("connect what? project:NAME space:NAME, or space:NAME [--id ID]")
+        raise XoError("connect what? xo connect PROJECT SPACE, xo connect PROJECT --repo URL, or xo connect SPACE "
+                      "[--id ID]")
     print(client.scrub(_json(_answer(data, "space", "a space"))))
     return 0
 
 
-def _which(client: Client, typed: str) -> str:
+def _tagged(text: str) -> tuple[str | None, str]:
+    """A connect argument as (kind, name): project:P or space:S as written, a bare name as (None, name).
+    Any other word before a colon is an unknown kind, which _connect refuses."""
+    kind, colon, value = text.partition(":")
+    if not colon:
+        return None, text
+    return kind, value
+
+
+def _connect_kinds(args: argparse.Namespace, client: Client, name: str) -> tuple[str, str, str | None, list | None]:
+    """What a bare first name is, from what is typed and your projects list:
+    - with --repo, a project (only a project takes a repo);
+    - with a second name, a project and the space it goes in; the two names in either order, so
+      xo connect test2 headscale also puts headscale in test2;
+    - alone, a new space entry, unless it is one of your projects (space:NAME makes that entry anyway).
+    Returns (kind, name, second, projects): the projects list when it was read, so it is read once."""
+    second = args.second
+    if args.repo is not None:
+        return "project", name, second, None
+    if second is not None and _tagged(second)[0] is not None:
+        return "project", name, second, None
+    if second is None and not names.space_ok(name):
+        return "space", name, None, None  # _connect refuses the name before anything is sent
+    projects = _answer(client.request("GET", "/me/projects").data, "projects", "a projects list")
+    if not isinstance(projects, list):
+        raise XoError("the xo server's projects list is not a list")
+    if second is not None:
+        if not names.named(projects, name) and names.named(projects, second):
+            return "project", second, name, projects
+        return "project", name, second, projects
+    if names.named(projects, name):
+        raise XoError(f"{name} is one of your projects: put it in a space with xo connect {name} SPACE, or "
+                      f"make a space entry of that name with xo connect space:{name}")
+    return "space", name, None, projects
+
+
+def _which(client: Client, typed: str, projects: list | None = None) -> str:
     """The project a typed name means: OWNER/REPO as it is, a plain name looked up in your projects
-    (a GitHub project is called by its repo's name)."""
+    (a GitHub project is called by its repo's name). projects: the list when it was already read."""
     if names.is_github(typed):
         return typed
-    return workspace.resolve(_answer(client.request("GET", "/me/projects").data, "projects", "a projects list"),
-                             typed)
+    if projects is None:
+        projects = _answer(client.request("GET", "/me/projects").data, "projects", "a projects list")
+    return workspace.resolve(projects, typed)
 
 
 def _local_repo(dest: Path, repo: str, projects: Any) -> None:
@@ -1298,12 +1346,14 @@ def main(argv: list[str] | None = None) -> int:
     cn = sub.add_parser("connect", parents=[common],
                         help="set a project's ref in one of your spaces, give a project its repo, or make a new "
                              "space entry")
-    cn.add_argument("first", metavar="project:NAME|space:NAME")
-    cn.add_argument("second", nargs="?", metavar="space:NAME", help="the space a project goes in")
+    cn.add_argument("first", metavar="PROJECT|SPACE",
+                    help="a project or space name; xo tells which from your projects (project:NAME or "
+                         "space:NAME says it outright)")
+    cn.add_argument("second", nargs="?", metavar="SPACE", help="the space the project goes in")
     cn.add_argument("--ref", help="a branch, tag or commit sha for the project (default main)")
-    cn.add_argument("--id", help="with space:NAME, an XO space you already have (XO must confirm your key "
+    cn.add_argument("--id", help="with a space name alone, an XO space you already have (XO must confirm your key "
                                  "can read it)")
-    cn.add_argument("--repo", metavar="URL", help="with project:NAME alone, the project's GitHub repo; the project "
+    cn.add_argument("--repo", metavar="URL", help="with a project name alone, the project's GitHub repo; the project "
                                                   "is recorded as OWNER/REPO, its folder becomes ./REPO")
     cn.set_defaults(run=_connect)
     for verb, about in (("install", "clone or fetch a project here, or each of a space's projects into ./SPACE at its "

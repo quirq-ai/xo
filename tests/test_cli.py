@@ -1703,6 +1703,45 @@ def test_connect_project_and_space(xs, capsys):
         ("/me/spaces/connect", {"name": "dev"}), ("/me/spaces/connect", {"name": "old", "id": "sp-1"})]
 
 
+def test_connect_tells_projects_and_spaces_apart_by_name(xs, capsys):
+    xs.route("POST", "/me/spaces/test2/projects", body={"success": True, "data": {"space": SPACE}})
+    xs.route("POST", "/me/spaces/connect", body={"success": True, "data": {"space": SPACE}})
+    xs.route("GET", "/me/projects", body={"success": True, "data": {"projects": ["juanfont/headscale", "notes"]}})
+    assert run(capsys, "connect", "headscale", "test2")[0] == 0
+    assert run(capsys, "connect", "test2", "headscale", "--ref", "v1")[0] == 0  # either order
+    assert run(capsys, "connect", "notes", "space:test2")[0] == 0
+    assert run(capsys, "connect", "project:notes", "test2")[0] == 0
+    assert run(capsys, "connect", "space:test2", "notes")[0] == 0
+    assert run(capsys, "connect", "test2")[0] == 0
+    assert run(capsys, "connect", "old", "--id", "sp-1")[0] == 0
+    assert [(r["path"], r["body"]) for r in xs.requests if r["method"] == "POST"] == [
+        ("/me/spaces/test2/projects", {"project": "juanfont/headscale"}),
+        ("/me/spaces/test2/projects", {"project": "juanfont/headscale", "ref": "v1"}),
+        ("/me/spaces/test2/projects", {"project": "notes"}), ("/me/spaces/test2/projects", {"project": "notes"}),
+        ("/me/spaces/test2/projects", {"project": "notes"}),
+        ("/me/spaces/connect", {"name": "test2"}), ("/me/spaces/connect", {"name": "old", "id": "sp-1"})]
+    gets = [r for r in xs.requests if r["method"] == "GET"]
+    assert len(gets) == 7 and all(r["path"] == "/me/projects" for r in gets)  # one read per connect
+
+
+def test_connect_one_bare_name_of_a_project_is_not_made_a_space(xs, capsys):
+    xs.route("GET", "/me/projects", body={"success": True, "data": {"projects": ["juanfont/headscale"]}})
+    code, _, err = run(capsys, "connect", "headscale")
+    assert code == 1 and "headscale is one of your projects" in err and "xo connect headscale SPACE" in err
+    assert [r["method"] for r in xs.requests] == ["GET"]
+
+
+def test_connect_bare_name_with_repo_is_a_project(xs, capsys, github):
+    xs.route("GET", "/me/projects", body={"success": True, "data": {"projects": []}})
+    xs.route("POST", "/me/projects", body={"success": True, "data": {"projects": ["my-notes"]}})
+    xs.route("POST", "/me/projects/connect", body={"success": True, "data": {"projects": ["quirq-ai/notes"]}})
+    assert run(capsys, "create", "project", "my-notes")[0] == 0
+    code, out, _ = run(capsys, "connect", "my-notes", "--repo", "https://github.com/quirq-ai/notes")
+    assert code == 0 and json.loads(out) == [{"name": "notes", "owner": "quirq-ai"}]
+    assert xs.requests[-1]["body"] == {"name": "my-notes", "repo": "quirq-ai/notes"}
+    assert Path("notes/.git").is_dir()
+
+
 def test_connect_asks_which_project_when_two_repos_share_a_name(xs, capsys):
     xs.route("GET", "/me/projects", body={"success": True, "data": {
         "projects": ["juanfont/headscale", "alice/headscale"]}})
@@ -1714,10 +1753,11 @@ def test_connect_asks_which_project_when_two_repos_share_a_name(xs, capsys):
 @pytest.mark.parametrize("argv", [
     ["connect", "project:notes", "space:dev", "--ref", "--upload-pack=touch x"],
     ["connect", "project:notes", "space:dev", "--ref=a..b"],
-    ["connect", "project:../x", "space:dev"], ["connect", "project:notes"], ["connect", "project:notes", "dev"],
+    ["connect", "project:../x", "space:dev"], ["connect", "project:notes"], ["connect", "project:notes", "thing:dev"],
     ["connect", "space:../x"], ["connect", "space:dev", "--id", "../x"], ["connect", "space:-d"],
     ["connect", "space:dev", "space:x"], ["connect", "space:dev", "--ref", "main"],
-    ["connect", "notes", "space:dev"], ["connect", "project:notes", "space:dev", "--id", "x"]])
+    ["connect", "thing:notes", "space:dev"], ["connect", "project:notes", "space:dev", "--id", "x"],
+    ["connect", "../x"], ["connect", "notes", "space:dev", "--id", "x"], ["connect", "space:dev", "--repo", "u"]])
 def test_connect_refuses_bad_input_before_sending(xs, capsys, argv):
     assert _refused(capsys, *argv) and xs.requests == []
 
@@ -1842,7 +1882,7 @@ def test_create_project_takes_a_name_and_a_url_only_when_they_match(xs, capsys, 
     xs.route("POST", "/me/projects", body={"success": True, "data": {"projects": ["quirq-ai/xo"]}})
     code, _, err = run(capsys, "create", "project", "notes", "https://github.com/quirq-ai/xo")
     assert code == 1 and xs.requests == [] and not Path("notes").exists()
-    assert "xo connect project:notes --repo" in err
+    assert "xo connect notes --repo" in err
     assert run(capsys, "create", "project", "quirq-ai/XO", "https://github.com/quirq-ai/xo")[0] == 0
     assert xs.requests[1]["body"] == {"name": "quirq-ai/xo"}
     assert Path("xo/README").read_text() == "hi\n"

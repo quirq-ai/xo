@@ -181,7 +181,7 @@ html { scroll-behavior: smooth; }
 <body>
 <div class="wrap">
 	<header class="top">
-		<div class="eyebrow">quirq-ai/xo · main as of this change: through #45</div>
+		<div class="eyebrow">quirq-ai/xo · main as of this change: through #47</div>
 		<h1>xo: one package, a CLI and <span class="x">its server</span></h1>
 		<p class="lede">The command line for XO Cloud's core API. The same Python package runs on your machine as <code>xo</code> and on Vercel as the xo server, which holds the Clerk Secret Key so the CLI never needs it. Standard library only. It also keeps your <code>projects</code> and <code>spaces</code> in your own Clerk metadata, lets you share a space or project with another user as an invite they accept or reject, and installs those projects on your machine and keeps them in step. Every command has its own diagram in section 03. Left out: test internals, the redaction rules in detail, and the Vercel deploy steps (see <code>docs/</code>).</p>
 		<div class="scroll">
@@ -350,9 +350,9 @@ html { scroll-behavior: smooth; }
 				<tr><td>xo projects [add NAME]</td><td>server only</td><td>Read or append to the <code>projects</code> list in your private metadata</td></tr>
 				<tr><td>xo create space NAME</td><td>server only, then a folder</td><td>No KIND: a space entry with no projects and nothing on XO (<code>POST /me/spaces/connect</code>), then <code>./NAME</code> here, marked installed</td></tr>
 				<tr><td>xo create project NAME [URL]</td><td>server, then git</td><td>Adds the project, then clones <code>OWNER/REPO</code> into <code>./REPO</code> or runs <code>git init</code> for a plain name; a NAME given with a URL must be its <code>REPO</code> or <code>OWNER/REPO</code></td></tr>
-				<tr><td>xo connect project:P space:S [--ref R]</td><td>server only</td><td>Sets P in space S at <code>--ref</code> (default <code>main</code>)</td></tr>
-				<tr><td>xo connect project:P --repo URL</td><td>server, then git</td><td>A project made with a name only gets its repo and is recorded as <code>OWNER/REPO</code> (refused while P is in a space); <code>./P</code> gets that origin only if it has none, and moves to <code>./REPO</code> only if its origin is that repo</td></tr>
-				<tr><td>xo connect space:S [--id ID]</td><td>server, then XO</td><td>Records a space entry; <code>--id</code> ties it to an XO space your key can read</td></tr>
+				<tr><td>xo connect P S [--ref R]</td><td>server only</td><td>Sets P in space S at <code>--ref</code> (default <code>main</code>)</td></tr>
+				<tr><td>xo connect P --repo URL</td><td>server, then git</td><td>A project made with a name only gets its repo and is recorded as <code>OWNER/REPO</code> (refused while P is in a space); <code>./P</code> gets that origin only if it has none, and moves to <code>./REPO</code> only if its origin is that repo</td></tr>
+				<tr><td>xo connect S [--id ID]</td><td>server, then XO</td><td>Records a space entry; <code>--id</code> ties it to an XO space your key can read</td></tr>
 				<tr><td>xo list [projects | spaces | shared]</td><td>server only</td><td>Alone: your projects and spaces in one answer. Otherwise shows your projects (a GitHub one as <code>{"name": "headscale", "owner": "juanfont"}</code>), your spaces, or the invites shared with you (each with an id)</td></tr>
 				<tr><td>xo spaces</td><td>server only</td><td>The same as <code>xo list spaces</code>; with <code>--space-id ID</code> it is XO's <code>GET /spaces/{spaceId}</code></td></tr>
 				<tr><td>xo share space:S | project:P USERNAME</td><td>server only</td><td>An invite in that user's <code>shared</code>: a space's name and GitHub projects, or one GitHub project</td></tr>
@@ -697,7 +697,7 @@ html { scroll-behavior: smooth; }
 <text class="lbl" x="360" y="623" text-anchor="middle">200</text>
 </svg>
 </div>
-<figcaption><strong>A space here only, and nothing on XO.</strong> The same entry <code>xo connect space:S</code> makes. xo lowercases NAME, as XO does, and refuses a kind word (<code>codex</code>, ...), <code>new</code> or <code>create</code>, and a <code>./NAME</code> that is already here, before anything is sent. Then it makes <code>./NAME/.xo/state.json</code> at rev 1 with no projects, so the space counts as installed. If the entry is written but the folder is not made, xo says to run <code>xo install space:NAME</code>; a name already taken (409) gets the hint that <code>xo install space:NAME</code> makes the folder.</figcaption>
+<figcaption><strong>A space here only, and nothing on XO.</strong> The same entry <code>xo connect S</code> makes. xo lowercases NAME, as XO does, and refuses a kind word (<code>codex</code>, ...), <code>new</code> or <code>create</code>, and a <code>./NAME</code> that is already here, before anything is sent. Then it makes <code>./NAME/.xo/state.json</code> at rev 1 with no projects, so the space counts as installed. If the entry is written but the folder is not made, xo says to run <code>xo install space:NAME</code>; a name already taken (409) gets the hint that <code>xo install space:NAME</code> makes the folder.</figcaption>
 </figure>
 <h4><code>xo claude-code | codex | ... (removed)</code></h4>
 <figure>
@@ -882,10 +882,10 @@ html { scroll-behavior: smooth; }
 </div>
 <figcaption><strong>A project is named after its repo.</strong> Give a name (<code>git init ./notes</code>), a GitHub URL (recorded as <code>OWNER/REPO</code>, cloned into <code>./REPO</code> and called <code>REPO</code>), or both when they name the same repository; a different name with a URL is refused before anything is sent. xo reads your projects first to pick the folder: <code>./REPO</code>, or <code>./OWNER/REPO</code> when another of your projects is called <code>REPO</code> or the repo is called <code>.xo</code> (a space&#x27;s own state folder). Record next, then make the folder; a folder already there is refused before anything is recorded. When two of your projects share a repo name, each is called by its <code>OWNER/REPO</code>. A typed name that matches a project exactly wins: a plain project <code>headscale</code> is called <code>headscale</code>, and <code>juanfont/headscale</code> is then called by its <code>OWNER/REPO</code>.</figcaption>
 </figure>
-<h4><code>xo connect project:P --repo URL</code></h4>
+<h4><code>xo connect P --repo URL</code></h4>
 <figure>
 <div class="canvas">
-<svg class="d" viewBox="0 0 960 794" role="img" aria-label="xo connect project:P --repo URL: A project made with a name gets its repo later.">
+<svg class="d" viewBox="0 0 960 794" role="img" aria-label="xo connect P --repo URL: A project made with a name gets its repo later.">
 <defs>
 <marker id="c11a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
 <marker id="c11h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
@@ -903,7 +903,7 @@ html { scroll-behavior: smooth; }
 <rect class="hdr" x="722" y="12" width="206" height="28" rx="7"/>
 <text class="t" x="825" y="31" text-anchor="middle">git · GitHub</text>
 <rect class="box" x="32" y="58" width="206" height="46" rx="8"/>
-<text class="m" x="135" y="78" text-anchor="middle">xo connect project:notes</text>
+<text class="m" x="135" y="78" text-anchor="middle">xo connect notes</text>
 <text class="s" x="135" y="95" text-anchor="middle">--repo URL</text>
 <rect class="box" x="262" y="142" width="206" height="46" rx="8"/>
 <text class="m" x="365" y="162" text-anchor="middle">POST /me/projects/connect</text>
@@ -948,10 +948,10 @@ html { scroll-behavior: smooth; }
 </div>
 <figcaption><strong>A project made with a name gets its repo later.</strong> The name is replaced in place, through the same engine as an add. Refused while the project is in a space, since the space would still name it the old way. If <code>./notes</code> is here, it gets the origin only when it has none, and moves to <code>./REPO</code> when its origin is that repository (https or git@ form). A folder whose origin xo cannot confirm is that repository (every fetch and push URL) is not moved, and xo says so.</figcaption>
 </figure>
-<h4><code>xo connect space:S [--id ID]</code></h4>
+<h4><code>xo connect S [--id ID]</code></h4>
 <figure>
 <div class="canvas">
-<svg class="d" viewBox="0 0 960 794" role="img" aria-label="xo connect space:S [--id ID]: An entry without creating anything.">
+<svg class="d" viewBox="0 0 960 794" role="img" aria-label="xo connect S [--id ID]: An entry without creating anything.">
 <defs>
 <marker id="c12a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
 <marker id="c12h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
@@ -969,7 +969,7 @@ html { scroll-behavior: smooth; }
 <rect class="hdr" x="722" y="12" width="206" height="28" rx="7"/>
 <text class="t" x="825" y="31" text-anchor="middle">XO core API</text>
 <rect class="box" x="32" y="58" width="206" height="46" rx="8"/>
-<text class="m" x="135" y="78" text-anchor="middle">xo connect space:S</text>
+<text class="m" x="135" y="78" text-anchor="middle">xo connect S</text>
 <text class="s" x="135" y="95" text-anchor="middle">--id: an XO space</text>
 <rect class="box" x="262" y="142" width="206" height="46" rx="8"/>
 <text class="m" x="365" y="162" text-anchor="middle">POST /me/spaces/connect</text>
@@ -1012,10 +1012,10 @@ html { scroll-behavior: smooth; }
 </div>
 <figcaption><strong>An entry without creating anything.</strong> With an id, XO must confirm your key can read that space (403 or 404 there is a 404 here). A name or id already recorded is refused.</figcaption>
 </figure>
-<h4><code>xo connect project:P space:S [--ref R]</code></h4>
+<h4><code>xo connect P S [--ref R]</code></h4>
 <figure>
 <div class="canvas">
-<svg class="d" viewBox="0 0 960 794" role="img" aria-label="xo connect project:P space:S [--ref R]: One project, one ref, one more rev.">
+<svg class="d" viewBox="0 0 960 794" role="img" aria-label="xo connect P S [--ref R]: One project, one ref, one more rev.">
 <defs>
 <marker id="c13a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
 <marker id="c13h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
@@ -1030,8 +1030,8 @@ html { scroll-behavior: smooth; }
 <rect class="hdr" x="615" y="12" width="210" height="28" rx="7"/>
 <text class="t" x="720" y="31" text-anchor="middle">Clerk</text>
 <rect class="box" x="135" y="58" width="210" height="46" rx="8"/>
-<text class="m" x="240" y="78" text-anchor="middle">xo connect project:P</text>
-<text class="s" x="240" y="95" text-anchor="middle">space:S --ref R</text>
+<text class="m" x="240" y="78" text-anchor="middle">xo connect P</text>
+<text class="s" x="240" y="95" text-anchor="middle">S --ref R</text>
 <rect class="box" x="375" y="142" width="210" height="46" rx="8"/>
 <text class="m" x="480" y="162" text-anchor="middle">GET /me/projects</text>
 <text class="s" x="480" y="179" text-anchor="middle">your projects</text>
@@ -1073,7 +1073,7 @@ html { scroll-behavior: smooth; }
 <text class="lbl" x="360" y="707" text-anchor="middle">200</text>
 </svg>
 </div>
-<figcaption><strong>One project, one ref, one more rev.</strong> A plain P is looked up in your projects first, so <code>headscale</code> sends <code>juanfont/headscale</code>. A missing ref is <code>main</code>. Connecting P again replaces its ref in place; a space holds at most 10 projects.</figcaption>
+<figcaption><strong>One project, one ref, one more rev.</strong> A plain P is looked up in your projects first, so <code>headscale</code> sends <code>juanfont/headscale</code>. A missing ref is <code>main</code>. Connecting P again replaces its ref in place; a space holds at most 10 projects. With bare names, xo reads your projects to tell which name is which: <code>xo connect headscale test2</code> and <code>xo connect test2 headscale</code> both put headscale in test2, and one name alone is a new space entry unless it is one of your projects. <code>project:</code> or <code>space:</code> in front still says it outright.</figcaption>
 </figure>
 <h4><code>xo list projects | spaces | shared</code></h4>
 <figure>
@@ -1953,10 +1953,10 @@ html { scroll-behavior: smooth; }
 			<thead><tr><th>Route</th><th>Command</th><th>Change</th></tr></thead>
 			<tbody>
 				<tr><td>POST /me/projects</td><td>xo projects add · xo create project</td><td>Appends a name; <code>create project</code> then clones it (OWNER/REPO, into ./REPO) or runs <code>git init</code> here</td></tr>
-				<tr><td>POST /me/projects/connect</td><td>xo connect project:P --repo URL</td><td>Replaces a plain name with its <code>OWNER/REPO</code>, in place; refused while P is in a space</td></tr>
+				<tr><td>POST /me/projects/connect</td><td>xo connect P --repo URL</td><td>Replaces a plain name with its <code>OWNER/REPO</code>, in place; refused while P is in a space</td></tr>
 				<tr><td>POST /me/spaces</td><td>xo create space NAME KIND</td><td>Checks the name and budget first, creates the space on XO with your key, then records <code>{name, kind, id, rev: 1}</code></td></tr>
-				<tr><td>POST /me/spaces/connect</td><td>xo connect space:S [--id ID] · xo create space NAME (no KIND)</td><td>A new entry; with an id, only after XO confirms your key can read that space</td></tr>
-				<tr><td>POST /me/spaces/{name}/projects</td><td>xo connect project:P space:S</td><td>Sets one project's ref (default <code>main</code>); P must be in your projects</td></tr>
+				<tr><td>POST /me/spaces/connect</td><td>xo connect S [--id ID] · xo create space NAME (no KIND)</td><td>A new entry; with an id, only after XO confirms your key can read that space</td></tr>
+				<tr><td>POST /me/spaces/{name}/projects</td><td>xo connect P S</td><td>Sets one project's ref (default <code>main</code>); P must be in your projects</td></tr>
 				<tr><td>PUT /me/spaces/{name}</td><td>xo update · xo sync</td><td>Replaces the space's projects and refs if it is still at <code>rev</code> holding <code>base</code>, else 409 "run xo sync"</td></tr>
 				<tr><td>GET /me/projects · /me/spaces</td><td>xo projects · xo list; <code>GET /me/projects</code> also for xo create project, xo install, update and sync project:P, and a plain P in xo connect and xo share</td><td>Reads either list, masked as <code>/me</code> is (refs shown as stored)</td></tr>
 				<tr><td>POST /me/share</td><td>xo share</td><td><code>{item, to}</code>: the caller's invite into user <code>to</code>'s <code>shared</code>, and nothing else of theirs; anything about the recipient is the same 404</td></tr>
@@ -2098,7 +2098,7 @@ html { scroll-behavior: smooth; }
 	</div>
 </section>
 
-<footer>Describes <code>quirq-ai/xo</code> main as of this change: through #45. Setup is in <code>docs/quickstart.md</code>; the server's settings in <code>docs/server.md</code>.</footer>
+<footer>Describes <code>quirq-ai/xo</code> main as of this change: through #47. Setup is in <code>docs/quickstart.md</code>; the server's settings in <code>docs/server.md</code>.</footer>
 </main>
 </body>
 </html>
