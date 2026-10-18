@@ -37,7 +37,7 @@ Every later XO API command, in any terminal, uses the saved key and sends it onl
 
 ### One address for everything
 
-XO API commands go to one address: your creates, `xo spaces`, `xo me` and `xo user-metadata` alike. The xo server answers `xo me` and `xo user-metadata` itself and passes the rest on to XO's platform (`dev.xo.builders`). To use another address, log in to it with `xo login --url https://...`. `XO_URL` or `--url` changes it for one terminal or one command, and the saved key is never sent to a different address than the one you logged in to.
+XO API commands go to one address: your creates, `xo spaces` and `xo me` alike (bare `xo spaces` lists the spaces linked to your account; `--space-id ID` asks XO for one). The xo server answers `xo me` itself and passes the rest on to XO's platform (`dev.xo.builders`). To use another address, log in to it with `xo login --url https://...`. `XO_URL` or `--url` changes it for one terminal or one command, and the saved key is never sent to a different address than the one you logged in to.
 
 ## 3. Check it works (creates nothing)
 
@@ -62,7 +62,7 @@ This prints the request xo would send, a notice that a real create copies your k
 Before you create anything, know these three things:
 - The API can't delete, list, start or stop spaces, and xo has no command for it (`xo list spaces` lists only the spaces xo recorded). A space you create stays, so create only one you mean to keep.
 - Every create except `nebius-openclaw` stores your XO API key inside the new space. xo prints a notice saying so as the request goes out; it does not pause or ask first. If the XO team can give you a second key, use that one for creates.
-- `xo spaces` prints URLs that carry a session token. Don't share them.
+- `xo spaces --space-id ID` prints URLs that carry a session token. Don't share them.
 
 ```sh
 xo create space my-first-space codex --volume-size 20

@@ -125,8 +125,15 @@ expect() {  # expect LABEL TEXT KEY -- xo arguments...
 }
 expect "a wrong key gets 401" "HTTP 401" ak_wrong_key_for_testing -- me
 expect "a key that is not a Clerk key gets 401" "HTTP 401" not-a-key -- me
-expect "your key cannot read metadata (no admin keys yet)" "HTTP 403" "$key" -- \
-  user-metadata get --user-id user_test
+# xo has no user-metadata command any more; the route is still the server's, so ask it directly.
+# printf is a shell builtin, so the key reaches curl on stdin, never on a command line.
+code="$(printf 'Authorization: Bearer %s\n' "$key" |
+  curl -s -o /dev/null -w '%{http_code}' --max-time 20 -H @- "$server/user-metadata/user_test")"
+if [ "$code" = 403 ]; then
+  pass "your key cannot read metadata (no admin keys yet)"
+else
+  fail "your key cannot read metadata (no admin keys yet): HTTP $code, not 403"
+fi
 key=""; with=""
 
 # 7. The Firewall rule: requests to /me with no key (each a 401 from the server, with no Clerk call)

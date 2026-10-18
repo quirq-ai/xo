@@ -450,11 +450,10 @@ def _no_secret(*texts: str) -> None:
 def test_the_cli_and_the_server_work_together(xo_server, monkeypatch, capfd):
     monkeypatch.setenv("XO_URL", xo_server.url)
     monkeypatch.setenv("XO_API_KEY", ADMIN_KEY)
-    assert cli.main(["user-metadata", "update", "--user-id", "user_suraj",
-                     "--public-metadata", '{"beta": true}']) == 0
-    out, err = capfd.readouterr()
-    _no_secret(out, err)
-    assert json.loads(out)["data"]["publicMetadata"]["beta"] is True
+    # xo has no user-metadata command now; the server's admin route stays, reached directly.
+    status, out = call(xo_server, "PATCH", "/user-metadata/user_suraj", ADMIN_KEY,
+                       body={"publicMetadata": {"beta": True}})
+    assert status == 200 and out["data"]["publicMetadata"]["beta"] is True
     monkeypatch.setenv("XO_API_KEY", USER_KEY)
     assert cli.main(["me"]) == 0
     out, err = capfd.readouterr()

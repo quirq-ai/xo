@@ -2,7 +2,7 @@
 
 The xo server serves the list at /config, without a key. It never holds keys, tokens or passwords:
 only an address and a line about each service. Names follow the commands: "xo" is XO's platform
-(the creates and xo spaces), and "me" is the xo server that answers `xo me` and `xo user-metadata`.
+(the creates and xo spaces), and "me" is the xo server that answers `xo me`.
 Every XO API command still goes to the xo server xo logged in to (the "me" address in xo's own copy
 is its default); the server passes creates on to the "xo" address. xo ships the same file
 (services.json), checks a served list exactly as it checks its own copy, and uses its own copy when

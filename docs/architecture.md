@@ -5,7 +5,7 @@ Vercel at `xo.quirq.dev` through `app.py`), which holds the Clerk Secret Key so 
 it. Standard library only. Setup is in [quickstart.md](quickstart.md); the server's settings in
 [server.md](server.md).
 
-This describes main as of this change: through #42.
+This describes main as of this change: through #45.
 Every command has its own sequence diagram in section 3. [architecture.html](architecture.html) is the same doc as a page with drawn diagrams;
 GitHub shows it as source, so open it locally or from a static host.
 
@@ -77,7 +77,7 @@ flowchart LR
 | `xo connect project:P space:S [--ref R]` | server only | set P in space S at R (default `main`) |
 | `xo connect project:P --repo URL` | server, then git | a project made with a name only gets its repo and is recorded as `OWNER/REPO` (refused while P is in a space); `./P` gets that origin only if it has none, and moves to `./REPO` only if its origin is that repo |
 | `xo connect space:S [--id ID]` | server, then XO | record a space entry; `--id` ties it to an XO space your key can read |
-| `xo list projects\|spaces\|shared` | server only | show your projects (a GitHub one as `{"name": "headscale", "owner": "juanfont"}`), your spaces, or the invites shared with you (each with an id) |
+| `xo list [projects\|spaces\|shared]` | server only | alone: your projects and spaces in one answer; else show your projects (a GitHub one as `{"name": "headscale", "owner": "juanfont"}`), your spaces, or the invites shared with you (each with an id) |
 | `xo spaces` | server only | the same as `xo list spaces`; with `--space-id ID` it is XO's `GET /spaces/{spaceId}` |
 | `xo share space:S\|project:P USERNAME` | server only | an invite in that user's `shared`: a space's name and GitHub projects, or one GitHub project |
 | `xo accept ID [--as NAME \| --space S [--ref R]] [--yes]` | server only | show the invite and ask, then add a shared space as your own (`--as` renames it), or a shared project to your space S at R |
@@ -85,14 +85,12 @@ flowchart LR
 | `xo install project:P\|space:S` | server, git | look P up, then clone, or fetch and fast-forward, it into `./REPO`; for a space, each project into `./S/` at its ref |
 | `xo update project:P\|space:S` | server, git | look P up, then push its checkout (never forced); for a space, push each branch, then record the refs under `./S/` |
 | `xo sync project:P\|space:S` | server, git | look P up, then `pull --rebase` and push its checkout; for a space, rebase and push each branch, merge refs, record |
-| `xo user-metadata get --user-id ID` | server only | admin keys only: both metadata buckets |
-| `xo user-metadata update --user-id ID --private-metadata JSON` | server only | admin keys only; deep merges into allow-listed keys (also `--public-metadata`) |
 | `xo login [xo\|me\|github]` | server, gh | reads `/config`, checks and saves the key, runs gh's login |
 | `xo logout`, `xo status` | local, gh | delete saved login; show each service |
 | `xo ops`, `xo call`, `xo api` | local / server | list operations; run one by id; send any request |
 | `xo serve` | local | run the server on 127.0.0.1:8787 |
 
-Each create row, and each endpoint row (`xo spaces`, `xo me`, `xo user-metadata`), runs as shown
+Each create row, and each endpoint row (`xo spaces --space-id ID`, `xo me`, and `xo spaces` alone), runs as shown
 with `--dry-run` added, which needs no key and sends nothing. XO lowercases space names, so
 `xo create space` lowercases NAME before sending it and says so when that changes it.
 
@@ -174,21 +172,9 @@ sequenceDiagram
 
 You see your own metadata, masked. Values under credential-like names, or that look like keys, show only their last 4 characters or `(hidden)`. `XO_ME_PRIVATE_KEYS` can narrow the private keys shown.
 
-#### `xo user-metadata get | update`
+#### `/user-metadata` (no xo command)
 
-```mermaid
-sequenceDiagram
-  participant Cli as You · xo CLI
-  participant Srv as xo server
-  participant Clerk as Clerk
-  Note over Cli: xo user-metadata: --api-key - (admin key)
-  Cli->>Srv: key / /user-metadata/(id): 20 a minute per key
-  Srv->>Clerk: verify / verify key: has claim xo_admin?
-  Clerk-->>Srv: claims / admin check: id in XO_ADMIN_KEY_IDS
-  Srv->>Clerk: if admin / GET or PATCH user: allow-listed keys only
-  Clerk-->>Srv: user / audit line: ids and key names only
-  Srv-->>Cli: answer / print answer: both buckets
-```
+xo has no command for it since `xo me` covers your own profile. The server's admin-only route stays as it was: `GET` and `PATCH /user-metadata/{userId}`, 20 a minute per key, a key with the `xo_admin` claim whose id is in `XO_ADMIN_KEY_IDS`, allow-listed keys only, one audit line per request.
 
 Admin needs two locks, and none is issued yet. Until a key has the claim and its id is listed, every caller gets 403. PATCH changes only top-level keys named in `XO_EDITABLE_*_KEYS`.
 

@@ -7,12 +7,12 @@ One package, two deployments:
   the only place that key exists.
 
 Every command goes to the server (`https://xo.quirq.dev`, `XO_URL`, or the address `xo login`
-saved). It answers `xo me` and `xo user-metadata` itself, and passes the creates and `xo spaces`
+saved). It answers `xo me` (and the admin-only `/user-metadata`, which has no xo command) itself, and passes the creates and `xo spaces --space-id ID`
 on to XO's core API, so the CLI needs one address.
 
 ```
 xo me ──────────────┐                      ┌── POST /v1/api_keys/verify
-xo user-metadata ───┤                      ├─ CLERK_SECRET_KEY ─► api.clerk.com
+/user-metadata ─────┤                      ├─ CLERK_SECRET_KEY ─► api.clerk.com
                     ├─ XO_API_KEY ─► xo serve └── GET /v1/users/{id}, PATCH /v1/users/{id}/metadata
 xo create space ────┘                      └── /api/core/v1/... ─ the caller's key ─► dev.xo.builders
 ```
@@ -420,8 +420,8 @@ No admin key is issued yet, and nothing in this repo makes one. Until a key has 
 and only `/me` is in use.
 
 When admin keys come, keep each one apart from the everyday `XO_API_KEY` (every create on
-XO's platform copies the caller's key into the new space), give it a 90-day expiry, and pass it to
-`xo user-metadata` with `--api-key -`.
+XO's platform copies the caller's key into the new space), give it a 90-day expiry. xo has no user-metadata command, so send it to `/user-metadata` yourself
+(`Authorization: Bearer`), never on a command line.
 
 TODO(suraj): how admin keys are issued, and whether creates on XO's platform should refuse them.
 

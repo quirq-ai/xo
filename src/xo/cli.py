@@ -19,8 +19,8 @@
                                             only the creates and GET /spaces/{id} pass; for the
                                             rest, add --url https://dev.xo.builders with
                                             $XO_API_KEY or --api-key - (not the saved key).
-    xo serve [--host H] [--port P]          run the xo server: it answers `xo me` and
-                                            `xo user-metadata` with the Clerk credentials it holds,
+    xo serve [--host H] [--port P]          run the xo server: it answers `xo me` (and the admin-only
+                                            /user-metadata route) with the Clerk credentials it holds,
                                             and passes the creates and GET /spaces/{id} on to XO's
                                             core API.
     xo login [xo|me|github] [--url URL]
@@ -49,8 +49,8 @@
                                             is recorded as OWNER/REPO and its folder becomes ./REPO.
     xo connect space:S [--id ID]            a new space entry S in your metadata; --id ties it to an
                                             XO space you already have.
-    xo list projects | spaces | shared      show your projects, your spaces, or the invites shared
-                                            with you.
+    xo list [projects | spaces | shared]    show your projects, your spaces, or the invites shared
+                                            with you; with nothing after it, your projects and spaces.
     xo spaces                               the spaces linked to your account (xo list spaces); with
                                             --space-id ID, XO's connection URLs for that space.
     xo share space:S|project:P USERNAME     invite that user to a copy of the space (its name and
@@ -479,6 +479,8 @@ def _objects(args: argparse.Namespace, body: dict) -> None:
 
 def _endpoint(args: argparse.Namespace) -> int:
     if _lists_spaces(args):
+        if args.dry_run:
+            return _send(_client(args, need_key=False, server=True), args, "GET", "/me/spaces", query={}, body=None)
         args.what = "spaces"
         return _list(args)
     client, op, path, query, headers, body = _request(args)
@@ -491,7 +493,7 @@ def _lists_spaces(args: argparse.Namespace) -> bool:
     op = args.op
     params, fields = commands.values(args)
     return (op.method == "GET" and op.path == "/spaces/{spaceId}" and not params and not fields
-            and getattr(args, "data", None) is None and not args.dry_run)
+            and getattr(args, "data", None) is None)
 
 
 def _request(args: argparse.Namespace, *, server: bool = False, preset: dict | None = None) -> tuple:
@@ -558,7 +560,7 @@ def _login(args: argparse.Namespace) -> int:
     platform = listed["xo"].url
     print(f"xo: services from the xo server at {url}:", file=sys.stderr)
     print(f"xo:   me     {url} (the xo server; your XO key is only sent here)", file=sys.stderr)
-    print(f"xo:   xo     {platform} (creates and xo spaces; your key reaches it through the xo server)",
+    print(f"xo:   xo     {platform} (creates and xo spaces --space-id; your key reaches it through the xo server)",
           file=sys.stderr)
     print(f"xo:   github https://{github.HOST} (gh's own login; xo never sees the token)", file=sys.stderr)
     for note in notes:
@@ -994,8 +996,14 @@ def _invite(args: argparse.Namespace) -> int:
 
 
 def _list(args: argparse.Namespace) -> int:
-    """`xo list projects | spaces | shared`: that list in your private metadata."""
+    """`xo list projects | spaces | shared`: that list in your private metadata. `xo list` alone: your
+    projects and your spaces, as {"projects": [...], "spaces": [...]}."""
     client = _client(args, server=True)
+    if args.what is None:
+        both = {what: _answer(client.request("GET", f"/me/{what}").data, what, f"a {what} list")
+                for what in ("projects", "spaces")}
+        print(client.scrub(_json({"projects": _shown_projects(both["projects"]), "spaces": both["spaces"]})))
+        return 0
     found = _answer(client.request("GET", f"/me/{args.what}").data, args.what, f"a {args.what} list")
     print(client.scrub(_json(_shown_projects(found) if args.what == "projects" else found)))
     return 0
@@ -1167,6 +1175,7 @@ def _endpoints(sub: argparse._SubParsersAction, common: argparse.ArgumentParser,
             ops = spec.operations(local)
             creates = [op for op in ops if _is_create(op)]
             commands.register(sub, [op for op in ops if op not in creates], [common], _add_send, _endpoint)
+            _spaces_help(sub, ops)
             for op in creates:  # `xo KIND` itself is gone: main() says what replaced it
                 kind = op.path.strip("/")
                 if space_kinds is not None:
@@ -1183,10 +1192,25 @@ def _endpoints(sub: argparse._SubParsersAction, common: argparse.ArgumentParser,
             sys.exit(1)
 
 
+def _spaces_help(sub: argparse._SubParsersAction, ops: list) -> None:
+    """`xo spaces --help` says what the command does with no --space-id too (see _lists_spaces)."""
+    p = sub.choices.get("spaces")
+    if p is None or not any(op.method == "GET" and op.path == "/spaces/{spaceId}" for op in ops):
+        return
+    p.description = ("With nothing after it: the spaces linked to your account, as xo list spaces shows them. "
+                     "With --space-id ID: " + (p.description or ""))
+    for action in p._actions:
+        if action.option_strings == ["--space-id"] and action.help:
+            action.help = action.help.replace(" (required)", " (leave it out to list your spaces)")
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if _command_word(argv) in names.SPACE_KINDS:  # nothing is parsed or sent, so no value is echoed
         print(f"xo: {_moved(_command_word(argv))}", file=sys.stderr)
+        return 1
+    if _command_word(argv) == "user-metadata":
+        print("xo: xo user-metadata is gone; xo me shows your own profile and metadata", file=sys.stderr)
         return 1
     _Parser.argv = argv
     _Parser.flags = set()
@@ -1305,8 +1329,9 @@ def main(argv: list[str] | None = None) -> int:
             iv.add_argument("--ref", metavar="REF", help="the shared project's branch, tag or sha (default main)")
             iv.add_argument("--yes", action="store_true", help="accept without asking")
         iv.set_defaults(run=_invite)
-    ls = sub.add_parser("list", parents=[common], help="show your projects, your spaces or the invites shared with you")
-    ls.add_argument("what", choices=("projects", "spaces", "shared"))
+    ls = sub.add_parser("list", parents=[common], help="show your projects and spaces, or one of them, or the invites "
+                                                       "shared with you")
+    ls.add_argument("what", nargs="?", choices=("projects", "spaces", "shared"))
     ls.set_defaults(run=_list)
 
     _endpoints(sub, common, argv, space_kinds)

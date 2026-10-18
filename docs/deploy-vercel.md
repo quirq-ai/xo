@@ -8,7 +8,7 @@ this repo deploys it, and the steps below are yours, followed by the test script
 
 Use **development** credentials only (`sk_test_...`) until the test passes and the production gate
 at the end is passed. Until then, `xo.quirq.dev` answers `xo me` with 401 to real XO keys, although
-`xo` already uses it by default; the creates and `xo spaces` work, since XO checks those keys
+`xo` already uses it by default; the creates and `xo spaces --space-id ID` work, since XO checks those keys
 itself. The Secret Key and the API key you test with must come from the same
 Clerk instance: a key from another instance is refused as "Invalid API key".
 
@@ -125,10 +125,10 @@ checks:
 | `/healthz` | `ok` |
 | your key's format | `ak_`, then letters, digits and `_ . - + / =` only (checked without showing it; anything else stops the script before the key is sent) |
 | `xo me` with your key | your profile under `xo`: `id`, `username`, `firstName`, `lastName`, `imageUrl`, `createdAt`, `email`, `public_data`, `private_data`, nothing else |
-| `xo spaces` with a made-up key | XO's 401 (or its 404 "Space not found"), passed back by the server; your key is not used. A bare "Not found" means the deployment is older than the forwarding |
+| `xo spaces --space-id ID` with a made-up key | XO's 401 (or its 404 "Space not found"), passed back by the server; your key is not used. A bare "Not found" means the deployment is older than the forwarding |
 | a wrong `ak_` key | 401 |
 | a string that is not a Clerk key | 401, without a call to Clerk |
-| `xo user-metadata get` with your key | 403 (no admin keys yet) |
+| `/user-metadata/user_test` with your key | 403 (no admin keys yet) |
 | up to 130 requests to `/me` with no key | refused (429, or 403 for a Deny rule) after about 60, or up to 120 if the rule's minute ends mid-burst; any other answer is a FAIL. This holds your address back for up to a minute |
 | then one request to `/api/core/v1/spaces/0000…` with no key | 429 or 403: the same rule covers `/api/core`. A 401 means the `/api/core` condition is missing or not published. This assumes Vercel counts one rule's paths together for an address, which has not been checked against Vercel |
 
