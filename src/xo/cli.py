@@ -103,6 +103,7 @@ import json
 import math
 import os
 import re
+import shlex
 import sys
 from pathlib import Path
 from typing import Any, NoReturn
@@ -849,8 +850,7 @@ def _connect(args: argparse.Namespace) -> int:
         except XoError as e:
             if "You have no space named" not in str(e):
                 raise
-            raise XoError(f"{e}; make it with xo connect space:{space} (an entry only) or xo create space "
-                          f"{space} [KIND]") from None
+            raise XoError(f"{e}; {_make_space_hint(space)}") from None
     elif kind == "space":
         if second is not None or args.ref is not None or args.repo is not None:
             raise XoError("make a space entry with: xo connect SPACE [--id XO_SPACE_ID]")
@@ -895,7 +895,7 @@ def _connect_kinds(args: argparse.Namespace, client: Client, name: str) -> tuple
         return "project", name, second, None
     if second is None and not names.space_ok(name):
         if names.project_ok(name):
-            raise XoError(f"{name} looks like a project: put it in a space with xo connect {name} SPACE")
+            raise XoError(f"{name} looks like a project: put it in a space with xo connect {shlex.quote(name)} SPACE")
         return "space", name, None, None  # _connect refuses the name before anything is sent
     projects = _answer(client.request("GET", "/me/projects").data, "projects", "a projects list")
     if not isinstance(projects, list) or not all(isinstance(p, str) for p in projects):
@@ -908,8 +908,8 @@ def _connect_kinds(args: argparse.Namespace, client: Client, name: str) -> tuple
             name, second = _which_order(client, name, second)
         return "project", name, second, projects
     if names.named(projects, name):
-        raise XoError(f"{name} is one of your projects: put it in a space with xo connect {name} SPACE, or "
-                      f"make a space entry of that name with xo connect space:{name}")
+        raise XoError(f"{name} is one of your projects: put it in a space with xo connect {shlex.quote(name)} SPACE, "
+                      f"or make a space entry of that name with xo connect space:{name}")
     return "space", name, None, projects
 
 
@@ -923,8 +923,21 @@ def _which_order(client: Client, a: str, b: str) -> tuple[str, str]:
     fits = [(p, sp) for p, sp in ((a, b), (b, a)) if sp.casefold() in have]
     if len(fits) == 1:
         return fits[0]
-    which = "both spaces" if fits else "neither is a space"
-    raise XoError(f"{a} and {b} are both your projects and {which}: say which with xo connect project:P space:S")
+    if fits:
+        raise XoError(f"{a} and {b} are both your projects and both spaces: say which with xo connect "
+                      f"project:P space:S")
+    raise XoError(f"{a} and {b} are both your projects and neither is a space: make the space first with xo "
+                  f"connect space:NAME, then xo connect PROJECT NAME")
+
+
+def _make_space_hint(space: str) -> str:
+    """How to make a space that is not in your spaces yet. xo connect space:S always can; xo create
+    space S only for a name it takes (no kind word, new or create, and no ./S here)."""
+    hint = f"make it with xo connect space:{space} (an entry only)"
+    name = space.lower()
+    if name in names.SPACE_KINDS or name in ("new", "create") or os.path.lexists(name):
+        return hint
+    return hint + f" or xo create space {name} [KIND]"
 
 
 def _which(client: Client, typed: str, projects: list | None = None) -> str:

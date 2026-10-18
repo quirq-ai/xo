@@ -5,7 +5,7 @@ Vercel at `xo.quirq.dev` through `app.py`), which holds the Clerk Secret Key so 
 it. Standard library only. Setup is in [quickstart.md](quickstart.md); the server's settings in
 [server.md](server.md).
 
-This describes main as of this change: through #47.
+This describes main as of this change: through #48.
 Every command has its own sequence diagram in section 3. [architecture.html](architecture.html) is the same doc as a page with drawn diagrams;
 GitHub shows it as source, so open it locally or from a static host.
 
@@ -656,7 +656,7 @@ sequenceDiagram
 | `POST /me/spaces/connect` | `xo connect S [--id]`, `xo create space NAME` (no KIND) | new entry; with an id, only after XO confirms your key can read it |
 | `POST /me/spaces/{name}/projects` | `xo connect P S` | set one project's ref |
 | `PUT /me/spaces/{name}` | `xo update`, `xo sync` | replace projects and refs if the space is still at `rev` holding `base`, else 409 "run xo sync" |
-| `GET /me/projects`, `GET /me/spaces` | `xo projects`, `xo list`; `GET /me/projects` also for `xo create project`, `xo install`, `xo update` and `xo sync project:P`, a plain P in `xo share`, and any bare name in `xo connect` but `NAME --repo`; `GET /me/spaces` also for `xo connect` when both names are your projects | read, masked as `/me` is (refs shown as stored) |
+| `GET /me/projects`, `GET /me/spaces` | `xo projects`, `xo list`; `GET /me/projects` also for `xo create project`, `xo install`, `xo update` and `xo sync project:P`, a plain P in `xo share`, and bare names in `xo connect` (not `NAME --repo`, a bare name next to a prefixed one, or a project-shaped name alone, which send none); `GET /me/spaces` also for `xo connect` when both names are your projects | read, masked as `/me` is (refs shown as stored) |
 | `POST /me/share` | `xo share` | `{item, to}`: the caller's invite into user `to`'s `shared`, and nothing else of theirs; anything about the recipient is the same 404 |
 | `GET /me/shared` | `xo list shared`, `xo accept` | the caller's invites, each with an id and its sender's username now |
 | `POST /me/shared/accept` | `xo accept` | `{id, as?}` or `{id, space, ref?}`: one write of `spaces`, `projects` and `shared` (the invite off) |
