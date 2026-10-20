@@ -2306,6 +2306,9 @@ def browser(login, monkeypatch):
     monkeypatch.setattr(weblogin.webbrowser, "open", open_link)
     monkeypatch.setattr(weblogin, "_can_open", lambda: True)
     login.typed("")  # nothing to type: a key prompt would fail the login
+    import sys
+    login.tty = lambda: monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    login.tty()  # someone at a terminal: a key piped in is read instead (its own test)
     return login
 
 
@@ -2368,10 +2371,47 @@ def test_browser_login_says_when_every_port_is_busy(browser, capsys, config_home
 
 
 def test_a_sign_in_for_another_state_is_ignored(browser, capsys):
-    browser.answer = lambda q: [{"code": "stolen", "state": "not-" + q["state"]}, {"code": "code_1", "state": q["state"]}]
+    browser.answer = lambda q: [{"code": "stolen", "state": "not-" + q["state"]}, {"code": "no_state"},
+                                {"code": "empty", "state": ""}, {"code": "code_1", "state": q["state"]}]
     assert run(capsys, "login", "xo")[0] == 0
     assert [r["body"]["code"] for r in browser.requests if r["path"] == "/login/browser"] == ["code_1"]
-    assert [status for status, _ in browser.pages] == [400, 200]
+    assert [status for status, _ in browser.pages] == [400, 400, 400, 200]
+
+
+def test_the_loopback_listener_is_on_127_0_0_1_only():
+    from xo import weblogin
+    ports = _free_ports(1)
+    httpd, redirect, _ = weblogin._listen([f"http://127.0.0.1:{ports[0]}/callback"])
+    try:  # bound to loopback itself, not to every address (0.0.0.0) of this machine
+        assert httpd.socket.getsockname() == ("127.0.0.1", ports[0]) and redirect.endswith(f":{ports[0]}/callback")
+    finally:
+        httpd.server_close()
+
+
+def test_a_connection_that_sends_nothing_does_not_hold_the_sign_in(browser, capsys, monkeypatch):
+    import socket
+    from xo import weblogin
+    monkeypatch.setattr(weblogin, "READ_TIMEOUT", 1)
+    idle = []
+    first = browser.answer
+
+    def answer(q):  # a browser's spare connection, opened before the real one and never used
+        idle.append(socket.create_connection(("127.0.0.1", int(q["redirect_uri"].rsplit(":", 1)[1].split("/")[0]))))
+        return first(q)
+    browser.answer = answer
+    try:
+        assert run(capsys, "login", "xo")[0] == 0
+    finally:
+        for s in idle:
+            s.close()
+    assert [status for status, _ in browser.pages] == [200]
+
+
+def test_a_piped_key_is_read_even_when_the_server_has_browser_login(browser, capsys, config_home):
+    browser.typed()  # printf KEY | xo login: stdin is not a terminal
+    code, _, err = run(capsys, "login", "xo")
+    assert code == 0 and browser.opened == [] and not any(r["path"] == "/login" for r in browser.requests)
+    assert json.loads((config_home / "xo" / "credentials").read_text())["key"] == KEY
 
 
 def test_a_sign_in_that_was_not_finished_saves_nothing(browser, capsys, config_home):
@@ -2438,6 +2478,12 @@ def test_browser_login_says_when_it_got_the_key_you_already_had(browser, capsys,
     code, _, err = run(capsys, "login", "xo")
     assert code == 0 and "the key your account already has and URL saved to" in err and BROWSER_KEY not in err
     assert json.loads((config_home / "xo" / "credentials").read_text())["key"] == BROWSER_KEY
+    browser.route("POST", "/login/browser", body={"success": True, "data": {"key": BROWSER_KEY, "days": 29,
+                                                                            "reused": True}})
+    (config_home / "xo" / "credentials").unlink()
+    browser.tty()
+    code, _, err = run(capsys, "login", "xo")
+    assert code == 0 and "the key your account already has (it works 29 more days) and URL saved to" in err
 
 
 def test_no_browser_is_opened_on_linux_without_a_display(monkeypatch):
@@ -2451,3 +2497,13 @@ def test_no_browser_is_opened_on_linux_without_a_display(monkeypatch):
     monkeypatch.setattr(weblogin.sys, "platform", "darwin")
     monkeypatch.delenv("DISPLAY")
     assert weblogin._can_open() is True
+
+
+def test_with_no_browser_here_xo_says_how_to_sign_in_over_ssh(browser, capsys, monkeypatch, config_home):
+    from xo import weblogin
+    monkeypatch.setattr(weblogin, "_can_open", lambda: False)
+    monkeypatch.setattr(weblogin, "WAIT", 1)
+    code, _, err = run(capsys, "login", "xo")
+    port = browser.settings["redirects"][0].rsplit(":", 1)[1].split("/")[0]
+    assert code == 1 and browser.opened == [] and f"ssh -L {port}:127.0.0.1:{port}" in err and "--key" in err
+    assert not (config_home / "xo" / "credentials").exists()

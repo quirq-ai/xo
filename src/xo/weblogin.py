@@ -2,8 +2,9 @@
 
 The xo server says where Clerk's sign-in is (GET /login). xo opens it with a one-time verifier's
 hash; once you sign in, Clerk sends the browser back to 127.0.0.1 here with a code, and xo hands the
-code and the verifier to the xo server (POST /login/browser), which swaps them with Clerk and makes
-your account a new API key. Nothing is sent anywhere but the xo server; the browser talks to Clerk.
+code and the verifier to the xo server (POST /login/browser), which swaps them with Clerk and hands
+back the key xo made for your account before, or a new one. Nothing is sent anywhere but the xo
+server; the browser talks to Clerk.
 """
 from __future__ import annotations
 
@@ -24,6 +25,10 @@ from typing import Any
 from xo.client import LOCAL_HOSTS, Client, XoError
 
 WAIT = 300  # seconds xo waits for the browser to come back
+# Seconds one connection to the loopback address may take to send its request. Browsers open
+# spare connections they may never use; without this, one such connection (or any local
+# program's) would hold the one-request-at-a-time listener, and WAIT, forever.
+READ_TIMEOUT = 10
 REDIRECT = re.compile(r"http://127\.0\.0\.1:([0-9]{4,5})/callback")
 CLIENT_ID = re.compile(r"[A-Za-z0-9_-]{1,100}")
 PAGE = ("<!doctype html><meta charset=utf-8><title>xo login</title>"
@@ -65,13 +70,16 @@ def _listen(redirects: list[str]) -> tuple[HTTPServer, str, dict]:
     caught: dict[str, Any] = {}
 
     class Handler(BaseHTTPRequestHandler):
+        timeout = READ_TIMEOUT
+
         def do_GET(self) -> None:  # noqa: N802 - http.server's name
             path, _, query = self.path.partition("?")
             if path != "/callback":
                 self._page(404, "Not the xo login address.")
                 return
             got = urllib.parse.parse_qs(query)
-            if got.get("state", [None])[0] != caught["state"]:
+            state = got.get("state", [""])[0].encode()
+            if not secrets.compare_digest(state, caught["state"].encode()):
                 # Not this login's answer (an old tab, or someone else's link): ignored, still waiting.
                 self._page(400, "This sign-in is not the one xo is waiting for. Go back to the terminal.")
                 return
@@ -109,7 +117,7 @@ def _listen(redirects: list[str]) -> tuple[HTTPServer, str, dict]:
 
 def _can_open() -> bool:
     """Whether to open the link here: not on a Linux machine with no display (over SSH, say), where
-    Python would pick a text browser that takes over this terminal; the printed link is enough."""
+    Python would pick a text browser that takes over this terminal; the link is printed instead."""
     return not sys.platform.startswith("linux") or bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
 
 
@@ -135,6 +143,12 @@ def login(url: str, found: dict, timeout: float, wait: float | None = None) -> t
                 webbrowser.open(link)
             except Exception:  # noqa: BLE001 - the link is printed; opening it is a convenience
                 pass
+        else:
+            # The browser comes back to 127.0.0.1 on the machine it runs on, which over SSH is not this one.
+            port = REDIRECT.fullmatch(redirect).group(1)
+            print(f"xo: no browser here. Open the link on this machine, or, over SSH, reconnect with "
+                  f"ssh -L {port}:127.0.0.1:{port} first; or log in with an API key (xo login --key)",
+                  file=sys.stderr, flush=True)
         print(f"xo: waiting for the sign-in (up to {round(wait / 60)} minutes; Ctrl-C stops)", file=sys.stderr,
               flush=True)
         deadline = time.monotonic() + wait
@@ -153,5 +167,6 @@ def login(url: str, found: dict, timeout: float, wait: float | None = None) -> t
     if not isinstance(key, str) or not key.startswith("ak_"):
         raise XoError(f"the xo server at {url} did not answer with an API key; nothing saved")
     if made.get("reused") is True:
-        return key, "the key your account already has"
+        return key, "the key your account already has" + (
+            f" (it works {days} more days)" if isinstance(days, int) and days > 0 else "")
     return key, "a new key" + (f" that works for {days} days" if isinstance(days, int) and days > 0 else "")

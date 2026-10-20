@@ -33,8 +33,10 @@ xo logout         # deletes your XO key; logs gh out (asks first)
 - **me / xo:** if a key you saved before still works, it says "already logged in" and doesn't ask.
   Otherwise, when the xo server has browser login set up, xo prints a link and opens it: sign in
   to XO in your browser, and the browser comes back to xo on this machine (`127.0.0.1`). The xo
-  server then sends xo your account's key: one you already have, or a new one that works for 90
-  days. Without browser login, or with `xo login --key`, paste your XO API key at the prompt
+  server then sends xo your account's key: the one browser login made you before, or a new one
+  that works for 90 days. Over SSH the browser cannot come back to the remote machine: connect
+  with `ssh -L 8976:127.0.0.1:8976` (the port xo prints), or use `xo login --key`. Without browser
+  login, with `xo login --key`, or with a key piped in, paste your XO API key at the prompt
   (nothing shows while you type).
 - **github:** xo asks GitHub who gh is logged in as. If that works, it says "already connected".
   Otherwise it runs `gh auth login` for github.com, which opens your browser; then it checks again.

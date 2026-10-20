@@ -99,18 +99,22 @@ for it), and the CLI does the OAuth authorization code flow with PKCE.
 3. The CLI sends `POST /login/browser` `{"code", "verifier", "redirect", "name"}`. The server swaps
    them at Clerk's `/oauth/token` (with the client id, no secret), reads `sub` from `/oauth/userinfo`
    (a `user_...` id or nothing), and drops the access token.
-4. With the Secret Key it lists that user's API keys and answers one they already have: still
-   working, theirs, and with no claims, so never an admin key; one browser login made first (its
-   description is `made by xo login in a browser`), then the newest. If there is none, or Clerk will
+4. With the Secret Key it lists that user's API keys and answers the newest one browser login
+   made before (its description is `made by xo login in a browser`) that is theirs, still working
+   with a week or more left, and has no claims or scopes (so never an admin key) and is not in
+   `XO_ADMIN_KEY_IDS`. A key made any other way is never read back. If there is none, or Clerk will
    not give its secret back, it makes one: named by the CLI (`xo CLI on HOST`), no claims, expiring
-   after 90 days. A key is revoked in the Clerk dashboard (API keys).
+   after 90 days; at most 5 a day per account, revoked ones included. If Clerk cannot list the
+   keys, it makes none. A key is revoked in the Clerk dashboard (API keys).
 5. The key is in that one answer only; it is never stored, logged or put in the audit line, which
    names the key id, the user and whether it was reused. The CLI checks it with XO and saves it like
    a pasted key.
 
 A code works once and only with the verifier the CLI kept, and the redirect is always this
 machine's own loopback, so a sign-in link someone else sends you gives them nothing. Swaps are
-capped at 2 a second for the whole process, on top of the Clerk budget. The key only works with
+capped at 2 a second for the whole process, on top of the Clerk budget; on Vercel that is per
+instance, so docs/deploy-vercel.md step 6 also caps `/login` per address. A key piped in on stdin
+(`printf KEY | xo login`) is read as before, without a browser. The key only works with
 XO's platform if XO checks keys with the same Clerk instance this server's Secret Key belongs to.
 
 ## The status page

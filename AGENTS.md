@@ -3,8 +3,8 @@
 Read `README.md` first.
 
 - Every change is a pull request against `main`. It lands only with the `presubmit` check green.
-- `src/xo/client.py` is the only CLI code that talks to the network, and `Clerk` in
-  `src/xo/server.py` the only server code. Keep it that way.
+- `src/xo/client.py` is the only CLI code that talks to the network, and `Clerk` and
+  `ClerkFrontend` in `src/xo/server.py` the only server code. Keep it that way.
 - The server runs on Vercel (`xo.quirq.dev`) through the root `app.py` (Python pinned in
   `.python-version`); keep it a thin wrapper of `xo.server.wsgi_app()`, and keep
   `docs/deploy-vercel.md` and `docs/test-xo-server.sh` true. Once the Vercel project exists, every

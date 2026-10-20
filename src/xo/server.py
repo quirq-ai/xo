@@ -12,9 +12,10 @@ verifies it with Clerk and answers:
     GET   /login                    no key, no Clerk call: how to log in in a browser ({"browser": null}
                                     unless XO_OAUTH_CLIENT_ID and XO_CLERK_FRONTEND_URL are both set)
     POST  /login/browser            no key: {"code", "verifier", "redirect", "name"?} from Clerk's sign-in
-                                    (OAuth, PKCE): the server swaps the code with Clerk, and makes the
-                                    signed-in user's API key: one it already has (no claims, still
-                                    working), else a new one; never stored or logged
+                                    (OAuth, PKCE): the server swaps the code with Clerk, and answers the
+                                    signed-in user's API key: one browser login made before (no claims
+                                    or scopes, a week or more left), else a new one; never stored or
+                                    logged
     GET   /me                       any user key: the key's own account, with its primary email and
                                     its public and private metadata (secret-looking values masked)
     GET   /me/projects              any user key: the `projects` list in its own private metadata
@@ -177,10 +178,14 @@ CLIENT_ID = re.compile(r"[A-Za-z0-9_-]{1,100}")
 # RFC 6749 and 7636: a code is opaque (kept to URL-safe characters here), a verifier 43 to 128 of these.
 LOGIN_CODE = re.compile(r"[A-Za-z0-9._~-]{1,512}")
 LOGIN_VERIFIER = re.compile(r"[A-Za-z0-9._~-]{43,128}")
-LOGIN_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ._-]{0,39}")
+# Clerk wants a key name of 3 or more characters with no space at either end.
+LOGIN_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ._-]{1,38}[A-Za-z0-9._-]")
 # A key made by browser login stops working after this; xo login makes a new one.
 LOGIN_KEY_DAYS = 90
 LOGIN_KEY_NOTE = "made by xo login in a browser"  # the description of the keys it makes
+# Only a key browser login made is handed back, and only with at least this long left.
+LOGIN_KEY_MIN_DAYS = 7
+LOGIN_KEYS_PER_DAY = 5  # new keys browser login makes one account in a day (Clerk bills each one)
 LOGIN_PER_SECOND = 2  # browser logins swapped at once for the whole process
 # The creates `xo create space NAME KIND` may record: the core routes that make a space.
 SPACE_KINDS = names.SPACE_KINDS
@@ -264,6 +269,12 @@ def _browser_login() -> tuple[str | None, str | None]:
     else:
         try:
             frontend = _upstream(FRONTEND_ENV, frontend)
+            parts = urllib.parse.urlsplit(frontend)
+            # Only the address itself: a path (a dashboard page copied by mistake), a query or a
+            # user would make a sign-in link that goes nowhere, or one the CLI refuses outright.
+            if parts.path or parts.query or parts.fragment or "@" in parts.netloc:
+                why = (f"{FRONTEND_ENV} must be only the Frontend API URL, such as "
+                       "https://clerk.example.com, with nothing after the host")
         except XoError as e:
             why = str(e)
     if why:
@@ -311,7 +322,7 @@ class _Bucket:
 
 
 class Clerk:
-    """The only code in the server that talks to the network: Clerk's Backend API."""
+    """Clerk's Backend API: with `ClerkFrontend`, the only code in the server that talks to the network."""
 
     def __init__(self, cfg: Config, clock=time.monotonic) -> None:
         self._cfg = cfg
@@ -372,8 +383,10 @@ class Clerk:
         return self._call("PATCH", "/users/" + urllib.parse.quote(user_id, safe="") + "/metadata", body)
 
     def user_keys(self, user_id: str) -> list:
-        """The user's API keys that still work (Clerk leaves out revoked and expired ones)."""
-        out = self._call("GET", "/api_keys?" + urllib.parse.urlencode({"subject": user_id, "limit": 100}), shape=object)
+        """The user's newest 100 API keys, revoked and expired ones too (so the ones browser login
+        made today can be counted, whatever became of them); newest first."""
+        out = self._call("GET", "/api_keys?" + urllib.parse.urlencode(
+            {"subject": user_id, "include_invalid": "true", "limit": 100}), shape=object)
         keys = out.get("data") if isinstance(out, dict) else out
         if not isinstance(keys, list):
             raise ClerkError(502, "not a list", seen="not a list")
@@ -732,6 +745,20 @@ def _space_projects(entry: dict) -> list:
     return projects if isinstance(projects, list) else []
 
 
+def _number(value: Any) -> float:
+    """A Clerk timestamp (milliseconds), or 0 when it is not a number."""
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else 0
+
+
+def _days_left(key: dict, now_ms: float) -> float:
+    """Days until a Clerk API key expires: infinity for one that never does (expiration null), and
+    -1 when Clerk did not say, so such a key is never handed back."""
+    if "expiration" in key and key["expiration"] is None:
+        return float("inf")
+    expiration = _number(key.get("expiration"))
+    return (expiration - now_ms) / 86_400_000 if expiration else -1
+
+
 class App:
     """Routing, auth, limits and audit, apart from the HTTP plumbing so tests can drive it."""
 
@@ -954,29 +981,54 @@ class App:
         if redirect not in LOGIN_REDIRECTS:
             raise _Reply(400, "redirect must be one of " + ", ".join(LOGIN_REDIRECTS))
         if not (isinstance(name, str) and LOGIN_NAME.fullmatch(name)):
-            raise _Reply(400, "name must be up to 40 letters, digits, spaces and . _ -, starting with a letter or digit")
+            raise _Reply(400, "name must be 3 to 40 letters, digits, spaces and . _ -, starting with a letter or "
+                              "digit and not ending in a space")
         try:
             user_id = self.frontend.user_id(code, verifier, redirect)
         except ClerkError as e:
-            if e is BUSY:
+            if e is BUSY or e.status == 429:
                 reply = _Reply(429, "Too many logins at once; try again in a few seconds", e.seen)
+            elif e.code in ("invalid_client", "unauthorized_client"):
+                # Not the user's fault: the OAuth application is not this instance's, or not public.
+                print(f"xo serve: Clerk refused the OAuth application in {CLIENT_ID_ENV} ({e.status}, {e.code}); "
+                      "check that it belongs to this Clerk instance and that Public is on", file=sys.stderr,
+                      flush=True)
+                reply = _Reply(502, "Browser login is not set up right on this server; log in with an API key "
+                                    "(xo login --key)", e.seen)
             elif e.status in (400, 401):  # invalid_grant: expired, used, or not this verifier
                 reply = _Reply(401, "The sign-in did not work (it expired or was already used); run xo login again",
                                e.seen)
             else:
                 reply = _Reply(502, "Clerk's sign-in did not answer", e.seen)
             self.audit(method="POST", route="/login/browser", keyId=None, caller=None, target=None,
+                       outcome=reply.status, clerk=e.seen, oauthError=e.code or None)
+            raise reply from None
+        try:
+            keys = self.clerk.user_keys(user_id)
+            old = self._old_key(user_id, keys)
+        except ClerkError as e:
+            # Not knowing which keys the user has is not the same as having none: make nothing.
+            reply = _clerk_failure(e)
+            self.audit(method="POST", route="/login/browser", keyId=None, caller=None, target=user_id,
                        outcome=reply.status, clerk=e.seen)
             raise reply from None
-        old = self._old_key(user_id)
         if old is not None:
             self.audit(method="POST", route="/login/browser", keyId=old[0], caller=None, target=user_id, outcome=200,
                        reused=True)
-            return {"key": old[1], "days": None, "reused": True}
+            return {"key": old[1], "days": old[2], "reused": True}
+        since = time.time() * 1000 - 86_400_000
+        today = sum(1 for k in keys if isinstance(k, dict) and k.get("description") == LOGIN_KEY_NOTE
+                    and _number(k.get("created_at")) > since)
+        if today >= LOGIN_KEYS_PER_DAY:
+            self.audit(method="POST", route="/login/browser", keyId=None, caller=None, target=user_id, outcome=429,
+                       reused=False)
+            raise _Reply(429, f"Browser login made this account {today} keys in the last day, the most it makes; "
+                              "revoked ones count too. Try again tomorrow, or log in with a key (xo login --key)")
         try:
             made = self.clerk.create_key(user_id, name)
         except ClerkError as e:
-            if 400 <= e.status < 500 and e.status not in (401, 403, 429):
+            # The list just worked with the same Secret Key, so a 403 here is about API keys, not it.
+            if 400 <= e.status < 500 and e.status not in (401, 429):
                 print(f"xo serve: Clerk would not make an API key ({e.status}{f', {e.code}' if e.code else ''}); "
                       "check that API keys are turned on for this Clerk instance", file=sys.stderr, flush=True)
                 reply = _Reply(502, "Clerk would not make an API key for this account", e.seen)
@@ -994,26 +1046,32 @@ class App:
                    caller=None, target=user_id, outcome=200, reused=False)
         return {"key": secret, "days": LOGIN_KEY_DAYS, "reused": False}
 
-    def _old_key(self, user_id: str) -> tuple[str, str] | None:
-        """A key the user already has, as (id, secret), so browser login makes a new one only when
-        there is none: one that still works, is this user's, and carries no claims (so never an admin
-        key), a key xo login made first, then the newest. None when there is none, or Clerk will not
-        read its secret back, in which case a new one is made."""
-        try:
-            keys = self.clerk.user_keys(user_id)
-        except ClerkError:
-            return None
-        usable = [k for k in keys if isinstance(k, dict) and isinstance(k.get("id"), str) and k.get("subject") == user_id
-                  and k.get("revoked") is False and k.get("expired") is False and not k.get("claims")]
+    def _old_key(self, user_id: str, keys: list) -> tuple[str, str, int | None] | None:
+        """A key browser login already made this user, as (id, secret, whole days left), so it makes
+        a new one only when there is none. Only such a key: never one the user or anyone else made
+        for another use (its secret stays where it was shown once), never one with claims or scopes
+        (so never an admin key), nor one in $XO_ADMIN_KEY_IDS, and only with LOGIN_KEY_MIN_DAYS or
+        more left; the newest. None when there is none, or Clerk will not read its secret back
+        (4xx), in which case a new one is made; any other failure is raised, so nothing is made."""
+        now = time.time() * 1000
+        usable = [k for k in keys if isinstance(k, dict) and isinstance(k.get("id"), str)
+                  and k["id"] not in self.cfg.admin_ids and k.get("subject") == user_id
+                  and k.get("description") == LOGIN_KEY_NOTE and k.get("revoked") is False
+                  and k.get("expired") is False and not k.get("claims") and not k.get("scopes")
+                  and _days_left(k, now) >= LOGIN_KEY_MIN_DAYS]
         if not usable:
             return None
-        newest = lambda k: k.get("created_at") if isinstance(k.get("created_at"), int) else 0  # noqa: E731
-        key = max(usable, key=lambda k: (k.get("description") == LOGIN_KEY_NOTE, newest(k)))
+        key = max(usable, key=lambda k: _number(k.get("created_at")))
         try:
             secret = self.clerk.key_secret(key["id"])
-        except ClerkError:
+        except ClerkError as e:
+            if e is not BUSY and 400 <= e.status < 500 and e.status not in (401, 429):
+                return None  # Clerk will not read this key's secret back: a new key it is
+            raise
+        if not (isinstance(secret, str) and API_KEY.fullmatch(secret)):
             return None
-        return (key["id"], secret) if isinstance(secret, str) and API_KEY.fullmatch(secret) else None
+        days = _days_left(key, now)
+        return key["id"], secret, int(days) if days != float("inf") else None
 
     def _forward(self, method: str, path: str, headers: dict[str, str], body: bytes | None) -> Any:
         """Pass a core API request on to XO: only the routes in CORE_ROUTES, only with something

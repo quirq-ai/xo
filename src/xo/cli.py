@@ -29,9 +29,9 @@
                                             named): me (the xo server) and xo take your API key, unless
                                             a saved key still works. When the xo server has browser
                                             login, you sign in to XO in your browser and the server
-                                            sends your key; otherwise, or with --key, it is asked for
-                                            without showing it. github runs gh auth login for
-                                            github.com, unless gh is already connected.
+                                            sends your key; otherwise, with --key, or with a key piped
+                                            in, it is asked for without showing it. github runs gh auth
+                                            login for github.com, unless gh is already connected.
     xo status                               each service, its address, and whether you are logged in.
     xo projects [add NAME]                  show the projects list in your private metadata, or add
                                             NAME to it. The xo server makes the change and writes only
@@ -617,7 +617,8 @@ def _login_xo(args: argparse.Namespace, url: str, saved: Login | None) -> str:
         if _key_works(args.client):
             who = _account(args.client)
             return f"already logged in{f' as {who}' if who else ''}; key saved for {url}"
-    browser = None if args.key else weblogin.settings(url, args.timeout)
+    # A key piped in (printf KEY | xo login) is read as before: a browser sign-in needs someone there.
+    browser = None if args.key or not sys.stdin.isatty() else weblogin.settings(url, args.timeout)
     if browser is not None:
         key, made = weblogin.login(url, browser, args.timeout)
         args.resolved_key = check_key(key, "the key the xo server sent")
@@ -1356,7 +1357,7 @@ def main(argv: list[str] | None = None) -> int:
                          "are their old names)")
     li.add_argument("--key", action="store_true",
                     help="paste an XO API key instead of signing in in a browser (the only way when the xo "
-                         "server has no browser login)")
+                         "server has no browser login; a key piped in on stdin is always read)")
     li.set_defaults(run=_login)
     lo = sub.add_parser("logout", parents=[keyless],
                         help="delete the key and addresses xo login saved, and log gh out of github.com "

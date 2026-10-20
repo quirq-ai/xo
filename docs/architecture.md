@@ -142,7 +142,7 @@ sequenceDiagram
   Srv-->>Cli: the key / check + save: as a pasted key is
 ```
 
-Clerk signs you in; the xo server hands the CLI your key. Only when the server's `GET /login` lists Clerk's sign-in (it does once `XO_OAUTH_CLIENT_ID` and `XO_CLERK_FRONTEND_URL` are set); otherwise, and with `xo login --key`, xo asks for a key as above. The browser comes back to `127.0.0.1` on port 8976, 8977 or 8978 (the first free one). The server swaps the code and the verifier only xo holds at Clerk's `/oauth/token`, reads who signed in at `/oauth/userinfo`, then answers a key that account already has (still working, no claims, so never an admin key; one xo login made first, then the newest), or, when it has none or Clerk will not read its secret back, a new one that works for 90 days. Then xo checks and saves it like a pasted key.
+Clerk signs you in; the xo server hands the CLI your key. Only when the server's `GET /login` lists Clerk's sign-in (it does once `XO_OAUTH_CLIENT_ID` and `XO_CLERK_FRONTEND_URL` are set); otherwise, and with `xo login --key`, xo asks for a key as above. The browser comes back to `127.0.0.1` on port 8976, 8977 or 8978 (the first free one). The server swaps the code and the verifier only xo holds at Clerk's `/oauth/token`, reads who signed in at `/oauth/userinfo`, then answers the newest key browser login made that account before (still working with a week or more left, no claims or scopes, so never an admin key; never a key made any other way), or, when it has none or Clerk will not read its secret back, a new one that works for 90 days (at most 5 a day per account). Then xo checks and saves it like a pasted key.
 
 #### `xo logout`
 
