@@ -177,20 +177,28 @@ In the Clerk Dashboard (dashboard.clerk.com), with that instance chosen at the t
 
 Then in Vercel:
 
-5. **Settings → Environment Variables**, for **Production**: add `XO_OAUTH_CLIENT_ID` (the Client
-   ID) and `XO_CLERK_FRONTEND_URL` (the Frontend API URL). Neither is a secret. Then
-   **Deployments**, the latest production deployment, **⋯ → Redeploy**, so the new values are used.
-6. **Cap it per address.** `/login/browser` needs no key and each request makes a call to Clerk,
-   and the server's own cap (2 a second) is per instance. In **Firewall → Rules**, open
-   `xo per-IP limit` from step 3, add **or** Request Path **starts with** `/login`, **Save**, then
-   **Review Changes → Publish**. A login sends four requests that this rule counts.
+5. **Cap it per address first.** `/login/browser` needs no key and each request makes a call to
+   Clerk, and the server's own cap (2 a second) is per instance. In **Firewall → Rules**, open
+   `xo per-IP limit` from step 3 and add a condition with **Or**, not **And** (an **And** would
+   stop the rule matching `/api/core`): Request Path **starts with** `/login`. The rule then covers
+   `/me`, `/user-metadata`, `/api/core` and `/login`. **Save**, then **Review Changes → Publish**.
+   A login sends four requests that this rule counts. Doing this while browser login is still off
+   changes nothing for anyone.
+6. **Settings → Environment Variables**, for **Production**: add `XO_OAUTH_CLIENT_ID` (the Client
+   ID) and `XO_CLERK_FRONTEND_URL` (the Frontend API URL, starting `https://`). Neither is a
+   secret. Vercel uses new values only in a new deployment, so then **Deployments**, the latest
+   production deployment, **⋯ → Redeploy**, and **Redeploy** again in the box that opens (leave
+   **Use existing Build Cache** as it is). Wait until it says **Ready**.
 7. **Check.** `curl -s https://xo.quirq.dev/login` shows the sign-in address and client id under
    `browser`. If it still says `null`, the project's **Logs** have a line starting `xo serve:
-   browser login is off:` that says why. Then run `xo login` on a computer with a browser: sign in,
-   allow `xo CLI` on the consent screen, and it ends with `logged in as ...; a new key that works
-   for 90 days and URL saved to ...`.
+   browser login is off:` that says why. Then, on a computer with a browser and an `xo` from
+   this commit or later (the quickstart's pinned version may be older; update it as in
+   docs/quickstart.md), run `xo logout` first, since `xo login` with a saved key that works only
+   says you are already logged in. Then run `xo login`: sign in, allow `xo CLI` on the consent
+   screen, and the `xo: me:` line says `logged in as ...; a new key that works for 90 days and URL
+   saved to ...`. If it fails, `xo login --key` logs in with a key as before.
 
-To turn it off, delete either variable and redeploy. Keys made by browser login are named
+To turn it off, delete both variables and redeploy as in step 6 (deleting only one also turns it off, with a log line on every cold start). Keys made by browser login are named
 `xo CLI on HOST`, described `made by xo login in a browser`, and expire after 90 days. A later
 browser login for the same account hands back the newest of those while it has a week or more
 left (when Clerk will read its secret back), and never a key made any other way; otherwise it makes
@@ -209,7 +217,7 @@ a new one. Revoke a key in the Clerk Dashboard.
 | Requests to XO per instance | `XO_CORE_PER_SECOND` (default 10 a second), then 503 |
 | **Not protected** | a flood from many addresses spread over many instances; only Clerk's and XO's own limits stop it |
 | **Changed for XO** | every xo user now reaches XO's platform from Vercel's addresses, not their own, so a per-address limit on XO's side would count all of them together |
-| **Not rate limited** | `/login` and `/login/browser` until step 6 adds `/login` to the rule in step 3 (the server caps swaps at 2 a second per instance), `/config` (the services list `xo login` reads; static, never a Clerk call; do not add it to the rule in step 3, for the same reason as `/status`), `/` (the status page), `/status` and `/healthz`: public, one function invocation each, never a Clerk call. An open status page tab polls `/status` every 5 seconds while it is visible (about 17,000 invocations a day per tab left open) and stops while hidden. To cap them too, add a second rule of its own (Request Path **starts with** `/status`, 60 requests per 60 seconds per IP, so `/status/` is capped too); the page stays well under that. Do not add `/status` to the rule in step 3: it would share one per-address budget with `/me`, and an open status tab could then make the test script's Firewall check fail. |
+| **Not rate limited** | `/login` and `/login/browser` until step 5 of section 6 adds `/login` to the rule in step 3 (the server caps swaps at 2 a second per instance), `/config` (the services list `xo login` reads; static, never a Clerk call; do not add it to the rule in step 3, for the same reason as `/status`), `/` (the status page), `/status` and `/healthz`: public, one function invocation each, never a Clerk call. An open status page tab polls `/status` every 5 seconds while it is visible (about 17,000 invocations a day per tab left open) and stops while hidden. To cap them too, add a second rule of its own (Request Path **starts with** `/status`, 60 requests per 60 seconds per IP, so `/status/` is capped too); the page stays well under that. Do not add `/status` to the rule in step 3: it would share one per-address budget with `/me`, and an open status tab could then make the test script's Firewall check fail. |
 
 ## Logs and audit lines
 

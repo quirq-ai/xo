@@ -113,7 +113,7 @@ for it), and the CLI does the OAuth authorization code flow with PKCE.
 A code works once and only with the verifier the CLI kept, and the redirect is always this
 machine's own loopback, so a sign-in link someone else sends you gives them nothing. Swaps are
 capped at 2 a second for the whole process, on top of the Clerk budget; on Vercel that is per
-instance, so docs/deploy-vercel.md step 6 also caps `/login` per address. A key piped in on stdin
+instance, so docs/deploy-vercel.md section 6, step 5, also caps `/login` per address. A key piped in on stdin
 (`printf KEY | xo login`) is read as before, without a browser. The key only works with
 XO's platform if XO checks keys with the same Clerk instance this server's Secret Key belongs to.
 
