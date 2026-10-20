@@ -5,7 +5,7 @@ Vercel at `xo.quirq.dev` through `app.py`), which holds the Clerk Secret Key so 
 it. Standard library only. Setup is in [quickstart.md](quickstart.md); the server's settings in
 [server.md](server.md).
 
-This describes main as of this change: through #50.
+This describes main as of this change: through #56.
 Every command has its own sequence diagram in section 3. [architecture.html](architecture.html) is the same doc as a page with drawn diagrams;
 GitHub shows it as source, so open it locally or from a static host.
 
