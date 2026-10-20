@@ -158,9 +158,9 @@ XO API commands go to one address, the xo server (`https://xo.quirq.dev`, or `XO
 `xo login --url` saved). `xo me` reads your Clerk account, which needs Clerk's
 Secret Key. That key never goes on a user's machine: the same package runs as a server, `xo serve`,
 on one deployment that holds it. The server passes every other command (the creates and
-`xo spaces --space-id ID`) on to XO's core API under its `/api/core/v1`, with your key, as sent. Until that
-deployment holds XO's production Clerk key, `xo me` answers 401 to real XO keys; the creates do not
-need it. See
+`xo spaces --space-id ID`) on to XO's core API under its `/api/core/v1`, with your key, as sent. XO's
+platform checks keys with the same Clerk instance as that deployment, so a key from another
+instance gets 401 from both. See
 [docs/server.md](docs/server.md) and, to deploy it, [docs/deploy-vercel.md](docs/deploy-vercel.md).
 
 ## How commands are named
