@@ -138,19 +138,16 @@ fails, tell Claude which kinds of characters the key has (never the key): xo and
 need to accept them. A `/healthz` FAIL that says "misconfigured" means `CLERK_SECRET_KEY` is
 missing or refused; the project's **Logs** say which.
 
-## 6. Browser login (optional; only once keys from this instance work with XO)
+## 6. Browser login
 
 Until both settings below are set, `xo login` asks for a key as it always has, and `GET /login`
 answers `{"browser": null}`. To let users sign in in a browser instead (see docs/server.md,
 "Browser login"), first check this:
 
 **Browser login gives each user an API key from the Clerk instance this deployment's
-`CLERK_SECRET_KEY` belongs to.** XO's platform checks keys with its own Clerk (step 3), so such a
-key works with XO only if that is the same instance. While the server holds development
-credentials it is not: XO checks keys with its production instance, so every browser login would
-end with XO refusing the key (401) and nothing saved. So do this section only after the production
-gate at the end, and only once XO has confirmed that its platform checks API keys with that same
-production instance. TODO(suraj): confirm this with XO before step 5.
+`CLERK_SECRET_KEY` belongs to.** XO's platform checks keys with the same Clerk instance as this
+server (suraj confirmed this on 2026-10-20), so such a key works with XO. If the server's
+`CLERK_SECRET_KEY` is ever moved to a different instance, do steps 1 to 5 again in that instance.
 
 In the Clerk Dashboard (dashboard.clerk.com), with that instance chosen at the top:
 
