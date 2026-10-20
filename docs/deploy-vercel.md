@@ -162,7 +162,9 @@ In the Clerk Dashboard (dashboard.clerk.com), with that instance chosen at the t
    Hobby plan stops at 1,000; browser login makes an account at most 5 a day.
 2. **Add the OAuth application.** Open <https://dashboard.clerk.com/~/oauth-applications> and
    select **Add application** → **Create OAuth application**. **Name:** `xo CLI`. **Scopes:**
-   `openid`, `profile` and `email`. Select **Add**. If a **Client Secret** is shown, xo does not use
+   `openid`, `profile` and `email`, all three ticked: without `openid`, the sign-in comes back to
+   the 127.0.0.1 page with `invalid_scope` ("not allowed to request scope 'openid'"). If that
+   happens later, tick it on the application's page and **Save**. Select **Add**. If a **Client Secret** is shown, xo does not use
    it: close it without copying it anywhere.
 3. **On the application's page that opens:**
    - turn on **Public** (xo has no client secret; it proves itself with PKCE instead), and turn on
@@ -181,7 +183,9 @@ In the Clerk Dashboard (dashboard.clerk.com), with that instance chosen at the t
 4. **Copy the Frontend API URL** from <https://dashboard.clerk.com/~/api-keys> (the page with the
    Publishable Key, not the one in step 1). It is an address only, such as
    `https://clerk.example.com` for a production instance (a development one ends in
-   `.clerk.accounts.dev`): copy nothing after the host.
+   `.clerk.accounts.dev`): copy nothing after the host. Not the OAuth application's **Discovery
+   URL** (`.../.well-known/openid-configuration`): with a path the server turns browser login off
+   and its log line says why. Its start, `https://` and the host, is the same address.
 
 Then in Vercel:
 
