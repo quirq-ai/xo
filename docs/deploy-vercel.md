@@ -138,6 +138,67 @@ fails, tell Claude which kinds of characters the key has (never the key): xo and
 need to accept them. A `/healthz` FAIL that says "misconfigured" means `CLERK_SECRET_KEY` is
 missing or refused; the project's **Logs** say which.
 
+## 6. Browser login (optional; only once keys from this instance work with XO)
+
+Until both settings below are set, `xo login` asks for a key as it always has, and `GET /login`
+answers `{"browser": null}`. To let users sign in in a browser instead (see docs/server.md,
+"Browser login"), first check this:
+
+**Browser login gives each user an API key from the Clerk instance this deployment's
+`CLERK_SECRET_KEY` belongs to.** XO's platform checks keys with its own Clerk (step 3), so such a
+key works with XO only if that is the same instance. While the server holds development
+credentials it is not: XO checks keys with its production instance, so every browser login would
+end with XO refusing the key (401) and nothing saved. So do this section only after the production
+gate at the end, and only once XO has confirmed that its platform checks API keys with that same
+production instance. TODO(suraj): confirm this with XO before step 5.
+
+In the Clerk Dashboard (dashboard.clerk.com), with that instance chosen at the top:
+
+1. **API keys must be on.** Open <https://dashboard.clerk.com/~/platform/api-keys>. If it offers
+   **Enable API keys**, select it, choose **Enable User API keys**, then **Enable**. If it already
+   lists keys, they are on. Clerk bills each new key past 1,000 a month ($0.001 each), and the
+   Hobby plan stops at 1,000; browser login makes an account at most 5 a day.
+2. **Add the OAuth application.** Open <https://dashboard.clerk.com/~/oauth-applications> and
+   select **Add application** → **Create OAuth application**. **Name:** `xo CLI`. **Scopes:**
+   `openid`, `profile` and `email`. Select **Add**. If a **Client Secret** is shown, xo does not use
+   it: close it without copying it anywhere.
+3. **On the application's page that opens:**
+   - turn on **Public** (xo has no client secret; it proves itself with PKCE instead), and turn on
+     **Require PKCE**. Without **Public**, every browser login fails, and the project's **Logs** say
+     `Clerk refused the OAuth application`;
+   - leave the consent screen on (it is on by default): without it, someone signed in to XO who
+     opens a sign-in link someone else made is not asked first;
+   - in **Redirect URIs**, add these three, one at a time, exactly as written (Clerk compares them
+     exactly: `http`, `127.0.0.1` and not `localhost`, the port, and no `/` at the end):
+     `http://127.0.0.1:8976/callback`, `http://127.0.0.1:8977/callback`,
+     `http://127.0.0.1:8978/callback`;
+   - under **Application credentials**, copy the **Client ID**.
+4. **Copy the Frontend API URL** from <https://dashboard.clerk.com/~/api-keys> (the page with the
+   Publishable Key, not the one in step 1). It is an address only, such as
+   `https://clerk.example.com` for a production instance (a development one ends in
+   `.clerk.accounts.dev`): copy nothing after the host.
+
+Then in Vercel:
+
+5. **Settings → Environment Variables**, for **Production**: add `XO_OAUTH_CLIENT_ID` (the Client
+   ID) and `XO_CLERK_FRONTEND_URL` (the Frontend API URL). Neither is a secret. Then
+   **Deployments**, the latest production deployment, **⋯ → Redeploy**, so the new values are used.
+6. **Cap it per address.** `/login/browser` needs no key and each request makes a call to Clerk,
+   and the server's own cap (2 a second) is per instance. In **Firewall → Rules**, open
+   `xo per-IP limit` from step 3, add **or** Request Path **starts with** `/login`, **Save**, then
+   **Review Changes → Publish**. A login sends four requests that this rule counts.
+7. **Check.** `curl -s https://xo.quirq.dev/login` shows the sign-in address and client id under
+   `browser`. If it still says `null`, the project's **Logs** have a line starting `xo serve:
+   browser login is off:` that says why. Then run `xo login` on a computer with a browser: sign in,
+   allow `xo CLI` on the consent screen, and it ends with `logged in as ...; a new key that works
+   for 90 days and URL saved to ...`.
+
+To turn it off, delete either variable and redeploy. Keys made by browser login are named
+`xo CLI on HOST`, described `made by xo login in a browser`, and expire after 90 days. A later
+browser login for the same account hands back the newest of those while it has a week or more
+left (when Clerk will read its secret back), and never a key made any other way; otherwise it makes
+a new one. Revoke a key in the Clerk Dashboard.
+
 ## What is and is not protected on Vercel
 
 | Protected | How |
@@ -151,7 +212,7 @@ missing or refused; the project's **Logs** say which.
 | Requests to XO per instance | `XO_CORE_PER_SECOND` (default 10 a second), then 503 |
 | **Not protected** | a flood from many addresses spread over many instances; only Clerk's and XO's own limits stop it |
 | **Changed for XO** | every xo user now reaches XO's platform from Vercel's addresses, not their own, so a per-address limit on XO's side would count all of them together |
-| **Not rate limited** | `/config` (the services list `xo login` reads; static, never a Clerk call; do not add it to the rule in step 3, for the same reason as `/status`), `/` (the status page), `/status` and `/healthz`: public, one function invocation each, never a Clerk call. An open status page tab polls `/status` every 5 seconds while it is visible (about 17,000 invocations a day per tab left open) and stops while hidden. To cap them too, add a second rule of its own (Request Path **starts with** `/status`, 60 requests per 60 seconds per IP, so `/status/` is capped too); the page stays well under that. Do not add `/status` to the rule in step 3: it would share one per-address budget with `/me`, and an open status tab could then make the test script's Firewall check fail. |
+| **Not rate limited** | `/login` and `/login/browser` until step 6 adds `/login` to the rule in step 3 (the server caps swaps at 2 a second per instance), `/config` (the services list `xo login` reads; static, never a Clerk call; do not add it to the rule in step 3, for the same reason as `/status`), `/` (the status page), `/status` and `/healthz`: public, one function invocation each, never a Clerk call. An open status page tab polls `/status` every 5 seconds while it is visible (about 17,000 invocations a day per tab left open) and stops while hidden. To cap them too, add a second rule of its own (Request Path **starts with** `/status`, 60 requests per 60 seconds per IP, so `/status/` is capped too); the page stays well under that. Do not add `/status` to the rule in step 3: it would share one per-address budget with `/me`, and an open status tab could then make the test script's Firewall check fail. |
 
 ## Logs and audit lines
 
@@ -165,8 +226,10 @@ not part of this setup.
 
 - Each request makes at most two Clerk calls, each with a 10-second timeout, except these: a share
   makes up to ten (the key, the sharer, the lookup, and up to four reads and three writes of the
-  recipient), an accept or reject up to nine, `GET /me/shared` three, and a `/me/projects` or
-  `/me/spaces` write up to eight (the key, then up to four reads and three writes); or one call to XO
+  recipient), an accept or reject up to nine, `GET /me/shared` three, a `/me/projects` or
+  `/me/spaces` write up to eight (the key, then up to four reads and three writes), and a browser
+  login five (the code swap and who signed in, at Clerk's Frontend API, then the user's keys, one
+  key's secret and a new key); or one call to XO
   that gets 25 seconds in all, however slowly XO sends (a create that takes longer answers 504 and
   may still have happened). Vercel's
   function time and request size limits are not checked here; 25 seconds and 32KB (the server's

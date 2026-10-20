@@ -25,6 +25,8 @@ xo create space ────┘                      └── /api/core/v1/... 
 | GET | `/` | anyone | the status page: health, counts and the latest requests, refreshed every 5 seconds |
 | GET | `/status` | anyone | what the page shows, as JSON; no Clerk call |
 | GET | `/config` | anyone | the services list `xo login` reads (`src/xo/services.json`), with `xo.url` set to where this server passes `/api/core/v1` on to (null when that is not a plain https address); addresses only (`me.url` is xo's shipped address, not necessarily this server), no Clerk call; answers even when the server is missing its settings |
+| GET | `/login` | anyone | `{"browser": null}`, or where `xo login` signs in: Clerk's `/oauth/authorize` address, the public client id, the scope, the three loopback redirect URLs and how long a new key works; no Clerk call. Set by the two browser login settings below |
+| POST | `/login/browser` | anyone (no key) | `{"code", "verifier", "redirect", "name"?}` from a browser sign-in: see "Browser login" below; answers `{"key", "days", "reused"}`. 404 while browser login is off |
 | GET | `/me` | any user key | `id`, `username`, `firstName`, `lastName`, `imageUrl`, `createdAt`, `email` (primary), `publicMetadata`, `privateMetadata`: the key's own user only, with secret-looking values masked |
 | GET | `/me/projects` | any user key | `projects`: the list in the key's own private metadata (`[]` when there is none) |
 | POST | `/me/projects` | any user key | adds `{"name": "..."}` to that list and answers the new list; see "Projects" below |
@@ -82,6 +84,38 @@ overrides it; `https://app.xo.builders/api/core/v1` keeps the old one.
 - **No proxy for XO.** Requests passed on to XO go straight to `XO_CORE_API_URL`; `HTTP_PROXY` and
   `HTTPS_PROXY` are not honoured for them (Clerk calls still use them). On a machine whose only way
   out is a proxy, `/me` works but `/api/core` answers 502.
+
+## Browser login
+
+`xo login` can sign you in in a browser instead of asking for a key. Clerk is the sign-in: the
+server is the client of a Clerk OAuth application (a public client, so it holds no client secret
+for it), and the CLI does the OAuth authorization code flow with PKCE.
+
+1. `GET /login` tells the CLI Clerk's `/oauth/authorize` address, the client id and the redirect
+   URLs. The CLI listens on the first free of `http://127.0.0.1:8976/callback`, `:8977` and `:8978`,
+   makes a verifier and its S256 challenge and a random state, and opens the sign-in link.
+2. You sign in on Clerk's own page. Clerk sends the browser back to the CLI's loopback address with
+   a code; the CLI ignores any answer whose state is not the one it sent.
+3. The CLI sends `POST /login/browser` `{"code", "verifier", "redirect", "name"}`. The server swaps
+   them at Clerk's `/oauth/token` (with the client id, no secret), reads `sub` from `/oauth/userinfo`
+   (a `user_...` id or nothing), and drops the access token.
+4. With the Secret Key it lists that user's API keys and answers the newest one browser login
+   made before (its description is `made by xo login in a browser`) that is theirs, still working
+   with a week or more left, and has no claims or scopes (so never an admin key) and is not in
+   `XO_ADMIN_KEY_IDS`. A key made any other way is never read back. If there is none, or Clerk will
+   not give its secret back, it makes one: named by the CLI (`xo CLI on HOST`), no claims, expiring
+   after 90 days; at most 5 a day per account, revoked ones included. If Clerk cannot list the
+   keys, it makes none. A key is revoked in the Clerk dashboard (API keys).
+5. The key is in that one answer only; it is never stored, logged or put in the audit line, which
+   names the key id, the user and whether it was reused. The CLI checks it with XO and saves it like
+   a pasted key.
+
+A code works once and only with the verifier the CLI kept, and the redirect is always this
+machine's own loopback, so a sign-in link someone else sends you gives them nothing. Swaps are
+capped at 2 a second for the whole process, on top of the Clerk budget; on Vercel that is per
+instance, so docs/deploy-vercel.md step 6 also caps `/login` per address. A key piped in on stdin
+(`printf KEY | xo login`) is read as before, without a browser. The key only works with
+XO's platform if XO checks keys with the same Clerk instance this server's Secret Key belongs to.
 
 ## The status page
 
@@ -147,6 +181,8 @@ Environment only, so the secret never lands in shell history or the process list
 | `XO_SERVE_MAX_CONNECTIONS` | no | connections served at once; default 64, then 503 |
 | `CLERK_API_URL` | no | default `https://api.clerk.com`; tests point it at a fake |
 | `XO_CORE_API_URL` | no | where `/api/core/v1` goes; default the `xo` address in `src/xo/services.json` (`https://dev.xo.builders`) plus `/api/core/v1`; https only. `/config` reports it as `xo.url` |
+| `XO_OAUTH_CLIENT_ID` | for browser login | the client id of the Clerk OAuth application `xo login` signs in with (public, not a secret) |
+| `XO_CLERK_FRONTEND_URL` | for browser login | that Clerk instance's Frontend API URL, https only. Browser login is on only when both are set; a missing or bad one turns it off with a line on stderr, never the server |
 
 ```sh
 xo serve --host 127.0.0.1 --port 8787

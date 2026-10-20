@@ -5,7 +5,7 @@ Vercel at `xo.quirq.dev` through `app.py`), which holds the Clerk Secret Key so 
 it. Standard library only. Setup is in [quickstart.md](quickstart.md); the server's settings in
 [server.md](server.md).
 
-This describes main as of this change: through #48.
+This describes main as of this change: through #56.
 Every command has its own sequence diagram in section 3. [architecture.html](architecture.html) is the same doc as a page with drawn diagrams;
 GitHub shows it as source, so open it locally or from a static host.
 
@@ -85,7 +85,7 @@ flowchart LR
 | `xo install project:P\|space:S` | server, git | look P up, then clone, or fetch and fast-forward, it into `./REPO`; for a space, each project into `./S/` at its ref |
 | `xo update project:P\|space:S` | server, git | look P up, then push its checkout (never forced); for a space, push each branch, then record the refs under `./S/` |
 | `xo sync project:P\|space:S` | server, git | look P up, then `pull --rebase` and push its checkout; for a space, rebase and push each branch, merge refs, record |
-| `xo login [xo\|me\|github]` | server, gh | reads `/config`, checks and saves the key, runs gh's login |
+| `xo login [xo\|me\|github] [--key]` | server, gh | reads `/config`, gets the key in a browser (or asks for it), checks and saves it, runs gh's login |
 | `xo logout`, `xo status` | local, gh | delete saved login; show each service |
 | `xo ops`, `xo call`, `xo api` | local / server | list operations; run one by id; send any request |
 | `xo serve` | local | run the server on 127.0.0.1:8787 |
@@ -122,6 +122,27 @@ sequenceDiagram
 ```
 
 A key is saved only after XO accepts it. A 401, or the server's own bare 404, saves nothing. xo also asks the server's `/me` whose key it is, for the line it prints. Each service prints one line; `xo login xo` (or `me`) or `xo login github` does just that one.
+
+#### `xo login` in a browser
+
+```mermaid
+sequenceDiagram
+  participant Cli as You · xo CLI
+  participant Br as Browser · Clerk sign-in
+  participant Srv as xo server
+  participant Ck as Clerk
+  Note over Cli: xo login: no saved key works
+  Cli->>Srv: fetch / GET /login: no key, no Clerk call
+  Srv-->>Cli: sign-in address / open the link: challenge, state
+  Cli->>Br: browser / you sign in: Clerk's own page
+  Br-->>Cli: code / 127.0.0.1 callback: code, if the state matches
+  Cli->>Srv: no key / POST /login/browser: code + verifier
+  Srv->>Ck: swap / token · userinfo: then your key, or a new one
+  Ck-->>Srv: the key / answers the key: once; never logged
+  Srv-->>Cli: the key / check + save: as a pasted key is
+```
+
+Clerk signs you in; the xo server hands the CLI your key. Only when the server's `GET /login` lists Clerk's sign-in (it does once `XO_OAUTH_CLIENT_ID` and `XO_CLERK_FRONTEND_URL` are set); otherwise, and with `xo login --key`, xo asks for a key as above. The browser comes back to `127.0.0.1` on port 8976, 8977 or 8978 (the first free one). The server swaps the code and the verifier only xo holds at Clerk's `/oauth/token`, reads who signed in at `/oauth/userinfo`, then answers the newest key browser login made that account before (still working with a week or more left, no claims or scopes, so never an admin key; never a key made any other way), or, when it has none or Clerk will not read its secret back, a new one that works for 90 days (at most 5 a day per account). Then xo checks and saves it like a pasted key.
 
 #### `xo logout`
 
@@ -603,10 +624,13 @@ The same App Vercel runs. It needs `CLERK_SECRET_KEY` in its environment and lis
 flowchart LR
   wsgi["wsgi_app() (Vercel)"] -- WSGI --> app["App.handle()"]
   http["ThreadingHTTPServer (xo serve)"] -- HTTP --> app
-  app -- public --> pub["/, /status, /healthz, /config"]
+  app -- public --> pub["/, /status, /healthz, /config, /login"]
   app -- key --> acct["/me, /me/projects, /me/spaces/**, /me/share, /me/shared/**, /user-metadata"] -- verify --> clerk[Clerk]
   app == forward ==> fwd["/api/core/v1/..."] == your key ==> core[XO core API]
+  app -- "code + verifier" --> login["/login/browser"] -- "swap, then your key" --> clerk
 ```
+
+`POST /login/browser` needs no key: it swaps a browser sign-in's code with Clerk and answers that account's key (one it has, else a new one), so it spends the Secret Key too.
 
 ## 5. Projects, spaces and invites in your metadata
 

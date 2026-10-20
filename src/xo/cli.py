@@ -24,12 +24,14 @@
                                             /user-metadata route) with the Clerk credentials it holds,
                                             and passes the creates and GET /spaces/{id} on to XO's
                                             core API.
-    xo login [xo|me|github] [--url URL]
+    xo login [xo|me|github] [--key] [--url URL]
                                             log in to every service the xo server lists (or the one
-                                            named): me (the xo server) and xo take your API key,
-                                            asked for without showing it unless a saved key still
-                                            works; github runs gh auth login for github.com, unless gh is
-                                            already connected.
+                                            named): me (the xo server) and xo take your API key, unless
+                                            a saved key still works. When the xo server has browser
+                                            login, you sign in to XO in your browser and the server
+                                            sends your key; otherwise, with --key, or with a key piped
+                                            in, it is asked for without showing it. github runs gh auth
+                                            login for github.com, unless gh is already connected.
     xo status                               each service, its address, and whether you are logged in.
     xo projects [add NAME]                  show the projects list in your private metadata, or add
                                             NAME to it. The xo server makes the change and writes only
@@ -109,7 +111,7 @@ from pathlib import Path
 from typing import Any, NoReturn
 from urllib.parse import quote
 
-from xo import __version__, commands, github, gitops, names, services, spec, workspace
+from xo import __version__, commands, github, gitops, names, services, spec, weblogin, workspace
 from xo.client import (CORE_PATH, DEFAULT_TIMEOUT, KEY_ENV, MAYBE_RECEIVED, MIN_SECRET, Client, Login, XoError,
                        api_key, check_key, credentials_path, forget_login, read_key, redact, save_login, saved_login,
                        xo_url)
@@ -615,21 +617,28 @@ def _login_xo(args: argparse.Namespace, url: str, saved: Login | None) -> str:
         if _key_works(args.client):
             who = _account(args.client)
             return f"already logged in{f' as {who}' if who else ''}; key saved for {url}"
-    print(f"xo: logging in to {url}; the key will only ever be sent there", file=sys.stderr, flush=True)
-    key = read_key()
-    if not key:
-        raise XoError("no key entered; nothing saved")
-    args.resolved_key = check_key(key, "the key entered")
-    if not key.startswith("ak_"):
-        # A Clerk Secret Key or a provider key pasted by mistake goes nowhere, not even to the server.
-        raise XoError("that is not an XO API key (those start with ak_); nothing sent or saved, and it is not shown")
+    # A key piped in (printf KEY | xo login) is read as before: a browser sign-in needs someone there.
+    browser = None if args.key or not sys.stdin.isatty() else weblogin.settings(url, args.timeout)
+    if browser is not None:
+        key, made = weblogin.login(url, browser, args.timeout)
+        args.resolved_key = check_key(key, "the key the xo server sent")
+    else:
+        print(f"xo: logging in to {url}; the key will only ever be sent there", file=sys.stderr, flush=True)
+        key = read_key()
+        if not key:
+            raise XoError("no key entered; nothing saved")
+        args.resolved_key = check_key(key, "the key entered")
+        if not key.startswith("ak_"):
+            # A Clerk Secret Key or a provider key pasted by mistake goes nowhere, not even to the server.
+            raise XoError("that is not an XO API key (those start with ak_); nothing sent or saved, and it is not shown")
+        made = "key"
     args.client = Client(url, key, timeout=args.timeout)
     _check_with_xo(args.client, url)
     who = _account(args.client)
     path = save_login(Login(url, key))
     where = "only you can read it" if os.name != "nt" else "xo cannot limit who reads it on Windows"
     return (f"logged in as {who}" if who else "logged in; the key works with XO") + (
-        f"; key and URL saved to {path} ({where}); xo logout deletes them")
+        f"; {made} and URL saved to {path} ({where}); xo logout deletes them")
 
 
 def _key_works(client: Client) -> bool:
@@ -1346,6 +1355,9 @@ def main(argv: list[str] | None = None) -> int:
     li.add_argument("service", nargs="?", choices=(*KEY_SERVICES, "github"),
                     help="only this one (xo and me both mean the XO API key; xo-server and xo-platform "
                          "are their old names)")
+    li.add_argument("--key", action="store_true",
+                    help="paste an XO API key instead of signing in in a browser (the only way when the xo "
+                         "server has no browser login; a key piped in on stdin is always read)")
     li.set_defaults(run=_login)
     lo = sub.add_parser("logout", parents=[keyless],
                         help="delete the key and addresses xo login saved, and log gh out of github.com "

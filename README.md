@@ -52,7 +52,7 @@ xo spaces --space-id 6f1c2c1e-...   # connection URLs for a space you own
 | &nbsp;&nbsp;KIND `xo-cowork` | `POST /xo-cowork` | volume size; providers; channels |
 | &nbsp;&nbsp;KIND `nebius-openclaw` | `POST /nebius-openclaw` | Token Factory key, Telegram token (feature flagged) |
 | `xo spaces --space-id ID` | `GET /spaces/{spaceId}` | none |
-| `xo login [xo\|github]` / `logout` | every listed service (or the one named): checks the XO key with XO (a space that doesn't exist) and saves it with the address, and logs gh in to github.com / deletes the key and asks before logging gh out | none |
+| `xo login [xo\|github] [--key]` / `logout` | every listed service (or the one named): gets the XO key by browser sign-in when the server offers it (else, or with `--key`, asks for it), checks it with XO (a space that doesn't exist) and saves it with the address, and logs gh in to github.com / deletes the key and asks before logging gh out | none |
 | `xo status` | each service's address and whether you are logged in; never a key | none |
 | `xo me` | `GET /me` on your xo server; prints `{"xo": {username, imageUrl, ..., "public_data": {...}, "private_data": {...}}}` | none |
 | `xo projects` / `xo projects add NAME` | `GET` / `POST /me/projects` on your xo server: the `projects` list in your own private metadata; the server makes the change and writes only that list | the name only |
