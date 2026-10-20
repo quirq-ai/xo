@@ -161,11 +161,12 @@ In the Clerk Dashboard (dashboard.clerk.com), with that instance chosen at the t
    lists keys, they are on. Clerk bills each new key past 1,000 a month ($0.001 each), and the
    Hobby plan stops at 1,000; browser login makes an account at most 5 a day.
 2. **Add the OAuth application.** Open <https://dashboard.clerk.com/~/oauth-applications> and
-   select **Add application** → **Create OAuth application**. **Name:** `xo CLI`. **Scopes:**
-   `openid`, `profile` and `email`, all three ticked: without `openid`, the sign-in comes back to
-   the 127.0.0.1 page with `invalid_scope` ("not allowed to request scope 'openid'"). If that
-   happens later, tick it on the application's page and **Save**. Select **Add**. If a **Client Secret** is shown, xo does not use
-   it: close it without copying it anywhere.
+   select **Add application** → **Create OAuth application**. **Name:** `xo CLI`. **Scopes:** all
+   three of `openid`, `profile` and `email`. Select **Add**. If a **Client Secret** is shown, xo
+   does not use it: close it without copying it anywhere. Without `openid`, every sign-in comes
+   back to 127.0.0.1 with `invalid_scope` (the address bar says `not allowed to request scope
+   'openid'`, and `xo login` fails with `the sign-in was not finished (invalid_scope)`); then select
+   it on the application's page and **Save**.
 3. **On the application's page that opens:**
    - turn on **Public** (xo has no client secret; it proves itself with PKCE instead), and turn on
      **Require PKCE**, both on this application's page. Leave the instance-wide **Require PKCE**
