@@ -2,16 +2,18 @@
 # (quirq-ai/sync). Read and edit it only through qqsync (`qqsync show`, `qqsync pin`, or the
 # qqsync.manifest library); never parse it any other way.
 #
-# Kind `python-package` (a pyproject.toml package with a `test` extra) is proposed for
-# quirq-ai/infra-config config/kinds.toml in the PR that registers xo. Its interim commands there
-# are what CI runs: `pip install -e ".[test]"` and pytest. quirq-ai/recipes has no adapter for it
+# Kind `python-package` (a pyproject.toml package with a `test` extra) is listed in
+# quirq-ai/infra-config config/kinds.toml. Its interim commands there are what CI runs:
+# `pip install -e ".[test]"`, `compileall src` and pytest. quirq-ai/recipes has no adapter for it
 # yet, so `qq build` and `qq test` cannot run this target locally; use the commands in README.md.
 #
 # The python pin is the one quirq-ai/toolchains promoted (promoted.toml, python 3.14.8 revision 1,
 # built from 5739fee), the same pin xo-space uses: `source` names the OCI image manifest and
 # `digest` the layer in it, as quirq-ai/qq's `qq sync` fetches it. Only linux-x86_64 is built so
-# far. The toolchain roller (quirq-ai/rollers) moves this pin; do not edit it by hand. The Vercel
-# deployment keeps its own Python (`.python-version`); this pin is what CI tests on.
+# far. CI does not use it: the workflows set up Python 3.14 from infra-config's toolchain pin
+# (kinds.toml), and the Vercel deployment keeps its own Python (`.python-version`, 3.12).
+# Nothing rolls it yet (infra-config rollers.toml does not list xo); change it only with
+# `qqsync pin`.
 #
 # Not in the canary: infra-config lists no channels for xo. Vercel's GitHub app deploys main to
 # xo.quirq.dev on its own, so qq deploys nothing.
@@ -20,7 +22,7 @@ schema = "quirq-repo/1"
 [[targets]]
 name = "xo"
 kind = "python-package"
-srcs = ["src/**", "tests/**", "app.py", "pyproject.toml"]
+srcs = ["src/**", "tests/**", "app.py", "pyproject.toml", "README.md", "LICENSE", "docs/test-xo-server.sh"]
 
 [qq]
 version = "0.1.0"
