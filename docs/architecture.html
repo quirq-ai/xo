@@ -181,7 +181,7 @@ html { scroll-behavior: smooth; }
 <body>
 <div class="wrap">
 	<header class="top">
-		<div class="eyebrow">quirq-ai/xo · main as of this change: through #48</div>
+		<div class="eyebrow">quirq-ai/xo · main as of this change: through #50</div>
 		<h1>xo: one package, a CLI and <span class="x">its server</span></h1>
 		<p class="lede">The command line for XO Cloud's core API. The same Python package runs on your machine as <code>xo</code> and on Vercel as the xo server, which holds the Clerk Secret Key so the CLI never needs it. Standard library only. It also keeps your <code>projects</code> and <code>spaces</code> in your own Clerk metadata, lets you share a space or project with another user as an invite they accept or reject, and installs those projects on your machine and keeps them in step. Every command has its own diagram in section 03. Left out: test internals, the redaction rules in detail, and the Vercel deploy steps (see <code>docs/</code>).</p>
 		<div class="scroll">
@@ -361,7 +361,7 @@ html { scroll-behavior: smooth; }
 				<tr><td>xo install project:P | space:S</td><td>server, git</td><td>Looks P up, then clones or fetches it into <code>./REPO</code>; for a space, each project into <code>./S/</code> at its ref</td></tr>
 				<tr><td>xo update project:P | space:S</td><td>server, git</td><td>Looks P up, then pushes its checkout (never forced); for a space, records the refs checked out under <code>./S/</code></td></tr>
 				<tr><td>xo sync project:P | space:S</td><td>server, git</td><td>Looks P up, then <code>pull --rebase</code> and push its checkout; for a space, merges its changes with yours, then records</td></tr>
-				<tr><td>xo login [xo|me|github]</td><td>server, gh</td><td>Reads <code>/config</code>, checks and saves the XO key, runs gh's login</td></tr>
+				<tr><td>xo login [xo|me|github] [--key]</td><td>server, gh</td><td>Reads <code>/config</code>, gets the XO key in a browser (or asks for it), checks and saves it, runs gh's login</td></tr>
 				<tr><td>xo logout</td><td>local, gh</td><td>Deletes the saved key and addresses; asks before logging gh out</td></tr>
 				<tr><td>xo status</td><td>local, gh</td><td>Each service, its address, whether you are logged in; never a key</td></tr>
 				<tr><td>xo ops [FILTER]</td><td>local</td><td>Lists operations in the spec</td></tr>
@@ -452,6 +452,73 @@ html { scroll-behavior: smooth; }
 </svg>
 </div>
 <figcaption><strong>A key is saved only after XO accepts it.</strong> A 401, or the server&#x27;s own bare 404, saves nothing. xo also asks the server&#x27;s <code>/me</code> whose key it is, for the line it prints. Each service prints one line; <code>xo login xo</code> (or <code>me</code>) or <code>xo login github</code> does just that one.</figcaption>
+</figure>
+<h4><code>xo login</code> in a browser</h4>
+<figure>
+<div class="canvas">
+<svg class="d" viewBox="0 0 960 794" role="img" aria-label="xo login in a browser: Clerk signs you in, and the xo server hands the CLI your key.">
+<defs>
+<marker id="c50a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
+<marker id="c50h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
+</defs>
+<line class="life" x1="135" y1="40" x2="135" y2="788"/>
+<rect class="hdr" x="32" y="12" width="206" height="28" rx="7"/>
+<text class="t" x="135" y="31" text-anchor="middle">You: xo CLI</text>
+<line class="life" x1="365" y1="40" x2="365" y2="788"/>
+<rect class="hdr" x="262" y="12" width="206" height="28" rx="7"/>
+<text class="t" x="365" y="31" text-anchor="middle">Browser: Clerk sign-in</text>
+<line class="life" x1="595" y1="40" x2="595" y2="788"/>
+<rect class="hdr" x="492" y="12" width="206" height="28" rx="7"/>
+<text class="t" x="595" y="31" text-anchor="middle">xo server</text>
+<line class="life" x1="825" y1="40" x2="825" y2="788"/>
+<rect class="hdr" x="722" y="12" width="206" height="28" rx="7"/>
+<text class="t" x="825" y="31" text-anchor="middle">Clerk</text>
+<rect class="box" x="32" y="58" width="206" height="46" rx="8"/>
+<text class="m" x="135" y="78" text-anchor="middle">xo login</text>
+<text class="s" x="135" y="95" text-anchor="middle">no saved key works</text>
+<rect class="box" x="492" y="142" width="206" height="46" rx="8"/>
+<text class="m" x="595" y="162" text-anchor="middle">GET /login</text>
+<text class="s" x="595" y="179" text-anchor="middle">no key, no Clerk call</text>
+<path class="edge" d="M135,104 V124 H595 V140" marker-end="url(#c50a)"/>
+<text class="lbl" x="365" y="119" text-anchor="middle">fetch</text>
+<rect class="box" x="32" y="226" width="206" height="46" rx="8"/>
+<text class="t" x="135" y="246" text-anchor="middle">open the link</text>
+<text class="s" x="135" y="263" text-anchor="middle">challenge, state</text>
+<path class="edge dash" d="M595,188 V208 H135 V224" marker-end="url(#c50a)"/>
+<text class="lbl" x="365" y="203" text-anchor="middle">sign-in address</text>
+<rect class="box" x="262" y="310" width="206" height="46" rx="8"/>
+<text class="t" x="365" y="330" text-anchor="middle">you sign in</text>
+<text class="s" x="365" y="347" text-anchor="middle">Clerk&#x27;s own page</text>
+<path class="edge" d="M135,272 V292 H365 V308" marker-end="url(#c50a)"/>
+<text class="lbl" x="250" y="287" text-anchor="middle">browser</text>
+<rect class="box" x="32" y="394" width="206" height="46" rx="8"/>
+<text class="t" x="135" y="414" text-anchor="middle">127.0.0.1 callback</text>
+<text class="s" x="135" y="431" text-anchor="middle">code, if the state matches</text>
+<path class="edge dash" d="M365,356 V376 H135 V392" marker-end="url(#c50a)"/>
+<text class="lbl" x="250" y="371" text-anchor="middle">code</text>
+<rect class="box" x="492" y="478" width="206" height="46" rx="8"/>
+<text class="m" x="595" y="498" text-anchor="middle">POST /login/browser</text>
+<text class="s" x="595" y="515" text-anchor="middle">code + verifier</text>
+<path class="edge" d="M135,440 V460 H595 V476" marker-end="url(#c50a)"/>
+<text class="lbl" x="365" y="455" text-anchor="middle">no key</text>
+<rect class="box" x="722" y="562" width="206" height="46" rx="8"/>
+<text class="m" x="825" y="582" text-anchor="middle">token · userinfo</text>
+<text class="s" x="825" y="599" text-anchor="middle">then your key, or a new one</text>
+<path class="edge" d="M595,524 V544 H825 V560" marker-end="url(#c50a)"/>
+<text class="lbl" x="710" y="539" text-anchor="middle">swap</text>
+<rect class="box" x="492" y="646" width="206" height="46" rx="8"/>
+<text class="t" x="595" y="666" text-anchor="middle">answers the key</text>
+<text class="s" x="595" y="683" text-anchor="middle">once; never logged</text>
+<path class="edge dash" d="M825,608 V628 H595 V644" marker-end="url(#c50a)"/>
+<text class="lbl" x="710" y="623" text-anchor="middle">the key</text>
+<rect class="box hot" x="32" y="730" width="206" height="46" rx="8"/>
+<text class="t" x="135" y="750" text-anchor="middle">check + save</text>
+<text class="s" x="135" y="767" text-anchor="middle">as a pasted key is</text>
+<path class="edge hot dash" d="M595,692 V712 H135 V728" marker-end="url(#c50h)"/>
+<text class="lbl hot" x="365" y="707" text-anchor="middle">the key</text>
+</svg>
+</div>
+<figcaption><strong>Clerk signs you in; the xo server hands the CLI your key.</strong> Only when the server&#x27;s <code>GET /login</code> lists Clerk&#x27;s sign-in (it does once <code>XO_OAUTH_CLIENT_ID</code> and <code>XO_CLERK_FRONTEND_URL</code> are set); otherwise, and with <code>xo login --key</code>, xo asks for a key as above. The browser comes back to <code>127.0.0.1</code> on port 8976, 8977 or 8978 (the first free one). The server swaps the code and the verifier only xo holds at Clerk&#x27;s <code>/oauth/token</code>, reads who signed in at <code>/oauth/userinfo</code>, then answers a key that account already has (still working, no claims, so never an admin key; one xo login made first, then the newest), or, when it has none or Clerk will not read its secret back, a new one that works for 90 days. Then xo checks and saves it like a pasted key.</figcaption>
 </figure>
 <h4><code>xo logout</code></h4>
 <figure>
@@ -1812,7 +1879,7 @@ html { scroll-behavior: smooth; }
 				<text class="lbl hot" x="478" y="217">forward</text>
 
 				<rect class="box" x="530" y="20" width="410" height="56" rx="8"/>
-				<text class="m" x="546" y="43">/  ·  /status  ·  /healthz  ·  /config</text>
+				<text class="m" x="546" y="43">/  ·  /status  ·  /healthz  ·  /config  ·  /login</text>
 				<text class="s" x="546" y="63">no key, no Clerk call; the page shows no ids</text>
 
 				<rect class="box" x="530" y="95" width="200" height="70" rx="8"/>
@@ -1838,7 +1905,7 @@ html { scroll-behavior: smooth; }
 				<text class="s" x="865" y="239" text-anchor="middle">checks the key</text>
 			</svg>
 		</div>
-		<figcaption><strong>Only the account routes spend the Secret Key.</strong> Every <code>/me</code> and <code>/user-metadata</code> route verifies the key with Clerk on every call (never cached); <code>/me</code> caches the profile for 60 seconds. The forward never asks this server's Clerk; XO checks the key with its own. <code>POST /me/spaces</code> and <code>connect --id</code> also call XO with the caller's key.</figcaption>
+		<figcaption><strong>Only the account routes and browser login spend the Secret Key.</strong> <code>POST /login/browser</code> needs no key: it swaps a browser sign-in&#x27;s code with Clerk and answers that account&#x27;s key (one it has, else a new one). Every <code>/me</code> and <code>/user-metadata</code> route verifies the key with Clerk on every call (never cached); <code>/me</code> caches the profile for 60 seconds. The forward never asks this server's Clerk; XO checks the key with its own. <code>POST /me/spaces</code> and <code>connect --id</code> also call XO with the caller's key.</figcaption>
 	</figure>
 </section>
 
@@ -2118,7 +2185,7 @@ html { scroll-behavior: smooth; }
 	</div>
 </section>
 
-<footer>Describes <code>quirq-ai/xo</code> main as of this change: through #48. Setup is in <code>docs/quickstart.md</code>; the server's settings in <code>docs/server.md</code>.</footer>
+<footer>Describes <code>quirq-ai/xo</code> main as of this change: through #50. Setup is in <code>docs/quickstart.md</code>; the server's settings in <code>docs/server.md</code>.</footer>
 </main>
 </body>
 </html>

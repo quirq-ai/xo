@@ -62,6 +62,16 @@ class FakeClerk:
         self.core_answer: tuple[int, bytes, dict] = (200, b'{"success": true, "data": {"id": "space_1"}}', {})
         self.core_stall = 0.0
         self.core_trickle = 0.0  # seconds between the answer's bytes, after its headers
+        # Clerk's Frontend API for browser login (XO_CLERK_FRONTEND_URL is under /fapi here): every
+        # request, and the code it takes, the user who signed in, and what it answers otherwise.
+        self.fapi: list[dict] = []
+        self.codes = {"code_1": "user_alice"}  # code -> who signed in (each works once)
+        self.token_answer: tuple[int, dict] | None = None
+        self.userinfo_answer: tuple[int, dict] | None = None
+        self.mint_answer: tuple[int, object] | None = None
+        self.minted: list[dict] = []
+        self.user_keys: list = []  # GET /v1/api_keys?subject=: the keys the user already has
+        self.secrets: dict[str, object] = {}  # key id -> what GET /v1/api_keys/{id}/secret answers
 
 
 @pytest.fixture
@@ -95,6 +105,14 @@ def clerk(monkeypatch):
                 except OSError:
                     pass
                 return
+            if self.path.startswith("/fapi/"):
+                status, out = self._frontend(raw)
+                data = json.dumps(out).encode()
+                self.send_response(status)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
             body = json.loads(raw) if raw else None
             state.calls.append({"method": self.command, "path": self.path, "headers": dict(self.headers),
                                 "body": body})
@@ -111,11 +129,44 @@ def clerk(monkeypatch):
             self.end_headers()
             self.wfile.write(data)
 
+        def _frontend(self, raw):
+            form = {k: v[0] for k, v in urllib.parse.parse_qs(raw.decode()).items()}
+            state.fapi.append({"method": self.command, "path": self.path, "headers": dict(self.headers), "form": form})
+            if self.command == "POST" and self.path == "/fapi/oauth/token":
+                if state.token_answer:
+                    return state.token_answer
+                who = state.codes.pop(form.get("code"), None)
+                if (who is None or form.get("grant_type") != "authorization_code" or form.get("client_id") != CLIENT_ID
+                        or form.get("redirect_uri") != REDIRECT or form.get("code_verifier") != VERIFIER):
+                    return 400, {"error": "invalid_grant"}
+                return 200, {"access_token": "oat_" + who, "token_type": "Bearer"}
+            if self.command == "GET" and self.path == "/fapi/oauth/userinfo":
+                if state.userinfo_answer:
+                    return state.userinfo_answer
+                token = self.headers.get("Authorization", "")
+                if not token.startswith("Bearer oat_"):
+                    return 401, {"error": "invalid_token"}
+                return 200, {"sub": token[len("Bearer oat_"):], "email": "alice@example.com"}
+            return 404, {"error": "not_found"}
+
         def _answer(self, body):
             if self.headers.get("Authorization") != f"Bearer {SECRET}":
                 return 401, {"errors": [{"code": "authentication_invalid"}]}
             if state.fail:
                 return state.fail, {"errors": [{"code": "form_param_value_invalid"}]}
+            if self.command == "POST" and self.path == "/v1/api_keys":
+                state.minted.append(body)
+                if state.mint_answer:
+                    return state.mint_answer
+                secret = "ak_" + "minted_for_" + body["subject"]
+                return 200, {"id": "ak_new_1", "subject": body["subject"], "name": body["name"], "secret": secret,
+                             "claims": None, "revoked": False, "expired": False}
+            if self.command == "GET" and self.path.startswith("/v1/api_keys?"):
+                return 200, {"data": state.user_keys, "total_count": len(state.user_keys)}
+            if self.command == "GET" and self.path.startswith("/v1/api_keys/") and self.path.endswith("/secret"):
+                answer = state.secrets.get(self.path.split("/")[3])
+                return answer if isinstance(answer, tuple) else (
+                    (200, {"secret": answer}) if answer else (404, {"errors": [{"code": "resource_not_found"}]}))
             if self.command == "POST" and self.path == "/v1/api_keys/verify":
                 key = KEYS.get(body.get("secret"))
                 return (200, key) if key else (404, {"errors": [{"code": "resource_not_found"}]})
@@ -155,6 +206,20 @@ def clerk(monkeypatch):
     httpd.shutdown()
 
 
+CLIENT_ID = "cli_xo_test"
+REDIRECT = server.LOGIN_REDIRECTS[0]
+VERIFIER = "v" * 43
+MINTED = "ak_" + "minted_for_user_alice"  # built at runtime: not a key-shaped literal
+OLD = "ak_" + "alice_already_had"
+
+
+@pytest.fixture
+def browser_on(clerk, monkeypatch):
+    monkeypatch.setenv("XO_OAUTH_CLIENT_ID", CLIENT_ID)
+    monkeypatch.setenv("XO_CLERK_FRONTEND_URL", os.environ["CLERK_API_URL"] + "/fapi/")
+    return clerk
+
+
 @pytest.fixture
 def xo_server(clerk, capfd):
     """`xo serve` on a free port, with its audit lines collected."""
@@ -168,7 +233,7 @@ def xo_server(clerk, capfd):
     yield httpd
     httpd.shutdown()
     err = capfd.readouterr().err
-    for secret in (SECRET, USER_KEY, ADMIN_KEY, FORGED_KEY):
+    for secret in (SECRET, USER_KEY, ADMIN_KEY, FORGED_KEY, MINTED, OLD, VERIFIER, "oat_user_alice", "code_1"):
         assert secret not in err and all(secret not in line for line in lines), "a secret was logged"
 
 
@@ -2498,3 +2563,167 @@ def test_share_is_limited_to_ten_a_minute_per_key(no_floor):
     app = _app(_two())
     answers = [_as(app, USER_KEY, "/me/share", {"item": "space:dev", "to": "nobody"})[0] for _ in range(11)]
     assert answers[:10] == [404] * 10 and answers[10] == 429
+
+
+# Browser login: GET /login and POST /login/browser.
+LOGIN = {"code": "code_1", "verifier": VERIFIER, "redirect": REDIRECT, "name": "xo CLI on mbp"}
+
+
+def test_browser_login_is_off_unless_both_settings_are_set(xo_server, clerk):
+    assert call(xo_server, "GET", "/login") == (200, {"success": True, "data": {"browser": None}})
+    status, body = call(xo_server, "POST", "/login/browser", body=LOGIN)
+    assert status == 404 and "xo login --key" in body["error"] and clerk.fapi == [] and clerk.calls == []
+
+
+def test_get_login_lists_clerks_sign_in(browser_on, xo_server):
+    status, body = call(xo_server, "GET", "/login")
+    base = os.environ["CLERK_API_URL"]
+    assert status == 200 and body["data"]["browser"] == {
+        "authorize": base + "/fapi/oauth/authorize", "clientId": CLIENT_ID, "scope": "openid profile email",
+        "redirects": list(server.LOGIN_REDIRECTS), "keyDays": 90}
+    assert browser_on.fapi == [] and browser_on.calls == []  # no Clerk call to say where to sign in
+
+
+def test_browser_login_swaps_the_code_and_makes_the_user_a_key(browser_on, xo_server, capfd):
+    status, body = call(xo_server, "POST", "/login/browser", body=LOGIN)
+    assert (status, body) == (200, {"success": True, "data": {"key": MINTED, "days": 90, "reused": False}})
+    token, info = browser_on.fapi
+    assert token["form"] == {"grant_type": "authorization_code", "code": "code_1", "redirect_uri": REDIRECT,
+                             "client_id": CLIENT_ID, "code_verifier": VERIFIER}
+    assert "Authorization" not in token["headers"]  # a public client: no secret goes to the Frontend API
+    assert info["headers"]["Authorization"] == "Bearer oat_user_alice"
+    # One key, for the user who signed in, with no claims (never an admin key) and an expiry.
+    assert browser_on.minted == [{"name": "xo CLI on mbp", "subject": "user_alice",
+                                  "description": "made by xo login in a browser",
+                                  "seconds_until_expiration": 90 * 86400}]
+    assert audits(xo_server)[-1] | {"time": None} == {"time": None, "method": "POST", "route": "/login/browser",
+                                                      "keyId": "ak_new_1", "caller": None, "target": "user_alice",
+                                                      "outcome": 200, "reused": False}
+    # The code works once: a second swap makes no key.
+    status, body = call(xo_server, "POST", "/login/browser", body=LOGIN)
+    assert status == 401 and "run xo login again" in body["error"] and len(browser_on.minted) == 1
+
+
+def test_a_code_without_its_verifier_makes_no_key(browser_on, xo_server):
+    status, body = call(xo_server, "POST", "/login/browser", body=LOGIN | {"verifier": "w" * 43})
+    assert status == 401 and browser_on.minted == [] and len(browser_on.fapi) == 1
+    assert audits(xo_server)[-1]["outcome"] == 401 and audits(xo_server)[-1]["clerk"] == 400
+
+
+@pytest.mark.parametrize("change, status", [
+    ({"code": ""}, 400), ({"code": "a b"}, 400), ({"code": 5}, 400), ({"verifier": "v" * 42}, 400),
+    ({"verifier": "v" * 129}, 400), ({"redirect": "http://127.0.0.1:9999/callback"}, 400),
+    ({"redirect": "https://evil.example/callback"}, 400), ({"name": " lead"}, 400), ({"name": "x" * 41}, 400),
+    ({"extra": 1}, 422)])
+def test_browser_login_refuses_bad_bodies_before_calling_clerk(browser_on, xo_server, change, status):
+    assert call(xo_server, "POST", "/login/browser", body=LOGIN | change)[0] == status
+    assert browser_on.fapi == [] and browser_on.minted == []
+
+
+def test_browser_login_refuses_a_body_that_is_not_json(browser_on, xo_server):
+    assert call(xo_server, "POST", "/login/browser", raw=b"{")[0] == 422
+    assert call(xo_server, "POST", "/login/browser", body=[1])[0] == 422
+    assert call(xo_server, "GET", "/login/browser")[0] == 405 and call(xo_server, "POST", "/login")[0] == 405
+    assert browser_on.fapi == []
+
+
+@pytest.mark.parametrize("answer", [(200, {"sub": "org_1"}), (200, {"sub": 5}), (200, {}), (500, {})])
+def test_who_signed_in_must_be_a_user(browser_on, xo_server, answer):
+    browser_on.userinfo_answer = answer
+    status, body = call(xo_server, "POST", "/login/browser", body=LOGIN)
+    assert status == 502 and body["error"] == "Clerk's sign-in did not answer" and browser_on.minted == []
+
+
+@pytest.mark.parametrize("answer", [(200, {"token_type": "Bearer"}), (503, {}), (302, {})])
+def test_a_token_answer_without_a_token_makes_no_key(browser_on, xo_server, answer):
+    browser_on.token_answer = answer
+    assert call(xo_server, "POST", "/login/browser", body=LOGIN)[0] == 502
+    assert len(browser_on.fapi) == 1 and browser_on.minted == []
+
+
+@pytest.mark.parametrize("answer", [
+    (200, {"id": "ak_new_1", "subject": "user_bob", "secret": "ak_" + "for_bob"}),
+    (200, {"id": "ak_new_1", "subject": "user_alice"}), (200, {"id": "ak_new_1", "subject": "user_alice",
+                                                                "secret": "sk_" + "not_a_key"})])
+def test_a_key_clerk_did_not_make_for_this_user_is_not_passed_on(browser_on, xo_server, answer):
+    browser_on.mint_answer = answer
+    status, body = call(xo_server, "POST", "/login/browser", body=LOGIN)
+    assert status == 502 and "key" not in body.get("data", {}) and "for_bob" not in json.dumps(body)
+    assert audits(xo_server)[-1]["outcome"] == 502 and audits(xo_server)[-1]["clerk"] == "no key"
+
+
+def test_clerk_refusing_to_make_a_key_says_why_on_stderr(browser_on, xo_server, capfd):
+    browser_on.mint_answer = (422, {"errors": [{"code": "feature_not_enabled"}]})
+    status, body = call(xo_server, "POST", "/login/browser", body=LOGIN)
+    assert status == 502 and body["error"] == "Clerk would not make an API key for this account"
+    err = capfd.readouterr().err
+    assert "Clerk would not make an API key (422, feature_not_enabled)" in err and "API keys are turned on" in err
+
+
+@pytest.mark.parametrize("env, why", [
+    ({"XO_OAUTH_CLIENT_ID": "cli_1"}, "XO_CLERK_FRONTEND_URL is not set"),
+    ({"XO_CLERK_FRONTEND_URL": "https://clerk.example.test"}, "XO_OAUTH_CLIENT_ID is not set"),
+    ({"XO_OAUTH_CLIENT_ID": "cli 1", "XO_CLERK_FRONTEND_URL": "https://clerk.example.test"}, "is not a client id"),
+    ({"XO_OAUTH_CLIENT_ID": "cli_1", "XO_CLERK_FRONTEND_URL": "http://clerk.example.test"}, "must be https://")])
+def test_a_bad_browser_login_setting_turns_it_off_not_the_server(clerk, monkeypatch, capsys, env, why):
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    cfg = server.Config()
+    assert (cfg.oauth_client_id, cfg.frontend_url) == (None, None)
+    assert "xo serve: browser login is off: " in capsys.readouterr().err
+    assert server.App(cfg).handle("GET", "/login", {}, None) == (200, {"success": True, "data": {"browser": None}})
+
+
+def test_a_bad_browser_login_setting_names_the_problem(clerk, monkeypatch, capsys):
+    monkeypatch.setenv("XO_OAUTH_CLIENT_ID", "cli_1")
+    monkeypatch.setenv("XO_CLERK_FRONTEND_URL", "http://clerk.example.test")
+    server.Config()
+    assert "XO_CLERK_FRONTEND_URL must be https://" in capsys.readouterr().err
+
+
+def test_login_routes_are_named_on_the_status_page():
+    assert server._route_name("/login") == "/login" and server._route_name("/login/browser") == "/login/browser"
+
+
+def _key(id_, **extra):
+    return {"id": id_, "subject": "user_alice", "claims": None, "revoked": False, "expired": False,
+            "created_at": 1, **extra}
+
+
+def test_browser_login_hands_back_a_key_the_user_already_has(browser_on, xo_server):
+    browser_on.user_keys = [_key("ak_old_1", description=server.LOGIN_KEY_NOTE)]
+    browser_on.secrets = {"ak_old_1": OLD}
+    status, body = call(xo_server, "POST", "/login/browser", body=LOGIN)
+    assert (status, body) == (200, {"success": True, "data": {"key": OLD, "days": None, "reused": True}})
+    assert browser_on.minted == []
+    listed = [c["path"] for c in browser_on.calls]
+    assert listed == ["/v1/api_keys?subject=user_alice&limit=100", "/v1/api_keys/ak_old_1/secret"]
+    assert audits(xo_server)[-1]["keyId"] == "ak_old_1" and audits(xo_server)[-1]["reused"] is True
+
+
+def test_an_xo_made_key_comes_first_then_the_newest(browser_on, xo_server):
+    browser_on.user_keys = [_key("ak_a", created_at=5), _key("ak_xo", description=server.LOGIN_KEY_NOTE, created_at=1),
+                            _key("ak_b", created_at=9)]
+    browser_on.secrets = {"ak_a": "ak_" + "a1", "ak_xo": OLD, "ak_b": "ak_" + "b1"}
+    assert call(xo_server, "POST", "/login/browser", body=LOGIN)[1]["data"]["key"] == OLD
+    browser_on.codes = {"code_1": "user_alice"}
+    browser_on.user_keys = [_key("ak_a", created_at=5), _key("ak_b", created_at=9)]
+    assert call(xo_server, "POST", "/login/browser", body=LOGIN)[1]["data"]["key"] == "ak_" + "b1"
+
+
+@pytest.mark.parametrize("key", [_key("ak_x", claims={"xo_admin": True}), _key("ak_x", revoked=True),
+                                 _key("ak_x", expired=True), _key("ak_x", subject="user_bob"), _key(5)])
+def test_a_key_that_is_not_safe_to_hand_back_is_skipped(browser_on, xo_server, key):
+    browser_on.user_keys = [key]
+    browser_on.secrets = {"ak_x": OLD}
+    assert call(xo_server, "POST", "/login/browser", body=LOGIN)[1]["data"]["key"] == MINTED
+    assert not any(c["path"].endswith("/secret") for c in browser_on.calls)
+
+
+@pytest.mark.parametrize("secret", [None, (403, {"errors": [{"code": "forbidden"}]}), "sk_" + "not_a_key"])
+def test_a_key_whose_secret_clerk_will_not_give_means_a_new_key(browser_on, xo_server, secret):
+    browser_on.user_keys = [_key("ak_old_1")]
+    browser_on.secrets = {"ak_old_1": secret} if secret else {}
+    status, body = call(xo_server, "POST", "/login/browser", body=LOGIN)
+    assert status == 200 and body["data"] == {"key": MINTED, "days": 90, "reused": False}
+    assert len(browser_on.minted) == 1

@@ -1117,9 +1117,9 @@ PROBE = "/api/core/v1/spaces/00000000-0000-0000-0000-000000000000"
 
 
 def sent(fake) -> list[dict]:
-    """What reached the fake xo server besides the keyless /config, which xo login always asks."""
-    assert all("Authorization" not in r["headers"] for r in fake.requests if r["path"] == "/config")
-    return [r for r in fake.requests if r["path"] != "/config"]
+    """What reached the fake xo server besides the keyless /config and /login, which xo login always asks."""
+    assert all("Authorization" not in r["headers"] for r in fake.requests if r["path"] in ("/config", "/login"))
+    return [r for r in fake.requests if r["path"] not in ("/config", "/login")]
 
 
 @pytest.fixture
@@ -2250,3 +2250,204 @@ def test_share_calls_a_project_by_its_repo_name_and_refuses_a_local_one(xs, caps
 def test_an_origin_counts_as_the_repo_only_in_githubs_own_forms(url, same):
     from xo import gitops
     assert gitops._is_repo(url, "o/r") is same
+
+
+# Browser login: the fake xo server lists a sign-in address, a stand-in browser follows the link
+# back to xo's loopback port, and the server answers the code with a key made at runtime (so it is
+# not a key-shaped literal) that is not KEY.
+BROWSER_KEY = "ak_" + "made_by_browser_login"
+
+
+def _free_ports(n: int = 2) -> list[int]:
+    import socket
+    socks = [socket.socket() for _ in range(n)]
+    for s in socks:
+        s.bind(("127.0.0.1", 0))
+    ports = [s.getsockname()[1] for s in socks]
+    for s in socks:
+        s.close()
+    return ports
+
+
+@pytest.fixture
+def browser(login, monkeypatch):
+    """xo login against a server that lists browser login; .answer(query) is what the browser does
+    when it opens the link: by default it comes back to the redirect with a code and the same state."""
+    from xo import weblogin
+    ports = _free_ports()
+    login.settings = {"authorize": "https://clerk.example.test/oauth/authorize", "clientId": "cli_xo_1",
+                      "scope": "openid profile email", "redirects": [f"http://127.0.0.1:{p}/callback" for p in ports],
+                      "keyDays": 90}
+    login.route("GET", "/login", body=lambda r: {"success": True, "data": {"browser": login.settings}})
+    login.route("POST", "/login/browser", body={"success": True, "data": {"key": BROWSER_KEY, "days": 90}})
+    login.opened = []
+    login.answer = lambda q: {"code": "code_1", "state": q["state"]}
+    login.pages = []
+
+    def open_link(link: str) -> bool:
+        import threading
+        import urllib.error
+        import urllib.parse
+        import urllib.request
+        login.opened.append(link)
+        query = {k: v[0] for k, v in urllib.parse.parse_qs(urllib.parse.urlsplit(link).query).items()}
+        answers = login.answer(query)
+
+        def go() -> None:
+            for answer in answers if isinstance(answers, list) else [answers]:
+                url = query["redirect_uri"] + "?" + urllib.parse.urlencode(answer)
+                try:
+                    with urllib.request.urlopen(url, timeout=5) as resp:
+                        login.pages.append((resp.status, resp.read().decode()))
+                except urllib.error.HTTPError as e:
+                    login.pages.append((e.code, e.read().decode()))
+        threading.Thread(target=go, daemon=True).start()
+        return True
+    monkeypatch.setattr(weblogin.webbrowser, "open", open_link)
+    monkeypatch.setattr(weblogin, "_can_open", lambda: True)
+    login.typed("")  # nothing to type: a key prompt would fail the login
+    return login
+
+
+def test_browser_login_saves_the_key_the_server_made(browser, capsys, config_home):
+    import base64
+    import hashlib
+    import urllib.parse
+    code, out, err = run(capsys, "login", "xo")
+    assert code == 0 and out == ""
+    link = urllib.parse.urlsplit(browser.opened[0])
+    q = {k: v[0] for k, v in urllib.parse.parse_qs(link.query).items()}
+    assert f"{link.scheme}://{link.netloc}{link.path}" == "https://clerk.example.test/oauth/authorize"
+    assert q["response_type"] == "code" and q["client_id"] == "cli_xo_1" and q["scope"] == "openid profile email"
+    assert q["code_challenge_method"] == "S256" and q["redirect_uri"] == browser.settings["redirects"][0]
+    posted = [r for r in browser.requests if r["path"] == "/login/browser"]
+    assert len(posted) == 1 and "Authorization" not in posted[0]["headers"]
+    body = posted[0]["body"]
+    assert set(body) == {"code", "verifier", "redirect", "name"} and body["code"] == "code_1"
+    assert body["redirect"] == q["redirect_uri"] and body["name"].startswith("xo CLI")
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(body["verifier"].encode()).digest()).rstrip(b"=").decode()
+    assert q["code_challenge"] == challenge and body["verifier"] not in browser.opened[0]
+    # The new key is checked with XO and saved like a typed one; it is never shown.
+    assert [r["path"] for r in sent(browser) if r["path"] != "/login/browser"] == [PROBE, "/me"]
+    assert all(r["headers"]["Authorization"] == f"Bearer {BROWSER_KEY}" for r in sent(browser)
+               if r["path"] != "/login/browser")
+    assert json.loads((config_home / "xo" / "credentials").read_text()) == {"url": browser.base, "key": BROWSER_KEY}
+    assert BROWSER_KEY not in err and "code_1" not in err
+    assert "xo: me: logged in as sam (user_1); a new key that works for 90 days and URL saved to" in err
+    assert browser.pages == [(200, browser.pages[0][1])] and "Signed in." in browser.pages[0][1]
+
+
+def test_browser_login_takes_the_next_port_when_one_is_busy(browser, capsys):
+    import socket
+    busy = socket.socket()
+    busy.bind(("127.0.0.1", int(browser.settings["redirects"][0].rsplit(":", 1)[1].split("/")[0])))
+    busy.listen()
+    try:
+        assert run(capsys, "login", "xo")[0] == 0
+    finally:
+        busy.close()
+    assert [r["body"]["redirect"] for r in browser.requests if r["path"] == "/login/browser"] == [
+        browser.settings["redirects"][1]]
+
+
+def test_browser_login_says_when_every_port_is_busy(browser, capsys, config_home):
+    import socket
+    held = []
+    for redirect in browser.settings["redirects"]:
+        s = socket.socket()
+        s.bind(("127.0.0.1", int(redirect.rsplit(":", 1)[1].split("/")[0])))
+        s.listen()
+        held.append(s)
+    try:
+        code, _, err = run(capsys, "login", "xo")
+    finally:
+        for s in held:
+            s.close()
+    assert code == 1 and "are all in use" in err and "xo login --key" in err
+    assert browser.opened == [] and not (config_home / "xo" / "credentials").exists()
+
+
+def test_a_sign_in_for_another_state_is_ignored(browser, capsys):
+    browser.answer = lambda q: [{"code": "stolen", "state": "not-" + q["state"]}, {"code": "code_1", "state": q["state"]}]
+    assert run(capsys, "login", "xo")[0] == 0
+    assert [r["body"]["code"] for r in browser.requests if r["path"] == "/login/browser"] == ["code_1"]
+    assert [status for status, _ in browser.pages] == [400, 200]
+
+
+def test_a_sign_in_that_was_not_finished_saves_nothing(browser, capsys, config_home):
+    browser.answer = lambda q: {"error": "access_denied", "state": q["state"]}
+    code, _, err = run(capsys, "login", "xo")
+    assert code == 1 and "the sign-in was not finished (access_denied); nothing saved" in err
+    assert not any(r["path"] == "/login/browser" for r in browser.requests)
+    assert not (config_home / "xo" / "credentials").exists()
+
+
+def test_a_sign_in_that_never_comes_back_times_out(browser, capsys, monkeypatch, config_home):
+    from xo import weblogin
+    monkeypatch.setattr(weblogin, "WAIT", 1)
+    browser.answer = lambda q: []
+    code, _, err = run(capsys, "login", "xo")
+    assert code == 1 and "did not come back in time; nothing saved" in err
+    assert not (config_home / "xo" / "credentials").exists()
+
+
+def test_a_server_that_makes_no_key_saves_nothing(browser, capsys, config_home):
+    browser.route("POST", "/login/browser", status=401,
+                  body={"success": False, "error": "The sign-in did not work (it expired or was already used); "
+                                                   "run xo login again"})
+    code, _, err = run(capsys, "login", "xo")
+    assert code == 1 and "POST /login/browser: HTTP 401" in err and "run xo login again" in err
+    assert not (config_home / "xo" / "credentials").exists()
+    browser.route("POST", "/login/browser", body={"success": True, "data": {"key": "sk_live_not_xo"}})
+    code, _, err = run(capsys, "login", "xo")
+    assert code == 1 and "did not answer with an API key; nothing saved" in err and "sk_live_not_xo" not in err
+    assert not (config_home / "xo" / "credentials").exists()
+
+
+@pytest.mark.parametrize("change", [{"authorize": "http://clerk.example.test/oauth/authorize"},
+                                    {"authorize": "https://clerk.example.test/oauth/authorize?x=1"},
+                                    {"clientId": "a b"}, {"redirects": []},
+                                    {"redirects": ["http://evil.example.test:8976/callback"]},
+                                    {"redirects": ["http://127.0.0.1:8976/other"]}])
+def test_browser_settings_xo_cannot_use_are_refused(browser, capsys, config_home, change):
+    browser.settings.update(change)
+    code, _, err = run(capsys, "login", "xo")
+    assert code == 1 and "browser login settings xo cannot use" in err and browser.opened == []
+    assert not (config_home / "xo" / "credentials").exists()
+
+
+def test_key_login_skips_the_browser(browser, capsys, config_home):
+    browser.typed()
+    code, _, err = run(capsys, "login", "xo", "--key")
+    assert code == 0 and browser.opened == [] and not any(r["path"] == "/login" for r in browser.requests)
+    assert json.loads((config_home / "xo" / "credentials").read_text())["key"] == KEY
+    assert "key and URL saved to" in err
+
+
+def test_a_server_without_browser_login_asks_for_the_key(browser, capsys, config_home):
+    browser.settings = None
+    browser.typed()
+    code, _, err = run(capsys, "login", "xo")
+    assert code == 0 and browser.opened == []
+    assert json.loads((config_home / "xo" / "credentials").read_text())["key"] == KEY
+
+
+def test_browser_login_says_when_it_got_the_key_you_already_had(browser, capsys, config_home):
+    browser.route("POST", "/login/browser", body={"success": True, "data": {"key": BROWSER_KEY, "days": None,
+                                                                            "reused": True}})
+    code, _, err = run(capsys, "login", "xo")
+    assert code == 0 and "the key your account already has and URL saved to" in err and BROWSER_KEY not in err
+    assert json.loads((config_home / "xo" / "credentials").read_text())["key"] == BROWSER_KEY
+
+
+def test_no_browser_is_opened_on_linux_without_a_display(monkeypatch):
+    from xo import weblogin
+    monkeypatch.setattr(weblogin.sys, "platform", "linux")
+    for name in ("DISPLAY", "WAYLAND_DISPLAY"):
+        monkeypatch.delenv(name, raising=False)
+    assert weblogin._can_open() is False
+    monkeypatch.setenv("DISPLAY", ":0")
+    assert weblogin._can_open() is True
+    monkeypatch.setattr(weblogin.sys, "platform", "darwin")
+    monkeypatch.delenv("DISPLAY")
+    assert weblogin._can_open() is True

@@ -9,6 +9,12 @@ verifies it with Clerk and answers:
     GET   /                         the status page (HTML): health, counts and recent requests
     GET   /status                   the same as JSON: no key, no Clerk call, no ids
     GET   /healthz                  no key, no Clerk call
+    GET   /login                    no key, no Clerk call: how to log in in a browser ({"browser": null}
+                                    unless XO_OAUTH_CLIENT_ID and XO_CLERK_FRONTEND_URL are both set)
+    POST  /login/browser            no key: {"code", "verifier", "redirect", "name"?} from Clerk's sign-in
+                                    (OAuth, PKCE): the server swaps the code with Clerk, and makes the
+                                    signed-in user's API key: one it already has (no claims, still
+                                    working), else a new one; never stored or logged
     GET   /me                       any user key: the key's own account, with its primary email and
                                     its public and private metadata (secret-looking values masked)
     GET   /me/projects              any user key: the `projects` list in its own private metadata
@@ -65,6 +71,9 @@ Configuration (environment only, so the secret never lands in shell history or t
     CLERK_API_URL             default https://api.clerk.com (tests point it at a fake)
     XO_CORE_API_URL           where /api/core/v1 goes; default the xo address in the
                               services list (https://dev.xo.builders) plus /api/core/v1
+    XO_OAUTH_CLIENT_ID        the client id of the Clerk OAuth application xo login uses (public)
+    XO_CLERK_FRONTEND_URL     that Clerk instance's Frontend API URL (public); browser login is on
+                              only when both are set, and a bad value turns it off, not the server
 
 It listens on 127.0.0.1 by default: put it behind an HTTPS proxy before giving it any other host.
 On Vercel, the repo's root app.py serves the same routes through `wsgi_app()` (docs/deploy-vercel.md).
@@ -154,9 +163,25 @@ ACTIVITY_KEPT = 100  # recent requests the status page lists, per process
 # amount of other traffic hides one, and each heals by itself once it is older than that.
 DEGRADED_SECONDS = 300
 DEGRADED_KEPT = 1000  # times remembered of each kind; enough to count five minutes of real traffic
-_CLERK_ROUTES = ("/me", "/me/projects", "/me/projects/connect", "/me/spaces", "/me/spaces/connect", "/me/spaces/{name}",
+_CLERK_ROUTES = ("/login/browser", "/me", "/me/projects", "/me/projects/connect", "/me/spaces", "/me/spaces/connect", "/me/spaces/{name}",
                  "/me/spaces/{name}/projects", "/me/share", "/me/shared", "/me/shared/accept", "/me/shared/reject",
                  "/user-metadata/{userId}")
+# Browser login (`xo login`): Clerk's sign-in sends the browser back to the CLI on one of these
+# loopback addresses, each registered as a redirect URL of the Clerk OAuth application.
+LOGIN_PORTS = (8976, 8977, 8978)
+LOGIN_REDIRECTS = tuple(f"http://127.0.0.1:{port}/callback" for port in LOGIN_PORTS)
+LOGIN_SCOPE = "openid profile email"
+CLIENT_ID_ENV = "XO_OAUTH_CLIENT_ID"
+FRONTEND_ENV = "XO_CLERK_FRONTEND_URL"
+CLIENT_ID = re.compile(r"[A-Za-z0-9_-]{1,100}")
+# RFC 6749 and 7636: a code is opaque (kept to URL-safe characters here), a verifier 43 to 128 of these.
+LOGIN_CODE = re.compile(r"[A-Za-z0-9._~-]{1,512}")
+LOGIN_VERIFIER = re.compile(r"[A-Za-z0-9._~-]{43,128}")
+LOGIN_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ._-]{0,39}")
+# A key made by browser login stops working after this; xo login makes a new one.
+LOGIN_KEY_DAYS = 90
+LOGIN_KEY_NOTE = "made by xo login in a browser"  # the description of the keys it makes
+LOGIN_PER_SECOND = 2  # browser logins swapped at once for the whole process
 # The creates `xo create space NAME KIND` may record: the core routes that make a space.
 SPACE_KINDS = names.SPACE_KINDS
 _PROCESS_STARTED = time.time()  # when this process (on Vercel, this instance) loaded the server
@@ -220,6 +245,31 @@ class Config:
         self.clerk_per_second = _int_env("XO_CLERK_PER_SECOND", 20)
         self.core_per_second = _int_env("XO_CORE_PER_SECOND", 10)
         self.max_connections = _int_env("XO_SERVE_MAX_CONNECTIONS", 64)
+        self.oauth_client_id, self.frontend_url = _browser_login()
+
+
+def _browser_login() -> tuple[str | None, str | None]:
+    """Clerk's OAuth client id and Frontend API URL for browser login, or (None, None) when it is off.
+    A bad value turns browser login off and says why on stderr; it never stops the server, so key
+    login keeps working whatever is set here."""
+    client_id = os.environ.get(CLIENT_ID_ENV, "").strip()
+    frontend = os.environ.get(FRONTEND_ENV, "").strip()
+    if not client_id and not frontend:
+        return None, None
+    why = None
+    if not client_id or not frontend:
+        why = f"{CLIENT_ID_ENV if not client_id else FRONTEND_ENV} is not set"
+    elif not CLIENT_ID.fullmatch(client_id):
+        why = f"{CLIENT_ID_ENV} is not a client id (letters, digits, _ and -)"
+    else:
+        try:
+            frontend = _upstream(FRONTEND_ENV, frontend)
+        except XoError as e:
+            why = str(e)
+    if why:
+        print(f"xo serve: browser login is off: {why}", file=sys.stderr, flush=True)
+        return None, None
+    return client_id, frontend
 
 
 class ClerkError(Exception):
@@ -320,6 +370,78 @@ class Clerk:
     def update_metadata(self, user_id: str, changes: dict) -> dict:
         body = {BUCKETS[name]: value for name, value in changes.items()}
         return self._call("PATCH", "/users/" + urllib.parse.quote(user_id, safe="") + "/metadata", body)
+
+    def user_keys(self, user_id: str) -> list:
+        """The user's API keys that still work (Clerk leaves out revoked and expired ones)."""
+        out = self._call("GET", "/api_keys?" + urllib.parse.urlencode({"subject": user_id, "limit": 100}), shape=object)
+        keys = out.get("data") if isinstance(out, dict) else out
+        if not isinstance(keys, list):
+            raise ClerkError(502, "not a list", seen="not a list")
+        return keys
+
+    def key_secret(self, key_id: str) -> object:
+        return self._call("GET", "/api_keys/" + urllib.parse.quote(key_id, safe="") + "/secret").get("secret")
+
+    def create_key(self, user_id: str, name: str) -> dict:
+        """A new API key for this user, with no claims (so never an admin key); its secret is in
+        this answer only."""
+        return self._call("POST", "/api_keys", {
+            "name": name, "subject": user_id, "description": LOGIN_KEY_NOTE,
+            "seconds_until_expiration": LOGIN_KEY_DAYS * 86400})
+
+
+class ClerkFrontend:
+    """Browser login's door to Clerk's Frontend API: swap a sign-in code for a token, then read who
+    signed in. The OAuth application is a public client, so nothing secret is sent; the token is
+    used once and dropped."""
+
+    def __init__(self, cfg: Config, clock=time.monotonic) -> None:
+        self._cfg = cfg
+        self._opener = urllib.request.build_opener(_NoRedirect)
+        self._budget = _Bucket(LOGIN_PER_SECOND, clock)
+
+    def _call(self, path: str, data: bytes | None = None, token: str | None = None) -> dict:
+        req = urllib.request.Request(self._cfg.frontend_url + path, data=data, method="POST" if data else "GET",
+                                     headers={"Accept": "application/json", "User-Agent": f"xo-server/{__version__}",
+                                              **({"Content-Type": "application/x-www-form-urlencoded"}
+                                                 if data else {})})
+        if token:
+            req.add_unredirected_header("Authorization", f"Bearer {token}")
+        try:
+            with self._opener.open(req, timeout=CLERK_TIMEOUT) as resp:
+                raw = resp.read()
+        except urllib.error.HTTPError as e:
+            code = ""
+            try:
+                code = str(json.loads(e.read()).get("error", ""))[:60]
+            except Exception:  # noqa: BLE001 - the status is enough
+                pass
+            if 300 <= e.code < 400:
+                raise ClerkError(502, code, seen="redirect") from None
+            raise ClerkError(e.code, code) from None
+        except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException, ValueError):
+            raise ClerkError(502, "unreachable", seen="unreachable") from None
+        try:
+            out = json.loads(raw or b"null")
+        except (ValueError, RecursionError):
+            raise ClerkError(502, "not JSON", seen="not JSON") from None
+        if not isinstance(out, dict):
+            raise ClerkError(502, "not an object", seen="not an object")
+        return out
+
+    def user_id(self, code: str, verifier: str, redirect: str) -> str:
+        """The Clerk user id of whoever signed in and was given this code."""
+        if not self._budget.take():
+            raise BUSY
+        form = urllib.parse.urlencode({"grant_type": "authorization_code", "code": code, "redirect_uri": redirect,
+                                       "client_id": self._cfg.oauth_client_id, "code_verifier": verifier})
+        token = self._call("/oauth/token", form.encode()).get("access_token")
+        if not isinstance(token, str) or not token:
+            raise ClerkError(502, "no access token", seen="no access token")
+        sub = self._call("/oauth/userinfo", token=token).get("sub")
+        if not isinstance(sub, str) or not USER_ID.fullmatch(sub):
+            raise ClerkError(502, "no user id", seen="no user id")
+        return sub
 
 
 # Metadata names that read like a credential: their values are masked in /me, which hands a user's
@@ -614,10 +736,11 @@ class App:
     """Routing, auth, limits and audit, apart from the HTTP plumbing so tests can drive it."""
 
     def __init__(self, cfg: Config, clerk: Clerk | None = None, audit=None, clock=time.monotonic,
-                 core: Core | None = None) -> None:
+                 core: Core | None = None, frontend: ClerkFrontend | None = None) -> None:
         self.cfg = cfg
         self.clerk = clerk or Clerk(cfg, clock)
         self.core = core or Core(cfg)
+        self.frontend = frontend or ClerkFrontend(cfg, clock)
         self.audit_out = audit or (lambda line: print(line, file=sys.stderr, flush=True))
         self.clock = clock
         self._lock = threading.Lock()
@@ -740,6 +863,14 @@ class App:
             return self.status()
         if path == "/config" and method in ("GET", "HEAD"):
             return services_list()
+        if path == "/login":
+            if method not in ("GET", "HEAD"):
+                raise _Reply(405, "Method not allowed")
+            return {"browser": self._browser()}
+        if path == "/login/browser":
+            if method != "POST":
+                raise _Reply(405, "Method not allowed")
+            return self._browser_login(body)
         if path == "/me":
             if method != "GET":
                 raise _Reply(405, "Method not allowed")
@@ -795,6 +926,94 @@ class App:
                 raise _Reply(405, "Method not allowed")
             return self._metadata(method, urllib.parse.unquote(path[len("/user-metadata/"):]), headers, body)
         raise _Reply(404, "Not found")
+
+    def _browser(self) -> dict | None:
+        """What the CLI needs to start a browser login: Clerk's sign-in address and the public client id."""
+        if not self.cfg.oauth_client_id:
+            return None
+        return {"authorize": self.cfg.frontend_url + "/oauth/authorize", "clientId": self.cfg.oauth_client_id,
+                "scope": LOGIN_SCOPE, "redirects": list(LOGIN_REDIRECTS), "keyDays": LOGIN_KEY_DAYS}
+
+    def _browser_login(self, body: bytes | None) -> dict:
+        """Swap a browser sign-in's code for a new API key of the user who signed in. The code is
+        Clerk's and works once, only with the verifier the CLI kept, so only that CLI gets the key."""
+        if not self.cfg.oauth_client_id:
+            raise _Reply(404, "Browser login is not set up on this server; log in with an API key (xo login --key)")
+        try:
+            data = json.loads(body or b"")
+        except (ValueError, RecursionError):
+            raise _Reply(422, "Body is not JSON") from None
+        if not isinstance(data, dict) or set(data) - {"code", "verifier", "redirect", "name"}:
+            raise _Reply(422, 'Body must be {"code", "verifier", "redirect", "name"?} and nothing else')
+        code, verifier, redirect = data.get("code"), data.get("verifier"), data.get("redirect")
+        name = data.get("name", "xo CLI")
+        if not (isinstance(code, str) and LOGIN_CODE.fullmatch(code)):
+            raise _Reply(400, "code must be the code Clerk's sign-in gave")
+        if not (isinstance(verifier, str) and LOGIN_VERIFIER.fullmatch(verifier)):
+            raise _Reply(400, "verifier must be 43 to 128 letters, digits and . _ ~ -")
+        if redirect not in LOGIN_REDIRECTS:
+            raise _Reply(400, "redirect must be one of " + ", ".join(LOGIN_REDIRECTS))
+        if not (isinstance(name, str) and LOGIN_NAME.fullmatch(name)):
+            raise _Reply(400, "name must be up to 40 letters, digits, spaces and . _ -, starting with a letter or digit")
+        try:
+            user_id = self.frontend.user_id(code, verifier, redirect)
+        except ClerkError as e:
+            if e is BUSY:
+                reply = _Reply(429, "Too many logins at once; try again in a few seconds", e.seen)
+            elif e.status in (400, 401):  # invalid_grant: expired, used, or not this verifier
+                reply = _Reply(401, "The sign-in did not work (it expired or was already used); run xo login again",
+                               e.seen)
+            else:
+                reply = _Reply(502, "Clerk's sign-in did not answer", e.seen)
+            self.audit(method="POST", route="/login/browser", keyId=None, caller=None, target=None,
+                       outcome=reply.status, clerk=e.seen)
+            raise reply from None
+        old = self._old_key(user_id)
+        if old is not None:
+            self.audit(method="POST", route="/login/browser", keyId=old[0], caller=None, target=user_id, outcome=200,
+                       reused=True)
+            return {"key": old[1], "days": None, "reused": True}
+        try:
+            made = self.clerk.create_key(user_id, name)
+        except ClerkError as e:
+            if 400 <= e.status < 500 and e.status not in (401, 403, 429):
+                print(f"xo serve: Clerk would not make an API key ({e.status}{f', {e.code}' if e.code else ''}); "
+                      "check that API keys are turned on for this Clerk instance", file=sys.stderr, flush=True)
+                reply = _Reply(502, "Clerk would not make an API key for this account", e.seen)
+            else:
+                reply = _clerk_failure(e)
+            self.audit(method="POST", route="/login/browser", keyId=None, caller=None, target=user_id,
+                       outcome=reply.status, clerk=e.seen)
+            raise reply from None
+        secret, key_id = made.get("secret"), made.get("id")
+        if not (isinstance(secret, str) and API_KEY.fullmatch(secret)) or made.get("subject") != user_id:
+            self.audit(method="POST", route="/login/browser", keyId=None, caller=None, target=user_id,
+                       outcome=502, clerk="no key")
+            raise _Reply(502, "Clerk did not answer with a key for this user", "no key")
+        self.audit(method="POST", route="/login/browser", keyId=key_id if isinstance(key_id, str) else None,
+                   caller=None, target=user_id, outcome=200, reused=False)
+        return {"key": secret, "days": LOGIN_KEY_DAYS, "reused": False}
+
+    def _old_key(self, user_id: str) -> tuple[str, str] | None:
+        """A key the user already has, as (id, secret), so browser login makes a new one only when
+        there is none: one that still works, is this user's, and carries no claims (so never an admin
+        key), a key xo login made first, then the newest. None when there is none, or Clerk will not
+        read its secret back, in which case a new one is made."""
+        try:
+            keys = self.clerk.user_keys(user_id)
+        except ClerkError:
+            return None
+        usable = [k for k in keys if isinstance(k, dict) and isinstance(k.get("id"), str) and k.get("subject") == user_id
+                  and k.get("revoked") is False and k.get("expired") is False and not k.get("claims")]
+        if not usable:
+            return None
+        newest = lambda k: k.get("created_at") if isinstance(k.get("created_at"), int) else 0  # noqa: E731
+        key = max(usable, key=lambda k: (k.get("description") == LOGIN_KEY_NOTE, newest(k)))
+        try:
+            secret = self.clerk.key_secret(key["id"])
+        except ClerkError:
+            return None
+        return (key["id"], secret) if isinstance(secret, str) and API_KEY.fullmatch(secret) else None
 
     def _forward(self, method: str, path: str, headers: dict[str, str], body: bytes | None) -> Any:
         """Pass a core API request on to XO: only the routes in CORE_ROUTES, only with something
@@ -1735,7 +1954,7 @@ def _route_name(path: str) -> str | None:
     path = urllib.parse.urlsplit(path).path.rstrip("/") or "/"
     if path in ("/", "/status"):
         return None
-    if path in ("/healthz", "/me", "/me/projects", "/me/projects/connect", "/me/spaces", "/me/spaces/connect",
+    if path in ("/healthz", "/login", "/login/browser", "/me", "/me/projects", "/me/projects/connect", "/me/spaces", "/me/spaces/connect",
                 "/config", "/me/share", "/me/shared", "/me/shared/accept", "/me/shared/reject"):
         return path
     if path.startswith("/me/spaces/") and path.endswith("/projects") and path.count("/") == 4:

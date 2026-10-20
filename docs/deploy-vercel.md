@@ -138,6 +138,32 @@ fails, tell Claude which kinds of characters the key has (never the key): xo and
 need to accept them. A `/healthz` FAIL that says "misconfigured" means `CLERK_SECRET_KEY` is
 missing or refused; the project's **Logs** say which.
 
+## 6. Browser login (optional)
+
+Until both settings below are set, `xo login` asks for a key as it always has, and `GET /login`
+answers `{"browser": null}`. To let users sign in in a browser instead (see docs/server.md,
+"Browser login"):
+
+1. In the Clerk dashboard, on the instance this deployment's `CLERK_SECRET_KEY` belongs to, add an
+   OAuth application named `xo CLI`. Make it a public client (it uses PKCE and has no client secret),
+   with the scopes `openid`, `profile` and `email` and these three redirect URLs:
+   `http://127.0.0.1:8976/callback`, `http://127.0.0.1:8977/callback` and
+   `http://127.0.0.1:8978/callback`. Copy its client id.
+2. Copy the instance's Frontend API URL from the Clerk dashboard.
+3. API keys must be on for that instance; browser login reuses a user's key or makes one there.
+   Keys only work with XO's platform if XO checks keys with this same instance.
+4. In Vercel, under Settings → Environment Variables for Production, add `XO_OAUTH_CLIENT_ID` (the
+   client id) and `XO_CLERK_FRONTEND_URL` (the Frontend API URL). Neither is a secret. Redeploy, so
+   the new values are used.
+5. `curl -s https://xo.quirq.dev/login` now shows the sign-in address and client id under
+   `browser`. If it still says `null`, the project's **Logs** have a line starting `xo serve: browser
+   login is off:` that says why.
+
+To turn it off, delete either variable and redeploy. Keys made by browser login are named
+`xo CLI on HOST`, described `made by xo login in a browser`, and expire after 90 days; revoke one
+in the Clerk dashboard under API keys. `/login/browser` is not covered by the rule in step 3; to cap
+it per address too, add a condition for Request Path **starts with** `/login` to that rule.
+
 ## What is and is not protected on Vercel
 
 | Protected | How |
@@ -151,7 +177,7 @@ missing or refused; the project's **Logs** say which.
 | Requests to XO per instance | `XO_CORE_PER_SECOND` (default 10 a second), then 503 |
 | **Not protected** | a flood from many addresses spread over many instances; only Clerk's and XO's own limits stop it |
 | **Changed for XO** | every xo user now reaches XO's platform from Vercel's addresses, not their own, so a per-address limit on XO's side would count all of them together |
-| **Not rate limited** | `/config` (the services list `xo login` reads; static, never a Clerk call; do not add it to the rule in step 3, for the same reason as `/status`), `/` (the status page), `/status` and `/healthz`: public, one function invocation each, never a Clerk call. An open status page tab polls `/status` every 5 seconds while it is visible (about 17,000 invocations a day per tab left open) and stops while hidden. To cap them too, add a second rule of its own (Request Path **starts with** `/status`, 60 requests per 60 seconds per IP, so `/status/` is capped too); the page stays well under that. Do not add `/status` to the rule in step 3: it would share one per-address budget with `/me`, and an open status tab could then make the test script's Firewall check fail. |
+| **Not rate limited** | `/login` and `/login/browser` (browser login; capped at 2 swaps a second per instance, see step 6), `/config` (the services list `xo login` reads; static, never a Clerk call; do not add it to the rule in step 3, for the same reason as `/status`), `/` (the status page), `/status` and `/healthz`: public, one function invocation each, never a Clerk call. An open status page tab polls `/status` every 5 seconds while it is visible (about 17,000 invocations a day per tab left open) and stops while hidden. To cap them too, add a second rule of its own (Request Path **starts with** `/status`, 60 requests per 60 seconds per IP, so `/status/` is capped too); the page stays well under that. Do not add `/status` to the rule in step 3: it would share one per-address budget with `/me`, and an open status tab could then make the test script's Firewall check fail. |
 
 ## Logs and audit lines
 
