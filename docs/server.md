@@ -113,9 +113,10 @@ for it), and the CLI does the OAuth authorization code flow with PKCE.
 A code works once and only with the verifier the CLI kept, and the redirect is always this
 machine's own loopback, so a sign-in link someone else sends you gives them nothing. Swaps are
 capped at 2 a second for the whole process, on top of the Clerk budget; on Vercel that is per
-instance, so docs/deploy-vercel.md step 6 also caps `/login` per address. A key piped in on stdin
-(`printf KEY | xo login`) is read as before, without a browser. The key only works with
-XO's platform if XO checks keys with the same Clerk instance this server's Secret Key belongs to.
+instance, so docs/deploy-vercel.md section 6, step 5, also caps `/login` per address. A key
+piped in on stdin (`printf KEY | xo login`) is read as before, without a browser. XO's platform
+checks keys with the same Clerk instance this server's Secret Key belongs to, so the key works
+there; if the two ever differed, XO would refuse it and the CLI would save nothing.
 
 ## The status page
 
@@ -425,9 +426,9 @@ spaces: [{"name": "dev", "kind": "claude-code", "id": "<XO space id>", "rev": 2,
   whole instance, shared with XO's core API, and each verification past 100,000 a month is billed,
   so this cap is what keeps made-up keys sent to `/me` from spending either. It does not cover
   `/api/core`: a request passed on makes no call to this server's Clerk, and goes to XO's platform
-  (`XO_CORE_API_URL`, dev.xo.builders by default) whatever credentials the server holds, where XO
-  checks the key with its own Clerk. Made-up keys sent there spend that Clerk, from the day the forwarding is
-  deployed. What bounds them is `XO_CORE_PER_SECOND` per instance and the Firewall rule per
+  (`XO_CORE_API_URL`, dev.xo.builders by default), where XO checks the key itself, with the same
+  Clerk instance as this server. Made-up keys sent there spend that instance outside this cap, from
+  the day the forwarding is deployed. What bounds them is `XO_CORE_PER_SECOND` per instance and the Firewall rule per
   address.
 - **Rate limits.** Per key and per instance, 60 requests a minute on `/me`, 30 on `/me/projects`,
   30 on `/me/spaces` and its routes (and `/me/shared/accept` and `reject`), 10 on `/me/share`, 30 on

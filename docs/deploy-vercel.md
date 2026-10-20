@@ -7,10 +7,10 @@ on `main` goes to production by itself, so every merge to `main` ships `xo.quirq
 this repo deploys it, and the steps below are yours, followed by the test script.
 
 Use **development** credentials only (`sk_test_...`) until the test passes and the production gate
-at the end is passed. Until then, `xo.quirq.dev` answers `xo me` with 401 to real XO keys, although
-`xo` already uses it by default; the creates and `xo spaces --space-id ID` work, since XO checks those keys
-itself. The Secret Key and the API key you test with must come from the same
-Clerk instance: a key from another instance is refused as "Invalid API key".
+at the end is passed. The Secret Key and the API key you test with must come from the same
+Clerk instance: a key from another instance is refused as "Invalid API key". XO's platform
+(`XO_CORE_API_URL`, dev.xo.builders by default) checks keys with that same instance (section 6),
+so such a key fails the creates and `xo spaces --space-id ID` too, and `xo login` saves nothing.
 
 ## What you need
 
@@ -81,10 +81,12 @@ address can send XO as many requests as the per-key limit allows for each made-u
 If your plan does not offer rate limit rules, tell Claude before you go on: without the rule,
 anyone can make the server spend Clerk requests (1000 Backend API calls per 10 seconds for the whole instance)
 and, past 100,000 a month, paid key checks. Through `/me` that is the server's own Clerk instance,
-the development one on development credentials. Through `/api/core` it is XO's own
-instance whatever credentials the server holds: a request there goes on to XO's platform
-(`XO_CORE_API_URL`, dev.xo.builders by default), where XO checks the key with its own Clerk. So the `/api/core` condition matters from the day the
-forwarding is deployed, not only once the server holds production credentials.
+the development one on development credentials. Through `/api/core` it is the same instance
+(section 6), reached another way: a request there goes on to XO's platform (`XO_CORE_API_URL`,
+dev.xo.builders by default), which checks the key itself, so the server's own Clerk budget
+(`XO_CLERK_PER_SECOND`) does not count it, and both paths use up one instance's limit. So the
+`/api/core` condition matters from the day the forwarding is deployed, not only once the server
+holds production credentials.
 
 ## 4. How it deploys
 
@@ -138,19 +140,19 @@ fails, tell Claude which kinds of characters the key has (never the key): xo and
 need to accept them. A `/healthz` FAIL that says "misconfigured" means `CLERK_SECRET_KEY` is
 missing or refused; the project's **Logs** say which.
 
-## 6. Browser login (optional; only once keys from this instance work with XO)
+## 6. Browser login
 
 Until both settings below are set, `xo login` asks for a key as it always has, and `GET /login`
 answers `{"browser": null}`. To let users sign in in a browser instead (see docs/server.md,
-"Browser login"), first check this:
+"Browser login"), do the steps below.
 
 **Browser login gives each user an API key from the Clerk instance this deployment's
-`CLERK_SECRET_KEY` belongs to.** XO's platform checks keys with its own Clerk (step 3), so such a
-key works with XO only if that is the same instance. While the server holds development
-credentials it is not: XO checks keys with its production instance, so every browser login would
-end with XO refusing the key (401) and nothing saved. So do this section only after the production
-gate at the end, and only once XO has confirmed that its platform checks API keys with that same
-production instance. TODO(suraj): confirm this with XO before step 5.
+`CLERK_SECRET_KEY` belongs to.** XO's platform (`XO_CORE_API_URL`, dev.xo.builders by default)
+checks keys with that same instance (suraj confirmed this on 2026-10-20), so such a key works with
+XO. If `CLERK_SECRET_KEY` ever moves to another instance (the production gate at the end does),
+delete `XO_OAUTH_CLIENT_ID` in that same redeploy, and set browser login up again (steps 1 to 4
+in the new instance, then 6 and 7; the Firewall condition in step 5 stays) only once XO's
+platform checks keys with that instance too.
 
 In the Clerk Dashboard (dashboard.clerk.com), with that instance chosen at the top:
 
@@ -164,7 +166,9 @@ In the Clerk Dashboard (dashboard.clerk.com), with that instance chosen at the t
    it: close it without copying it anywhere.
 3. **On the application's page that opens:**
    - turn on **Public** (xo has no client secret; it proves itself with PKCE instead), and turn on
-     **Require PKCE**. Without **Public**, every browser login fails, and the project's **Logs** say
+     **Require PKCE**, both on this application's page. Leave the instance-wide **Require PKCE**
+     under **Settings** alone: it covers every OAuth application of the instance, XO's included.
+     Without **Public**, every browser login fails, and the project's **Logs** say
      `Clerk refused the OAuth application`;
    - leave the consent screen on (it is on by default): without it, someone signed in to XO who
      opens a sign-in link someone else made is not asked first;
@@ -172,7 +176,8 @@ In the Clerk Dashboard (dashboard.clerk.com), with that instance chosen at the t
      exactly: `http`, `127.0.0.1` and not `localhost`, the port, and no `/` at the end):
      `http://127.0.0.1:8976/callback`, `http://127.0.0.1:8977/callback`,
      `http://127.0.0.1:8978/callback`;
-   - under **Application credentials**, copy the **Client ID**.
+   - select **Save** if the page has one, then under **Application credentials**, copy the
+     **Client ID**.
 4. **Copy the Frontend API URL** from <https://dashboard.clerk.com/~/api-keys> (the page with the
    Publishable Key, not the one in step 1). It is an address only, such as
    `https://clerk.example.com` for a production instance (a development one ends in
@@ -180,20 +185,58 @@ In the Clerk Dashboard (dashboard.clerk.com), with that instance chosen at the t
 
 Then in Vercel:
 
-5. **Settings → Environment Variables**, for **Production**: add `XO_OAUTH_CLIENT_ID` (the Client
-   ID) and `XO_CLERK_FRONTEND_URL` (the Frontend API URL). Neither is a secret. Then
-   **Deployments**, the latest production deployment, **⋯ → Redeploy**, so the new values are used.
-6. **Cap it per address.** `/login/browser` needs no key and each request makes a call to Clerk,
-   and the server's own cap (2 a second) is per instance. In **Firewall → Rules**, open
-   `xo per-IP limit` from step 3, add **or** Request Path **starts with** `/login`, **Save**, then
-   **Review Changes → Publish**. A login sends four requests that this rule counts.
-7. **Check.** `curl -s https://xo.quirq.dev/login` shows the sign-in address and client id under
-   `browser`. If it still says `null`, the project's **Logs** have a line starting `xo serve:
-   browser login is off:` that says why. Then run `xo login` on a computer with a browser: sign in,
-   allow `xo CLI` on the consent screen, and it ends with `logged in as ...; a new key that works
-   for 90 days and URL saved to ...`.
+5. **Cap it per address first.** `/login/browser` needs no key and each request makes a call to
+   Clerk, and the server's own cap (2 a second) is per instance. In **Firewall → Rules**, open
+   `xo per-IP limit` from section 3 and add a condition with **Or**, not **And** (an **And** would
+   stop the rule matching `/api/core`): Request Path **starts with** `/login`. The rule then covers
+   `/me`, `/user-metadata`, `/api/core` and `/login`. **Save**, then **Review Changes → Publish**.
+   A login sends four requests that this rule counts. Doing this while browser login is still off
+   changes nothing for anyone.
+6. **Settings → Environment Variables**, for **Production**: add `XO_OAUTH_CLIENT_ID` (the Client
+   ID) and `XO_CLERK_FRONTEND_URL` (the Frontend API URL, starting `https://`). Neither is a
+   secret. Vercel uses new values only in a new deployment, so then **Deployments**, the latest
+   production deployment, **⋯ → Redeploy**, and **Redeploy** again in the box that opens (leave
+   **Use existing Build Cache** as it is). Wait until it says **Ready**.
+7. **Check**, on a computer with a browser. First:
 
-To turn it off, delete either variable and redeploy. Keys made by browser login are named
+   ```sh
+   curl -s https://xo.quirq.dev/login
+   ```
+
+   It should show the sign-in address and client id under `browser`. If it says `null`, stop here:
+   the project's **Logs** have a line starting `xo serve: browser login is off:` that says why.
+
+   An `xo` installed with the quickstart before its pin moved to #56 has no browser login, so
+   update it:
+
+   ```sh
+   ~/.xo/bin/pip install --force-reinstall --no-deps "quirq-xo @ git+https://github.com/quirq-ai/xo@436bfbef0d222c128bd10d3ae6b32bc407ce1b51"
+   ```
+
+   Have your XO key handy. With a saved key that works, `xo login` only says you are already
+   logged in, so log out first (when it asks about GitHub, press Enter to keep gh logged in):
+
+   ```sh
+   xo logout
+   ```
+
+   Then:
+
+   ```sh
+   xo login
+   ```
+
+   Sign in and allow `xo CLI` on the consent screen. The `xo: me:` line should say `logged in as
+   ...; a new key that works for 90 days and URL saved to ...`. If it fails, log in with your key
+   as before:
+
+   ```sh
+   xo login --key
+   ```
+
+To turn it off, delete both variables and redeploy as in step 6 (deleting only one also turns it
+off, with a log line on every cold start); `xo login` then asks for a key again, and the Firewall
+condition and the Clerk application can stay. Keys made by browser login are named
 `xo CLI on HOST`, described `made by xo login in a browser`, and expire after 90 days. A later
 browser login for the same account hands back the newest of those while it has a week or more
 left (when Clerk will read its secret back), and never a key made any other way; otherwise it makes
@@ -212,7 +255,7 @@ a new one. Revoke a key in the Clerk Dashboard.
 | Requests to XO per instance | `XO_CORE_PER_SECOND` (default 10 a second), then 503 |
 | **Not protected** | a flood from many addresses spread over many instances; only Clerk's and XO's own limits stop it |
 | **Changed for XO** | every xo user now reaches XO's platform from Vercel's addresses, not their own, so a per-address limit on XO's side would count all of them together |
-| **Not rate limited** | `/login` and `/login/browser` until step 6 adds `/login` to the rule in step 3 (the server caps swaps at 2 a second per instance), `/config` (the services list `xo login` reads; static, never a Clerk call; do not add it to the rule in step 3, for the same reason as `/status`), `/` (the status page), `/status` and `/healthz`: public, one function invocation each, never a Clerk call. An open status page tab polls `/status` every 5 seconds while it is visible (about 17,000 invocations a day per tab left open) and stops while hidden. To cap them too, add a second rule of its own (Request Path **starts with** `/status`, 60 requests per 60 seconds per IP, so `/status/` is capped too); the page stays well under that. Do not add `/status` to the rule in step 3: it would share one per-address budget with `/me`, and an open status tab could then make the test script's Firewall check fail. |
+| **Not rate limited** | `/login` and `/login/browser` until step 5 of section 6 adds `/login` to the rule in step 3 (the server caps swaps at 2 a second per instance), `/config` (the services list `xo login` reads; static, never a Clerk call; do not add it to the rule in step 3, for the same reason as `/status`), `/` (the status page), `/status` and `/healthz`: public, one function invocation each, never a Clerk call. An open status page tab polls `/status` every 5 seconds while it is visible (about 17,000 invocations a day per tab left open) and stops while hidden. To cap them too, add a second rule of its own (Request Path **starts with** `/status`, 60 requests per 60 seconds per IP, so `/status/` is capped too); the page stays well under that. Do not add `/status` to the rule in step 3: it would share one per-address budget with `/me`, and an open status tab could then make the test script's Firewall check fail. |
 
 ## Logs and audit lines
 
@@ -244,16 +287,20 @@ Do not switch to production credentials until all of these hold:
 2. **A global limit, or the risk accepted in writing.** The per-IP rule does not stop a flood
    spread over many addresses, and the server's own budgets (Clerk's, and `XO_CORE_PER_SECOND` for
    requests passed on to XO) are per instance. This is not only about this switch: requests to
-   `/api/core` already reach XO's production Clerk on development credentials. Either add a
+   `/api/core` already reach Clerk through XO's platform, which checks keys with the server's own
+   instance (section 6). Either add a
    limit that counts all requests together (one option is a second rate limit rule on the same
    paths keyed by the `host` header, since every request has the same host; whether Vercel counts
    it globally is not verified), or write down that XO accepts the risk: such a flood could use up
-   the Backend API limit of XO's Clerk instance, which XO's platform shares, and pay for key
-   checks past 100,000 a month. TODO(suraj): choose one.
+   the Backend API limit of that Clerk instance, which this server and XO's platform share, and pay
+   for key checks past 100,000 a month. TODO(suraj): choose one.
 
 Then replace `CLERK_SECRET_KEY` with the production key (`sk_live_...`), redeploy, and run the test
-script with a real XO key. A user then needs only the `xo` command: `https://xo.quirq.dev` is its
-default server.
+script with a real XO key. That moves the server to another Clerk instance, so first make sure
+XO's platform at `XO_CORE_API_URL` checks keys with the production instance (set
+`XO_CORE_API_URL` to one that does if dev.xo.builders does not), and with browser login on, follow
+the note at the start of section 6. A user then needs only the `xo` command:
+`https://xo.quirq.dev` is its default server.
 
 ## Rotating the Secret Key
 
