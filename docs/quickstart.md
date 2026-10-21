@@ -85,7 +85,7 @@ xo spaces --space-id THE_ID
 | `xo create space N hermes …`, `… openclaw …`, `… xo-cowork …` | spaces with providers and chat channels; see `xo create space N openclaw --help` |
 | `xo create space N nebius-openclaw --token-factory-api-key -` | a Nebius OpenClaw space |
 | `xo create project N` or `xo create project https://github.com/OWNER/REPO` | a project: an empty repository at `./N`, or a clone at `./REPO`, called `REPO` |
-| `xo create space N` | a space here only: the folder `./N`, recorded in your spaces, nothing on XO |
+| `xo create space N` | this folder as a space: a `.git` with one branch per subfolder, pushed to `github.com/YOU/N` after you say yes, recorded in your spaces, nothing on XO |
 | `xo spaces --space-id ID` | nothing; it shows a space you own |
 
 With a kind, a space's name N is 1 to 32 letters, digits or hyphens, starts with a letter or digit, and can't be `new` or `create`; it is its name on XO and in your spaces. A name you already used fails. The volume size is 20 to 100 GB. Add `--dry-run` to any create on XO to see it first; `xo create space N` with no kind sends no create to XO and takes no `--dry-run`.

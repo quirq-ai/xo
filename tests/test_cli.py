@@ -1630,39 +1630,49 @@ def test_create_space_says_a_name_field_comes_from_the_command_line(core, capsys
     assert code != 0 and "--field" in err and core.requests == []
 
 
-def test_create_space_with_no_kind_makes_it_here_only(xs, capsys, github):
+def test_create_space_with_no_kind_makes_this_folder_a_space_on_github(xs, capsys, github):
     made = {**SPACE, "name": "my.space", "kind": None, "id": None, "rev": 1}
     xs.route("POST", "/me/spaces/connect", body={"success": True, "data": {"space": made}})
-    code, out, err = run(capsys, "create", "space", "My.Space")
-    assert code == 0 and json.loads(out) == made and "a new space with no projects" in err
-    assert "lowercase, as on XO, so this space is my.space" in err
+    Path("notes").mkdir()
+    Path("notes/n.txt").write_text("n\n")
+    git("init", "-q", "--bare", str(github.root / "me/my.space"))
+    code, out, err = run(capsys, "create", "space", "My.Space", "--owner", "me", "--yes")
+    assert code == 0 and json.loads(out)["pushed"] is True and json.loads(out)["github"] == "me/my.space"
+    assert "lowercase, as on XO and GitHub, so this space is my.space" in err
+    assert "each folder here becomes its own branch of github.com/me/my.space" in err
     assert [(r["method"], r["path"], r["body"]) for r in xs.requests] == [
         ("POST", "/me/spaces/connect", {"name": "my.space"})]
-    state = json.loads(Path("my.space/.xo/state.json").read_text())
-    assert state == {"space": "my.space", "rev": 1, "projects": []}
+    assert git(f"--git-dir={github.root / 'me/my.space'}", "show", "notes:n.txt") == "n"
 
 
-@pytest.mark.parametrize("name", ["../x", "-x", "a b", ".hidden", "codex", "New", "/abs", "a/b"])
-def test_create_space_with_no_kind_refuses_a_bad_name_or_a_folder_here(xs, capsys, github, name):
-    assert _refused(capsys, "create", "space", name) and xs.requests == []
-    Path("dev").mkdir()
-    code, _, err = run(capsys, "create", "space", "dev")
-    assert code == 1 and "./dev already exists here; nothing was changed" in err and xs.requests == []
+def test_create_space_with_no_kind_asks_first_and_needs_a_terminal_or_yes(xs, capsys, github):
+    Path("notes").mkdir()
+    code, _, err = run(capsys, "create", "space", "dev", "--owner", "me")  # no terminal: the answer is no
+    assert code == 1 and "nothing was made" in err and not Path(".git").exists() and xs.requests == []
 
 
-def test_create_space_with_no_kind_says_how_to_finish_when_the_folder_fails(xs, capsys, github, monkeypatch):
-    xs.route("POST", "/me/spaces/connect", body={"success": True, "data": {"space": {**SPACE, "rev": 1}}})
-
-    def refuse(name, space):
-        raise PermissionError(13, "Permission denied")
-    monkeypatch.setattr(cli.workspace, "made", refuse)
-    code, _, err = run(capsys, "create", "space", "dev")
-    assert code == 1 and "space dev is in your spaces, but ./dev was not made (Permission denied); run xo install " \
-                         "space:dev" in err
+def test_create_space_with_no_kind_still_works_when_it_is_already_in_your_spaces(xs, capsys, github):
     xs.route("POST", "/me/spaces/connect", status=409, body={"success": False,
                                                              "error": "You already have a space named dev"})
-    code, _, err = run(capsys, "create", "space", "dev")
-    assert code == 1 and "xo install space:dev makes it" in err
+    Path("notes").mkdir()
+    Path("notes/n.txt").write_text("n\n")
+    git("init", "-q", "--bare", str(github.root / "me/dev"))
+    code, _, err = run(capsys, "create", "space", "dev", "--owner", "me", "--yes")
+    assert code == 0 and "was not added to your spaces" not in err
+
+
+@pytest.mark.parametrize("name", ["../x", "-x", "a b", ".hidden", "codex", "New", "/abs", "a/b", "x.git"])
+def test_create_space_with_no_kind_refuses_a_bad_name(xs, capsys, github, name):
+    assert _refused(capsys, "create", "space", name, "--owner", "me", "--yes") and xs.requests == []
+    assert not Path(".git").exists()
+
+
+def test_create_space_with_no_kind_needs_a_github_owner(xs, capsys, github, monkeypatch):
+    monkeypatch.setattr(cli.github, "installed", lambda: False)
+    code, _, err = run(capsys, "create", "space", "dev", "--yes")
+    assert code == 1 and "run xo login github, or say whose it is with --owner OWNER" in err
+    code, _, err = run(capsys, "create", "space", "dev", "--owner=-bad", "--yes")
+    assert code == 1 and "--owner is a GitHub user or organization name" in err
 
 
 def test_connect_repo_renames_a_folder_whose_name_differs_only_in_case(xs, capsys, github):

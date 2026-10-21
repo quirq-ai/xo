@@ -45,8 +45,9 @@
     xo create space NAME [KIND [flags]]     with a KIND (claude-code, codex, antigravity, hermes,
                                             openclaw, xo-cowork, nebius-openclaw): create a space on XO
                                             named NAME there too, and record it in your spaces. With no
-                                            KIND: a space here only, the folder ./NAME, recorded in your
-                                            spaces with no projects and nothing on XO.
+                                            KIND: this folder becomes space NAME, after you say yes: a
+                                            .git with one branch per subfolder and main listing them,
+                                            pushed to github.com/OWNER/NAME, nothing on XO.
     xo connect PROJECT SPACE [--ref R]      set PROJECT in SPACE at ref R (default main); the names
                                             need no project: or space: in front, and xo connect
                                             SPACE PROJECT works too (when both names are your
@@ -115,7 +116,7 @@ from pathlib import Path
 from typing import Any, NoReturn
 from urllib.parse import quote
 
-from xo import __version__, commands, github, gitops, names, services, spec, weblogin, workspace
+from xo import __version__, commands, github, gitops, names, services, spacerepo, spec, weblogin, workspace
 from xo.client import (CORE_PATH, DEFAULT_TIMEOUT, KEY_ENV, MAYBE_RECEIVED, MIN_SECRET, Client, Login, XoError,
                        api_key, check_key, credentials_path, forget_login, read_key, redact, save_login, saved_login,
                        xo_url)
@@ -781,38 +782,46 @@ def _create_space(args: argparse.Namespace) -> int:
 
 
 def _create_local_space(args: argparse.Namespace) -> int:
-    """`xo create space NAME`: a space here only. The server records it in your spaces with no
-    projects (the same entry xo connect space:NAME makes, nothing on XO), then ./NAME is made and
-    marked installed, so xo connect, xo install and xo update work on it."""
-    if not names.space_ok(args.space_name):
+    """`xo create space NAME`: the folder it runs in becomes space NAME, a git repository with one
+    branch per folder here, pushed to github.com/OWNER/NAME (see xo/spacerepo.py). It asks first,
+    showing every folder; then the space is recorded in your spaces too."""
+    if not names.space_ok(args.space_name) or args.space_name.lower().endswith(".git"):
         raise XoError(names.SPACE_RULE)
     name = args.space_name.lower()
     if name in names.SPACE_KINDS or name in ("new", "create"):
         raise XoError(f"{name} is a kind of space, not a name: name it first, xo create space NAME {name}"
                       if name in names.SPACE_KINDS else f"a space can't be called {name}")
     if name != args.space_name:
-        print(f"xo: space names are lowercase, as on XO, so this space is {name}", file=sys.stderr)
-    root = Path(name)
-    if root.exists() or root.is_symlink():
-        raise XoError(f"./{name} already exists here; nothing was changed")
-    client = _client(args, server=True)
+        print(f"xo: space names are lowercase, as on XO and GitHub, so this space is {name}", file=sys.stderr)
+    owner = args.owner
+    if owner is None:
+        owner = github.GhClient(timeout=args.timeout).logged_in_as() if github.installed() else None
+        if owner is None:
+            raise XoError("xo needs your GitHub login for the space's repository: run xo login github, or say "
+                          "whose it is with --owner OWNER")
+    elif not names.github_owner_ok(owner):
+        raise XoError("--owner is a GitHub user or organization name")
+    made = spacerepo.create(Path("."), name, owner, ask=lambda q: args.yes or _ask(q), wait=_wait)
     try:
-        data = _post_server(client, "/me/spaces/connect", {"name": name})
+        client = _client(args, server=True)
+        _post_server(client, "/me/spaces/connect", {"name": name})
     except XoError as e:
-        if "already have a space named" in str(e):
-            raise XoError(f"{e}. If it is yours and ./{name} is missing, xo install space:{name} makes it") from None
-        raise
-    space = _answer(data, "space", "a space")
-    try:
-        workspace.made(name, space)
-    except (OSError, XoError) as e:
-        why = e.strerror or type(e).__name__ if isinstance(e, OSError) else str(e)
-        raise XoError(f"space {name} is in your spaces, but ./{name} was not made ({why}); run xo install "
-                      f"space:{name}") from None
-    print(f"xo: ./{name}: a new space with no projects (add one with xo connect PROJECT {name}; "
-          f"to make it on XO, use xo create space with a KIND instead)", file=sys.stderr)
-    print(client.scrub(_json(space)))
+        if "already have a space named" not in str(e):
+            print(f"xo: space {name} was not added to your spaces ({e}); xo connect space:{name} adds it",
+                  file=sys.stderr)
+    print(_json(made))
     return 0
+
+
+def _wait(question: str) -> bool:
+    """Enter at a terminal goes on, n stops; without a terminal xo stops here."""
+    if not (sys.stdin.isatty() and sys.stderr.isatty()):
+        return False
+    print(f"xo: {question} ", end="", file=sys.stderr, flush=True)
+    try:
+        return sys.stdin.readline().strip().lower() not in ("n", "no")
+    except (EOFError, KeyboardInterrupt):
+        return False
 
 
 def _moved(kind: str) -> str:
@@ -1481,13 +1490,16 @@ def main(argv: list[str] | None = None) -> int:
                     help="the project's https://github.com/OWNER/REPO, when NAME is also given (NAME must be REPO "
                          "or OWNER/REPO)")
     mp.set_defaults(run=_create_project)
-    ms = mksub.add_parser("space", parents=[common], usage="xo create space [-h] NAME [KIND [flags]]",
+    ms = mksub.add_parser("space", parents=[common], usage="xo create space [-h] NAME [--owner OWNER] [--yes] | NAME KIND [flags]",
                           help="create a space and record it in your spaces: on XO with xo create space NAME KIND, "
-                               "or here only (./NAME, nothing on XO) with xo create space NAME")
+                               "or this folder, one branch per subfolder on GitHub, with xo create space NAME")
     ms.add_argument("space_name", metavar="NAME", help=names.XO_NAME_RULE + "; with no KIND, " + names.SPACE_RULE)
+    ms.add_argument("--owner", help="with no KIND: the GitHub user or organization the space's repository is under "
+                                    "(default: your gh login)")
+    ms.add_argument("--yes", action="store_true", help="with no KIND: make the space without asking")
     ms.set_defaults(run=_create_space)
     space_kinds = ms.add_subparsers(dest="kind", required=False, metavar="KIND",
-                                    help="the kind of space XO makes; leave it out for a space here only")
+                                    help="the kind of space XO makes; leave it out to make this folder the space, on GitHub")
     cn = sub.add_parser("connect", parents=[common],
                         help="set a project's ref in one of your spaces, give a project its repo, or make a new "
                              "space entry")

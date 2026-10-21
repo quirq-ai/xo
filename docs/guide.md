@@ -61,7 +61,7 @@ xo create space my-cc claude-code --volume-size 20 --providers-anthropic-api-key
                                                  # my-cc on XO, recorded in your spaces as my-cc
 xo create space my-codex codex --volume-size 20
 xo create space my-ag antigravity --volume-size 20
-xo create space dev                              # no KIND: a space here only, ./dev, nothing on XO
+xo create space dev                              # no KIND: this folder as space dev on GitHub, nothing on XO
 xo create space NAME openclaw --help             # needs a provider key and a chat-channel token
 xo create space NAME hermes --help
 xo create space NAME xo-cowork --help
@@ -128,9 +128,18 @@ xo sync project:headscale                        # git pull --rebase, then push
     (`https://USER@github.com/...`), is refused: move it, or point its origin at the repository.
   - `xo install`, `update` and `sync project:P` look P up in your projects first, so they need the
     xo server.
-  - `xo create space NAME` with no KIND makes the space entry and `./NAME` here, already
-    installed, so `xo connect P NAME` and `xo update space:NAME` work on it. NAME is
-    lowercased, as on XO. If the folder could not be made, `xo install space:NAME` makes it.
+  - `xo create space NAME` with no KIND makes the folder you run it in the space. It lists each
+    subfolder with its size and asks first (`--yes` skips the question); say no and run it inside
+    the folder that holds the folders you mean. It makes `./.git` (bare, so nothing here is
+    checked out or changed) with one branch per subfolder holding its files, following
+    `.gitignore` and leaving out `.env` files, keys, nested repositories (their files only, not
+    their history) and `.github/workflows`. It stops before any push on a file that looks like a
+    secret, a file over 100 MB or a Git LFS pointer. `main` holds a README listing the branches,
+    `xo-space.json` with one hash of every branch's files, and an `update` script. The repository
+    is `github.com/OWNER/NAME`, OWNER your gh login or `--owner`; when it is not there (or is
+    private: xo checks without logging in), xo prints a link to make it and waits for Enter, then
+    pushes with your own git. Run it again to commit what changed; a branch whose folder is gone
+    stays. It refuses your home folder, `/` and folders holding `.ssh`, `.aws` or `.gnupg`.
   - `update` first pushes each checkout's branch to its upstream (refused if the remote is ahead:
     run `xo sync`). Then it sends the branch (or, when detached, the commit) each checkout is on,
     and is refused when the space changed since: run `xo sync`. A ref its remote does not have is

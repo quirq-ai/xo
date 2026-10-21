@@ -72,7 +72,7 @@ flowchart LR
 | `xo spaces --space-id ID` | server, then XO | `GET /spaces/{spaceId}`: connection URLs with a session token |
 | `xo me` | server only | your profile, primary email and both metadata buckets, as `{"xo": {..., "public_data", "private_data"}}`; credential-looking values masked |
 | `xo projects [add NAME]` | server only | read or append to the `projects` list in your private metadata |
-| `xo create space NAME` | server only, then a folder | no KIND: a space entry with no projects and nothing on XO (`POST /me/spaces/connect`), then `./NAME` here, marked installed |
+| `xo create space NAME` | git and GitHub, then server | no KIND: this folder's `.git`, one branch per subfolder and a `main` index, pushed to `github.com/OWNER/NAME`; then a space entry with nothing on XO (`POST /me/spaces/connect`) |
 | `xo create project NAME [URL]` | server, then git | add the project, then clone `OWNER/REPO` into `./REPO` or `git init` a plain name; a NAME given with a URL must be its `REPO` or `OWNER/REPO` |
 | `xo connect P S [--ref R]` | server only | set P in space S at R (default `main`) |
 | `xo connect P --repo URL` | server, then git | a project made with a name only gets its repo and is recorded as `OWNER/REPO` (refused while P is in a space); `./P` gets that origin only if it has none, and moves to `./REPO` only if its origin is that repo |
@@ -201,7 +201,7 @@ Admin needs two locks, and none is issued yet. Until a key has the claim and its
 
 ### Spaces on XO
 
-Every space on XO is created one way, `xo create space NAME KIND`, and recorded in your spaces. With no KIND, `xo create space NAME` records a space here only, with nothing on XO. The old `xo claude-code`, `xo codex`, ... commands are gone and say so.
+Every space on XO is created one way, `xo create space NAME KIND`, and recorded in your spaces. With no KIND, `xo create space NAME` makes the folder it runs in a space on GitHub and records it, with nothing on XO. The old `xo claude-code`, `xo codex`, ... commands are gone and say so.
 
 #### `xo create space NAME KIND`
 
@@ -229,19 +229,28 @@ One name, on XO and in your spaces. KIND is `claude-code`, `codex`, `antigravity
 ```mermaid
 sequenceDiagram
   participant Cli as You · xo CLI
+  participant Git as git here
+  participant Gh as GitHub
   participant Srv as xo server
-  participant Clerk as Clerk
   Note over Cli: xo create space dev: no KIND
-  Note over Cli: lowercase NAME: ./dev here? refuse
-  Cli->>Srv: name / POST /me/spaces/connect: ("name") only
-  Srv->>Clerk: verify / verify, read user: name free?
-  Clerk-->>Srv: user / new entry: no projects, rev 1
-  Srv->>Clerk: write / merge (spaces): nothing on XO
-  Clerk-->>Srv: written / read back: after 0.3 s
-  Srv-->>Cli: 200 / make ./dev: .xo/state.json, rev 1
+  Cli->>Cli: list subfolders, sizes / ask: yes, or run it elsewhere
+  Cli->>Git: per folder / .git (bare): add, write-tree, commit-tree
+  Git-->>Cli: trees / check: secrets, 100 MB, LFS
+  Cli->>Git: main / README, xo-space.json (hash), update
+  Cli->>Gh: ls-remote / anonymous: OWNER/dev there?
+  Gh-->>Cli: missing / print github.com/new link, wait
+  Cli->>Gh: push / --atomic, your git's login
+  Cli->>Srv: name / POST /me/spaces/connect
 ```
 
-A space here only: the same entry `xo connect S` makes, and nothing on XO. xo lowercases NAME, as XO does, and refuses a kind word (`codex`, ...), `new` or `create`, and a `./NAME` that is already here, before anything is sent. Then it makes `./NAME/.xo/state.json` at rev 1 with no projects, so the space counts as installed. If the entry is written but the folder is not made, xo says to run `xo install space:NAME`; a name already taken (409) gets the hint that `xo install space:NAME` makes the folder.
+The folder `xo create space NAME` runs in becomes space NAME (`src/xo/spacerepo.py`). xo lists each subfolder with its size, says what is left out and where it goes, and asks; `--yes` answers for a script. It refuses your home folder, `/` and folders holding `.ssh`, `.aws` or `.gnupg`, and folder names that differ only in case.
+
+- `./.git` is made `--bare`, so git never checks anything out here and the folder shows no changes. Every git call names it with `--git-dir`; a branch is built with `--work-tree FOLDER` and a scratch index that is deleted after. Plumbing only: `add --all`, `write-tree`, `commit-tree`, `update-ref` with the old value. `.git/info/exclude` keeps `.env` files, keys, `.xo` and editor junk out, besides each folder's `.gitignore`.
+- Nested repositories become their files only (the gitlink is dropped), so their history, remotes and branches are never touched; `.github/workflows` is dropped so a pushed branch runs nothing.
+- Before anything is committed, xo stops with the file names on a file over 100 MB, a Git LFS pointer, or text that looks like a secret (`git grep` on the tree).
+- `main` is built with `hash-object` and `mktree`: `README.md` with a table of branches, `xo-space.json` (`xo-space/1`: each branch's tree and the sha256 of all of them) and `update`, which runs this command again. A rerun commits only branches whose tree changed; a folder that is gone keeps its branch.
+- The repository is `github.com/OWNER/NAME`, OWNER from `gh api user` or `--owner`. xo checks it with `git ls-remote` and no credentials, so a private repository looks missing; when it is missing xo prints `https://github.com/new?name=NAME&owner=OWNER&visibility=public` and waits for Enter. Then `git push --atomic` of every branch, never forced, with your own git's login; xo never reads a token.
+- Last, the space entry is recorded (`POST /me/spaces/connect`); a name already in your spaces is fine.
 
 #### `xo claude-code | codex | ... (removed)`
 

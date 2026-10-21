@@ -34,7 +34,7 @@ xo create space my-cc claude-code --volume-size 20 --providers-anthropic-api-key
 xo create space my-claw openclaw --volume-size 20 \
   --providers-anthropic-api-key "$ANTHROPIC_API_KEY" \
   --notification-channels-telegram-bot-token "$TELEGRAM_BOT_TOKEN"
-xo create space dev                              # a space here only: ./dev, nothing on XO
+xo create space dev                              # this folder: one branch per subfolder, on github.com/YOU/dev
 xo create project notes                          # an empty repository at ./notes
 xo create project https://github.com/juanfont/headscale  # called headscale, cloned into ./headscale
 xo spaces --space-id 6f1c2c1e-...   # connection URLs for a space you own
@@ -43,7 +43,7 @@ xo spaces --space-id 6f1c2c1e-...   # connection URLs for a space you own
 | Command | Request | Body |
 |---|---|---|
 | `xo create space NAME KIND` | `POST /me/spaces` on your xo server: it creates the space through XO (`POST /KIND`) with NAME as its name there, then records it in your `spaces` as NAME | the flags of KIND, below |
-| `xo create space NAME` | no KIND: `POST /me/spaces/connect`, a space entry with no projects and nothing on XO, then the folder `./NAME` here, ready for `xo connect` and `xo update` | none |
+| `xo create space NAME` | no KIND: after you say yes, this folder gets a `.git` with one branch per subfolder and a `main` that lists them, pushed to `github.com/OWNER/NAME` (a link to make it if it is missing); then `POST /me/spaces/connect`, nothing on XO | none |
 | &nbsp;&nbsp;KIND `claude-code` | `POST /claude-code` | volume size; Anthropic provider |
 | &nbsp;&nbsp;KIND `codex` | `POST /codex` | volume size |
 | &nbsp;&nbsp;KIND `antigravity` | `POST /antigravity` | volume size |

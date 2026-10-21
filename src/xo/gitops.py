@@ -37,11 +37,14 @@ def environment() -> dict[str, str]:
     return env
 
 
-def run(*args: str, cwd: Path | None = None, check: bool = True) -> str | None:
-    """git's output; with check=False, None when git fails instead of an error."""
+def run(*args: str, cwd: Path | None = None, check: bool = True, env: dict[str, str] | None = None,
+        input: str | None = None) -> str | None:
+    """git's output; with check=False, None when git fails instead of an error. env: variables added
+    to git's environment; input: what git reads on stdin (nothing when None)."""
+    stdin = {"input": input} if input is not None else {"stdin": subprocess.DEVNULL}
     try:
-        done = subprocess.run(["git", *SAFE, *args], cwd=cwd, env=environment(), capture_output=True, text=True,
-                              timeout=GIT_TIMEOUT, stdin=subprocess.DEVNULL)
+        done = subprocess.run(["git", *SAFE, *args], cwd=cwd, env={**environment(), **(env or {})},
+                              capture_output=True, text=True, timeout=GIT_TIMEOUT, **stdin)
     except FileNotFoundError:
         raise XoError("git is not installed; install it and try again") from None
     except subprocess.TimeoutExpired:
