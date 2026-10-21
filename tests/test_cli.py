@@ -1963,6 +1963,30 @@ def test_connect_says_a_project_was_added_when_the_space_then_refuses_it(xs, cap
     assert "juanfont/headscale is in your projects now, but not in dev: " in err and "20 projects" in err
 
 
+def test_connect_reversed_names_close_to_a_project_ask_did_you_mean_first(xs, capsys):
+    xs.route("GET", "/me/projects", body={"success": True, "data": {"projects": ["juanfont/headscale"]}})
+    xs.route("GET", "/me/spaces", body={"success": True, "data": {"spaces": [{"name": "my-cc", "rev": 1}]}})
+    code, _, err = run(capsys, "connect", "my-cc", "headscal")
+    assert code == 1 and "headscal is not in your projects; did you mean headscale?" in err
+    assert "xo connect headscale my-cc puts it in my-cc" in err and "xo connect project:headscal space:my-cc" in err
+    assert all(r["method"] == "GET" for r in xs.requests)
+
+
+def test_connect_reversed_owner_repo_is_not_taken_for_a_typo(xs, capsys):
+    xs.routes = _InTurn(xs.routes)
+    xs.route("GET", "/me/projects", body={"success": True, "data": {"projects": ["juanfont/headscale"]}})
+    xs.route("GET", "/me/spaces", body={"success": True, "data": {"spaces": [{"name": "my-cc", "rev": 1}]}})
+    fork = (404, {"success": False, "error": "me/headscale is not in your projects; add it with xo create project "
+                                             "first"}, {})
+    xs.routes[("POST", "/me/spaces/my-cc/projects")] = [fork, LINKED]
+    xs.route("POST", "/me/projects",
+             body={"success": True, "data": {"projects": ["juanfont/headscale", "me/headscale"]}})
+    code, _, err = run(capsys, "connect", "my-cc", "me/headscale")  # a fork: either order, as for a URL
+    assert code == 0 and "did you mean" not in err and "me/headscale was not in your projects, so xo added it" in err
+    assert [r["body"] for r in xs.requests if r["path"] == "/me/projects" and r["method"] == "POST"] == [
+        {"name": "me/headscale"}]
+
+
 def test_connect_two_new_names_that_are_both_spaces_are_refused(xs, capsys):
     xs.route("GET", "/me/projects", body={"success": True, "data": {"projects": []}})
     xs.route("GET", "/me/spaces", body={"success": True, "data": {"spaces": [{"name": "dev"}, {"name": "notes"}]}})

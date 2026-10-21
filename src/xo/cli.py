@@ -956,7 +956,7 @@ def _connect_kinds(args: argparse.Namespace, client: Client, name: str) -> tuple
         if first_is and second_is and name.casefold() != second.casefold():
             name, second = _which_order(client, name, second)
         if not first_is and not second_is:
-            name, second = _new_order(client, name, second)
+            name, second = _new_order(client, name, second, projects)
         return "project", name, second, projects
     if names.named(projects, name):
         raise XoError(f"{name} is one of your projects: put it in a space with xo connect {shlex.quote(name)} SPACE, "
@@ -981,13 +981,14 @@ def _which_order(client: Client, a: str, b: str) -> tuple[str, str]:
                   f"connect space:NAME, then xo connect PROJECT NAME")
 
 
-def _new_order(client: Client, a: str, b: str) -> tuple[str, str]:
+def _new_order(client: Client, a: str, b: str, projects: list) -> tuple[str, str]:
     """Neither name is your project, so xo connect adds one: (project, space) is the order whose
     space is one of yours, so xo connect dev "my notes" adds my notes too. The other way round only
     for a project name that could not be a space: xo connect notes dev, with notes a space and no dev,
     may mean a new project notes for a space dev that is missing, so it is refused, not guessed. With
     neither a space, the first is the project, and the server says the space is missing before
-    anything is added."""
+    anything is added. The refusal names a project of yours that a plain b is close to first, since
+    its project:B form adds b without asking again; an OWNER/REPO b is never a typo (as in _which)."""
     spaces = _answer(client.request("GET", "/me/spaces").data, "spaces", "a spaces list")
     if not isinstance(spaces, list) or not all(isinstance(sp, dict) and isinstance(sp.get("name"), str)
                                                for sp in spaces):
@@ -997,6 +998,11 @@ def _new_order(client: Client, a: str, b: str) -> tuple[str, str]:
         raise XoError(f"{a} and {b} are both spaces: say which project goes in which with xo connect "
                       f"project:P space:S")
     if a.casefold() in have and b.casefold() not in have:
+        near = None if names.is_github(b) else _near(projects, b)
+        if near is not None:
+            raise XoError(f"{b} is not in your projects; did you mean {near}? xo connect {shlex.quote(near)} "
+                          f"{shlex.quote(a)} puts it in {a}. To add {b} as a new project, say xo connect "
+                          f"{shlex.quote('project:' + b)} space:{a}")
         if names.space_ok(b):
             raise XoError(f"{a} is one of your spaces and {b} is in neither your projects nor your spaces: to add "
                           f"{b} to {a}, say xo connect project:{b} space:{a}; for a space {b}, "
