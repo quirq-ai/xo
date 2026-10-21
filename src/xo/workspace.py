@@ -121,14 +121,6 @@ def resolve(projects: Any, typed: str) -> str:
     return found[0]
 
 
-def made(name: str, space: dict) -> Path:
-    """A new space with no projects, made with no kind: its folder ./NAME here, recorded as installed."""
-    root = Path(name)
-    root.mkdir()
-    _save(root, name, _rev(space), [])
-    return root
-
-
 def _project_here(client: Client, typed: str, checkout: bool = False) -> tuple[str, Path]:
     """The project of yours a typed name means, and its folder here. With checkout, that folder must
     already hold the project's own checkout."""

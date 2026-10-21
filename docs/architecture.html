@@ -348,7 +348,7 @@ html { scroll-behavior: smooth; }
 				<tr><td>xo spaces --space-id ID</td><td>server, then XO</td><td><code>GET /spaces/{spaceId}</code>: connection URLs; they carry a session token</td></tr>
 				<tr><td>xo me</td><td>server only</td><td>Your profile, primary email and both metadata buckets, printed as <code>{"xo": {..., "public_data", "private_data"}}</code>; credential-looking values masked</td></tr>
 				<tr><td>xo projects [add NAME]</td><td>server only</td><td>Read or append to the <code>projects</code> list in your private metadata</td></tr>
-				<tr><td>xo create space NAME</td><td>server only, then a folder</td><td>No KIND: a space entry with no projects and nothing on XO (<code>POST /me/spaces/connect</code>), then <code>./NAME</code> here, marked installed</td></tr>
+				<tr><td>xo create space NAME</td><td>git and GitHub, then server</td><td>No KIND: this folder&#39;s <code>.git</code>, one branch per subfolder and a <code>main</code> index, pushed to <code>github.com/OWNER/NAME</code>; then a space entry with nothing on XO (<code>POST /me/spaces/connect</code>)</td></tr>
 				<tr><td>xo create project NAME [URL]</td><td>server, then git</td><td>Adds the project, then clones <code>OWNER/REPO</code> into <code>./REPO</code> or runs <code>git init</code> for a plain name; a NAME given with a URL must be its <code>REPO</code> or <code>OWNER/REPO</code></td></tr>
 				<tr><td>xo connect P S [--ref R]</td><td>server only</td><td>Sets P in space S at <code>--ref</code> (default <code>main</code>)</td></tr>
 				<tr><td>xo connect P --repo URL</td><td>server, then git</td><td>A project made with a name only gets its repo and is recorded as <code>OWNER/REPO</code> (refused while P is in a space); <code>./P</code> gets that origin only if it has none, and moves to <code>./REPO</code> only if its origin is that repo</td></tr>
@@ -641,7 +641,7 @@ html { scroll-behavior: smooth; }
 <h4><code>/user-metadata</code> (no xo command)</h4>
 <p>xo has no command for it since <code>xo me</code> covers your own profile. The server's admin-only route stays as it was: <code>GET</code> and <code>PATCH /user-metadata/{userId}</code>, 20 a minute per key, a key with the <code>xo_admin</code> claim whose id is in <code>XO_ADMIN_KEY_IDS</code>, allow-listed keys only, one audit line per request. Admin needs two locks, and none is issued yet: until a key has the claim and its id is listed, every caller gets 403. PATCH changes only top-level keys named in <code>XO_EDITABLE_*_KEYS</code>.</p>
 <h3 id="cmd-spaces-on-xo">Spaces on XO</h3>
-<p>Every space on XO is created one way, <code>xo create space NAME KIND</code>, and recorded in your spaces. With no KIND, <code>xo create space NAME</code> records a space here only, with nothing on XO. The old <code>xo claude-code</code>, <code>xo codex</code>, ... commands are gone and say so.</p>
+<p>Every space on XO is created one way, <code>xo create space NAME KIND</code>, and recorded in your spaces. With no KIND, <code>xo create space NAME</code> makes the folder it runs in a space on GitHub and records it, with nothing on XO. The old <code>xo claude-code</code>, <code>xo codex</code>, ... commands are gone and say so.</p>
 <h4><code>xo create space NAME KIND</code></h4>
 <figure>
 <div class="canvas">
@@ -711,60 +711,68 @@ html { scroll-behavior: smooth; }
 <h4><code>xo create space NAME</code></h4>
 <figure>
 <div class="canvas">
-<svg class="d" viewBox="0 0 960 710" role="img" aria-label="xo create space NAME: A space here only, and nothing on XO.">
+<svg class="d" viewBox="0 0 960 824" role="img" aria-label="xo create space NAME: This folder, one branch per subfolder, on GitHub.">
 <defs>
 <marker id="c40a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
 <marker id="c40h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
 </defs>
-<line class="life" x1="240" y1="40" x2="240" y2="704"/>
-<rect class="hdr" x="135" y="12" width="210" height="28" rx="7"/>
-<text class="t" x="240" y="31" text-anchor="middle">You: xo CLI</text>
-<line class="life" x1="480" y1="40" x2="480" y2="704"/>
-<rect class="hdr" x="375" y="12" width="210" height="28" rx="7"/>
-<text class="t" x="480" y="31" text-anchor="middle">xo server</text>
-<line class="life" x1="720" y1="40" x2="720" y2="704"/>
-<rect class="hdr" x="615" y="12" width="210" height="28" rx="7"/>
-<text class="t" x="720" y="31" text-anchor="middle">Clerk</text>
-<rect class="box" x="135" y="58" width="210" height="46" rx="8"/>
-<text class="m" x="240" y="78" text-anchor="middle">xo create space dev</text>
-<text class="s" x="240" y="95" text-anchor="middle">no KIND</text>
-<rect class="box" x="135" y="142" width="210" height="46" rx="8"/>
-<text class="t" x="240" y="162" text-anchor="middle">lowercase NAME</text>
-<text class="s" x="240" y="179" text-anchor="middle">./dev here? refuse</text>
-<line class="edge" x1="240" y1="104" x2="240" y2="140" marker-end="url(#c40a)"/>
-<rect class="box" x="375" y="226" width="210" height="46" rx="8"/>
-<text class="m" x="480" y="246" text-anchor="middle">POST /me/spaces/connect</text>
-<text class="s" x="480" y="263" text-anchor="middle">{&quot;name&quot;} only</text>
-<path class="edge" d="M240,188 V208 H480 V224" marker-end="url(#c40a)"/>
-<text class="lbl" x="360" y="203" text-anchor="middle">name</text>
-<rect class="box" x="615" y="310" width="210" height="46" rx="8"/>
-<text class="t" x="720" y="330" text-anchor="middle">verify, read user</text>
-<text class="s" x="720" y="347" text-anchor="middle">name free?</text>
-<path class="edge" d="M480,272 V292 H720 V308" marker-end="url(#c40a)"/>
-<text class="lbl" x="600" y="287" text-anchor="middle">verify</text>
-<rect class="box" x="375" y="394" width="210" height="46" rx="8"/>
-<text class="t" x="480" y="414" text-anchor="middle">new entry</text>
-<text class="s" x="480" y="431" text-anchor="middle">no projects, rev 1</text>
-<path class="edge dash" d="M720,356 V376 H480 V392" marker-end="url(#c40a)"/>
-<text class="lbl" x="600" y="371" text-anchor="middle">user</text>
-<rect class="box hot" x="615" y="478" width="210" height="46" rx="8"/>
-<text class="t" x="720" y="498" text-anchor="middle">merge {spaces}</text>
-<text class="s" x="720" y="515" text-anchor="middle">nothing on XO</text>
-<path class="edge hot" d="M480,440 V460 H720 V476" marker-end="url(#c40h)"/>
-<text class="lbl hot" x="600" y="455" text-anchor="middle">write</text>
-<rect class="box" x="375" y="562" width="210" height="46" rx="8"/>
-<text class="t" x="480" y="582" text-anchor="middle">read back</text>
-<text class="s" x="480" y="599" text-anchor="middle">after 0.3 s</text>
-<path class="edge dash" d="M720,524 V544 H480 V560" marker-end="url(#c40a)"/>
-<text class="lbl" x="600" y="539" text-anchor="middle">written</text>
-<rect class="box" x="135" y="646" width="210" height="46" rx="8"/>
-<text class="t" x="240" y="666" text-anchor="middle">make ./dev</text>
-<text class="s" x="240" y="683" text-anchor="middle">.xo/state.json, rev 1</text>
-<path class="edge dash" d="M480,608 V628 H240 V644" marker-end="url(#c40a)"/>
-<text class="lbl" x="360" y="623" text-anchor="middle">200</text>
+<line class="life" x1="120" y1="40" x2="120" y2="818"/>
+<rect class="hdr" x="20" y="12" width="200" height="28" rx="7"/>
+<text class="t" x="120" y="31" text-anchor="middle">You: xo CLI</text>
+<line class="life" x1="360" y1="40" x2="360" y2="818"/>
+<rect class="hdr" x="260" y="12" width="200" height="28" rx="7"/>
+<text class="t" x="360" y="31" text-anchor="middle">git here</text>
+<line class="life" x1="600" y1="40" x2="600" y2="818"/>
+<rect class="hdr" x="500" y="12" width="200" height="28" rx="7"/>
+<text class="t" x="600" y="31" text-anchor="middle">GitHub</text>
+<line class="life" x1="840" y1="40" x2="840" y2="818"/>
+<rect class="hdr" x="740" y="12" width="200" height="28" rx="7"/>
+<text class="t" x="840" y="31" text-anchor="middle">xo server</text>
+<rect class="box" x="20" y="58" width="200" height="46" rx="8"/>
+<text class="m" x="120" y="78" text-anchor="middle">xo create space dev</text>
+<text class="s" x="120" y="95" text-anchor="middle">no KIND</text>
+<rect class="box" x="20" y="142" width="200" height="46" rx="8"/>
+<text class="t" x="120" y="162" text-anchor="middle">list subfolders, sizes</text>
+<text class="s" x="120" y="179" text-anchor="middle">ask: yes, or run it elsewhere</text>
+<line class="edge" x1="120" y1="104" x2="120" y2="140" marker-end="url(#c40a)"/>
+<rect class="box" x="260" y="226" width="200" height="46" rx="8"/>
+<text class="t" x="360" y="246" text-anchor="middle">.git (bare), per folder</text>
+<text class="s" x="360" y="263" text-anchor="middle">add, write-tree, commit-tree</text>
+<path class="edge" d="M120,188 V208 H360 V224" marker-end="url(#c40a)"/>
+<text class="lbl" x="240" y="203" text-anchor="middle">folders</text>
+<rect class="box" x="20" y="310" width="200" height="46" rx="8"/>
+<text class="t" x="120" y="330" text-anchor="middle">check the trees</text>
+<text class="s" x="120" y="347" text-anchor="middle">secrets, 100 MB, LFS: stop</text>
+<path class="edge dash" d="M360,272 V292 H120 V308" marker-end="url(#c40a)"/>
+<text class="lbl" x="240" y="287" text-anchor="middle">trees</text>
+<rect class="box" x="260" y="394" width="200" height="46" rx="8"/>
+<text class="t" x="360" y="414" text-anchor="middle">main</text>
+<text class="s" x="360" y="431" text-anchor="middle">README, xo-space.json, update</text>
+<path class="edge" d="M120,356 V376 H360 V392" marker-end="url(#c40a)"/>
+<text class="lbl" x="240" y="371" text-anchor="middle">index</text>
+<rect class="box" x="500" y="478" width="200" height="46" rx="8"/>
+<text class="m" x="600" y="498" text-anchor="middle">git ls-remote</text>
+<text class="s" x="600" y="515" text-anchor="middle">anonymous: OWNER/dev there?</text>
+<path class="edge" d="M360,440 V460 H600 V476" marker-end="url(#c40a)"/>
+<text class="lbl" x="480" y="455" text-anchor="middle">check</text>
+<rect class="box" x="20" y="562" width="200" height="46" rx="8"/>
+<text class="t" x="120" y="582" text-anchor="middle">print github.com/new link</text>
+<text class="s" x="120" y="599" text-anchor="middle">wait for Enter</text>
+<path class="edge dash" d="M600,524 V544 H120 V560" marker-end="url(#c40a)"/>
+<text class="lbl" x="360" y="539" text-anchor="middle">missing</text>
+<rect class="box hot" x="500" y="646" width="200" height="46" rx="8"/>
+<text class="m" x="600" y="666" text-anchor="middle">git push --atomic</text>
+<text class="s" x="600" y="683" text-anchor="middle">your git's login, never forced</text>
+<path class="edge hot" d="M120,608 V628 H600 V644" marker-end="url(#c40h)"/>
+<text class="lbl hot" x="360" y="623" text-anchor="middle">push</text>
+<rect class="box" x="740" y="730" width="200" height="46" rx="8"/>
+<text class="m" x="840" y="750" text-anchor="middle">POST /me/spaces/connect</text>
+<text class="s" x="840" y="767" text-anchor="middle">{&quot;name&quot;}, nothing on XO</text>
+<path class="edge" d="M600,692 V712 H840 V728" marker-end="url(#c40a)"/>
+<text class="lbl" x="720" y="707" text-anchor="middle">name</text>
 </svg>
 </div>
-<figcaption><strong>A space here only, and nothing on XO.</strong> The same entry <code>xo connect S</code> makes. xo lowercases NAME, as XO does, and refuses a kind word (<code>codex</code>, ...), <code>new</code> or <code>create</code>, and a <code>./NAME</code> that is already here, before anything is sent. Then it makes <code>./NAME/.xo/state.json</code> at rev 1 with no projects, so the space counts as installed. If the entry is written but the folder is not made, xo says to run <code>xo install space:NAME</code>; a name already taken (409) gets the hint that <code>xo install space:NAME</code> makes the folder.</figcaption>
+<figcaption><strong>This folder, one branch per subfolder, on GitHub, public.</strong> xo lists each subfolder with its size and asks first, and refuses your home folder, <code>/</code>, folders holding <code>.ssh</code>, <code>.aws</code> or <code>.gnupg</code>, hidden folders of your home, a folder inside another git repository and a <code>.git</code> folder. <code>./.git</code> is bare, so nothing here is checked out or changed; each branch is built with plumbing only, following each folder&#39;s <code>.gitignore</code> and this folder&#39;s, and leaving out <code>.env</code> files, keys and credential stores whatever a <code>.gitignore</code> says, nested repositories&#39; history and <code>.github/workflows</code>. A key, token or password in a file or its name, a file over 100 MB, a Git LFS pointer, a git-crypt file or a bare repository stops it before any commit. <code>main</code> holds a README, <code>xo-space.json</code> (one hash of every branch) and <code>update</code>. The check for <code>github.com/OWNER/NAME</code> uses no login, so a private repository looks missing; xo prints a link to make it, waits, and pushes with your own git. A rerun commits only what changed.</figcaption>
 </figure>
 <h4><code>xo claude-code | codex | ... (removed)</code></h4>
 <figure>

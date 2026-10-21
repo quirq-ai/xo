@@ -103,6 +103,10 @@ def project_ok(name: str) -> bool:
             and repo not in (".", "..") and not repo.lower().endswith(".git"))
 
 
+def github_owner_ok(name: str) -> bool:
+    return isinstance(name, str) and bool(_OWNER.fullmatch(name))
+
+
 def space_ok(name: str) -> bool:
     return isinstance(name, str) and bool(_SPACE.fullmatch(name))
 
