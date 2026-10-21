@@ -653,9 +653,16 @@ def test_the_notice_before_a_change_is_redacted(fake, capsys):
     assert code == 0 and err == f"xo: POST {fake.base}/api/core/v1/x/<redacted>\n"
 
 
+def _choices(err: str) -> set[str]:
+    """The names in argparse's "(choose from ...)": quoted on Python 3.13 and 3.14, bare on 3.12.13
+    (the 3.12 line is what Vercel runs, and presubmit.yml tests it)."""
+    listed = err.rpartition("(choose from ")[2].rstrip().removesuffix(")")
+    return {name.strip().strip("'") for name in listed.split(",")}
+
+
 def test_a_typo_still_lists_the_real_commands(fake, capsys):
     err = _argparse_err(capsys, "template", "list")
-    assert "'templates'" in err and "'orgs-templates'" in err
+    assert {"templates", "orgs-templates"} <= _choices(err)
     assert "'template'" not in err
 
 
@@ -663,7 +670,7 @@ def test_a_typed_choose_from_cannot_carry_a_value_past_the_hiding(fake, capsys, 
     monkeypatch.delenv("XO_API_KEY")
     secret = "ak_FAKE_r5_0123456789abcdef"
     err = _argparse_err(capsys, f"x (choose from {secret}")
-    assert secret not in err and "'templates'" in err
+    assert secret not in err and "templates" in _choices(err)
 
 
 # --- the bundled core API spec -------------------------------------------------------------------
