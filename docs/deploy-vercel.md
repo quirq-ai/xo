@@ -215,7 +215,7 @@ Then in Vercel:
    update it:
 
    ```sh
-   ~/.xo/bin/pip install --force-reinstall --no-deps "quirq-xo @ git+https://github.com/quirq-ai/xo@436bfbef0d222c128bd10d3ae6b32bc407ce1b51"
+   ~/.xo/bin/pip install --force-reinstall --no-deps "quirq-xo @ git+https://github.com/quirq-ai/xo@10937c629fae9bb823dc1ff77f3ca59b4dc1aa29"
    ```
 
    Have your XO key handy. With a saved key that works, `xo login` only says you are already
