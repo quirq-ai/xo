@@ -50,7 +50,11 @@
     xo connect PROJECT SPACE [--ref R]      set PROJECT in SPACE at ref R (default main); the names
                                             need no project: or space: in front, and xo connect
                                             SPACE PROJECT works too (when both names are your
-                                            projects, the one that is a space is SPACE).
+                                            projects, the one that is a space is SPACE). A
+                                            PROJECT not in your projects yet (a plain name,
+                                            OWNER/REPO or a GitHub URL) is added to them first;
+                                            a plain name close to one of yours, or one that could
+                                            be the space, needs project:NAME.
     xo connect PROJECT --repo URL           give PROJECT, made with a name only, its GitHub repo; it
                                             is recorded as OWNER/REPO and its folder becomes ./REPO.
     xo connect SPACE [--id ID]              a new space entry SPACE in your metadata (refused for a
@@ -819,7 +823,10 @@ def _moved(kind: str) -> str:
 
 def _connect(args: argparse.Namespace) -> int:
     """`xo connect PROJECT SPACE [--ref R]`, `xo connect PROJECT --repo URL` or `xo connect SPACE [--id ID]`.
-    Names need no project: or space: in front (see _connect_kinds); with one, xo takes it as written."""
+    Names need no project: or space: in front (see _connect_kinds); with one, xo takes it as written.
+    PROJECT may be a GitHub URL, and one not in your projects yet is added first (_add_then_connect)."""
+    args.first, args.second = _url_named(args.first), _url_named(args.second)
+    said = any(t is not None and _tagged(t)[0] == "project" for t in (args.first, args.second))
     (kind, value), second = _tagged(args.first), args.second
     client, projects = None, None
     if kind is None:
@@ -852,14 +859,18 @@ def _connect(args: argparse.Namespace) -> int:
         if args.ref is not None and not names.ref_ok(args.ref):
             raise XoError(names.REF_RULE)
         client = client or _client(args, server=True)
-        value = _which(client, value, projects)
+        value = _which(client, value, projects, new_ok=True, said=said)
         body = {"project": value, **({"ref": args.ref} if args.ref is not None else {})}
+        path = f"/me/spaces/{quote(space, safe='')}/projects"
         try:
-            data = _post_server(client, f"/me/spaces/{quote(space, safe='')}/projects", body)
+            data = _post_server(client, path, body)
         except XoError as e:
-            if "You have no space named" not in str(e):
+            if "You have no space named" in str(e):
+                raise XoError(f"{e}; {_make_space_hint(space)}") from None
+            if "is not in your projects" not in str(e):
                 raise
-            raise XoError(f"{e}; {_make_space_hint(space)}") from None
+            # The server looks for the space first, so it is there: add the project, then put it in.
+            data = _add_then_connect(client, value, space, path, body)
     elif kind == "space":
         if second is not None or args.ref is not None or args.repo is not None:
             raise XoError("make a space entry with: xo connect SPACE [--id XO_SPACE_ID]")
@@ -877,6 +888,34 @@ def _connect(args: argparse.Namespace) -> int:
     return 0
 
 
+def _url_named(text: str | None) -> str | None:
+    """A GitHub URL given to xo connect as project:OWNER/REPO, so it is never read as a kind."""
+    if text is None or not text.startswith(("https:", "http:", "git@", "ssh:")):
+        return text
+    return f"project:{_project_target(text.strip())}"
+
+
+def _add_then_connect(client: Client, project: str, space: str, path: str, body: dict) -> Any:
+    """xo connect PROJECT SPACE for a project not in your projects yet: add it, as xo create project
+    does (without making its folder here: xo install does that), then put it in the space. An
+    OWNER/REPO that differs only in case from one of yours is that one: nothing is added."""
+    if names.is_github(project):
+        known = _answer(client.request("GET", "/me/projects").data, "projects", "a projects list")
+        same = [p for p in known if isinstance(p, str) and p.casefold() == project.casefold()] \
+            if isinstance(known, list) else []
+        if same:
+            return _post_server(client, path, {**body, "project": same[0]})
+    _post_server(client, "/me/projects", {"name": project})
+    how = f"{gitops.GITHUB}/{project}" if names.is_github(project) else (
+        f"no repo; give it one with xo connect {shlex.quote(project)} --repo https://github.com/OWNER/REPO")
+    print(f"xo: {project} was not in your projects, so xo added it ({how})", file=sys.stderr)
+    try:
+        return _post_server(client, path, body)
+    except XoError as e:
+        maybe = "maybe " if MAYBE_RECEIVED in str(e) else ""
+        raise XoError(f"{project} is in your projects now, but {maybe}not in {space}: {e}") from None
+
+
 def _tagged(text: str) -> tuple[str | None, str]:
     """A connect argument as (kind, name): project:P or space:S as written, a bare name as (None, name).
     Any other word before a colon is an unknown kind, which _connect refuses."""
@@ -892,6 +931,7 @@ def _connect_kinds(args: argparse.Namespace, client: Client, name: str) -> tuple
     - with a second name, a project and the space it goes in, in either order: the project is the
       name in your projects, so xo connect test2 headscale also puts headscale in test2. When both
       names are your projects, your spaces decide: the one order whose space exists, else refused;
+      when neither is, the same (see _new_order), and xo connect adds the project;
     - alone, a new space entry, unless it is one of your projects (space:NAME makes that entry anyway).
     Returns (kind, name, second, projects): the projects list when it was read, so it is read once.
     A list that cannot be read stops the command: nothing is guessed and nothing is sent."""
@@ -915,6 +955,8 @@ def _connect_kinds(args: argparse.Namespace, client: Client, name: str) -> tuple
             return "project", second, name, projects
         if first_is and second_is and name.casefold() != second.casefold():
             name, second = _which_order(client, name, second)
+        if not first_is and not second_is:
+            name, second = _new_order(client, name, second)
         return "project", name, second, projects
     if names.named(projects, name):
         raise XoError(f"{name} is one of your projects: put it in a space with xo connect {shlex.quote(name)} SPACE, "
@@ -939,6 +981,30 @@ def _which_order(client: Client, a: str, b: str) -> tuple[str, str]:
                   f"connect space:NAME, then xo connect PROJECT NAME")
 
 
+def _new_order(client: Client, a: str, b: str) -> tuple[str, str]:
+    """Neither name is your project, so xo connect adds one: (project, space) is the order whose
+    space is one of yours, so xo connect dev "my notes" adds my notes too. The other way round only
+    for a project name that could not be a space: xo connect notes dev, with notes a space and no dev,
+    may mean a new project notes for a space dev that is missing, so it is refused, not guessed. With
+    neither a space, the first is the project, and the server says the space is missing before
+    anything is added."""
+    spaces = _answer(client.request("GET", "/me/spaces").data, "spaces", "a spaces list")
+    if not isinstance(spaces, list) or not all(isinstance(sp, dict) and isinstance(sp.get("name"), str)
+                                               for sp in spaces):
+        raise XoError("the xo server's spaces list is not a list of spaces")
+    have = {sp["name"].casefold() for sp in spaces}
+    if a.casefold() in have and b.casefold() in have and a.casefold() != b.casefold():
+        raise XoError(f"{a} and {b} are both spaces: say which project goes in which with xo connect "
+                      f"project:P space:S")
+    if a.casefold() in have and b.casefold() not in have:
+        if names.space_ok(b):
+            raise XoError(f"{a} is one of your spaces and {b} is in neither your projects nor your spaces: to add "
+                          f"{b} to {a}, say xo connect project:{b} space:{a}; for a space {b}, "
+                          f"{_make_space_hint(b)}")
+        return b, a
+    return a, b
+
+
 def _make_space_hint(space: str) -> str:
     """How to make a space that is not in your spaces yet. xo connect space:S always can; xo create
     space S only for a name it takes (no kind word, new or create, and no ./S here), with a KIND only
@@ -950,14 +1016,31 @@ def _make_space_hint(space: str) -> str:
     return hint + f" or xo create space {name}" + (" [KIND]" if names.xo_name_ok(name) else "")
 
 
-def _which(client: Client, typed: str, projects: list | None = None) -> str:
+def _which(client: Client, typed: str, projects: list | None = None, new_ok: bool = False,
+           said: bool = False) -> str:
     """The project a typed name means: OWNER/REPO as it is, a plain name looked up in your projects
-    (a GitHub project is called by its repo's name). projects: the list when it was already read."""
+    (a GitHub project is called by its repo's name). projects: the list when it was already read.
+    new_ok: a plain name none of your projects has is a new project of that name (xo connect adds it),
+    unless it is close to one of yours (a typo, most likely: xo has no delete) and was not said as
+    project:NAME."""
     if names.is_github(typed):
         return typed
     if projects is None:
         projects = _answer(client.request("GET", "/me/projects").data, "projects", "a projects list")
+    if new_ok and isinstance(projects, list) and not names.named(projects, typed):
+        near = None if said else _near(projects, typed)
+        if near is not None:
+            raise XoError(f"{typed} is not in your projects; did you mean {near}? To add {typed} as a new project, "
+                          f"say xo connect {shlex.quote('project:' + typed)} SPACE")
+        return typed
     return workspace.resolve(projects, typed)
+
+
+def _near(projects: list, typed: str) -> str | None:
+    """The name of one of your projects a new plain name is close to, or None."""
+    called = {names.short(p).casefold(): names.short(p) for p in projects if isinstance(p, str)}
+    near = difflib.get_close_matches(typed.casefold(), list(called), n=1, cutoff=0.8)
+    return called[near[0]] if near else None
 
 
 def _local_repo(dest: Path, repo: str, projects: Any) -> None:
@@ -1407,7 +1490,7 @@ def main(argv: list[str] | None = None) -> int:
                          "space:NAME says it outright)")
     cn.add_argument("second", nargs="?", metavar="SPACE",
                     help="the other name: the space the project goes in, or the project when the first "
-                         "name is the space")
+                         "name is the space; a project not in your projects yet is added first")
     cn.add_argument("--ref", help="a branch, tag or commit sha for the project (default main)")
     cn.add_argument("--id", help="with a space name alone, an XO space you already have (XO must confirm your key "
                                  "can read it)")

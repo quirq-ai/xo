@@ -1887,6 +1887,119 @@ def test_connect_asks_which_project_when_two_repos_share_a_name(xs, capsys):
     assert [r["method"] for r in xs.requests] == ["GET"]
 
 
+class _InTurn(dict):
+    """Fake routes where a list of answers is given one per request, the last one again after that."""
+    def get(self, key, default=None):
+        answer = super().get(key, default)
+        if isinstance(answer, list):
+            return answer.pop(0) if len(answer) > 1 else answer[0]
+        return answer
+
+
+NOT_YOURS = (404, {"success": False, "error": "juanfont/headscale is not in your projects; add it with xo create "
+                                             "project first"}, {})
+LINKED = (200, {"success": True, "data": {"space": SPACE}}, {})
+
+
+@pytest.mark.parametrize("argv", [["juanfont/headscale", "dev"], ["project:juanfont/headscale", "space:dev"],
+                                  ["https://github.com/juanfont/headscale", "dev"],
+                                  ["dev", "https://github.com/juanfont/headscale.git"]])
+def test_connect_adds_a_project_that_is_not_in_your_projects_yet(xs, capsys, argv):
+    xs.routes = _InTurn(xs.routes)
+    xs.route("GET", "/me/projects", body={"success": True, "data": {"projects": ["notes"]}})
+    xs.route("GET", "/me/spaces", body={"success": True, "data": {"spaces": [{"name": "dev", "rev": 1}]}})
+    xs.routes[("POST", "/me/spaces/dev/projects")] = [NOT_YOURS, LINKED]
+    xs.route("POST", "/me/projects", body={"success": True, "data": {"projects": ["notes", "juanfont/headscale"]}})
+    code, out, err = run(capsys, "connect", *argv, "--ref", "v1")
+    assert code == 0 and json.loads(out) == SPACE
+    assert "xo: juanfont/headscale was not in your projects, so xo added it (" in err and "/juanfont/headscale)\n" in err
+    link = ("/me/spaces/dev/projects", {"project": "juanfont/headscale", "ref": "v1"})
+    assert [(r["path"], r["body"]) for r in xs.requests if r["method"] == "POST"] == [
+        link, ("/me/projects", {"name": "juanfont/headscale"}), link]
+    assert not Path("headscale").exists()  # xo install makes the folder
+
+
+def test_connect_adds_a_new_plain_project_to_the_space_named_with_it(xs, capsys):
+    xs.routes = _InTurn(xs.routes)
+    xs.route("GET", "/me/projects", body={"success": True, "data": {"projects": []}})
+    xs.route("GET", "/me/spaces", body={"success": True, "data": {"spaces": [{"name": "dev", "rev": 1}]}})
+    xs.routes[("POST", "/me/spaces/dev/projects")] = [NOT_YOURS, LINKED]
+    xs.route("POST", "/me/projects", body={"success": True, "data": {"projects": ["my notes"]}})
+    code, _, err = run(capsys, "connect", "dev", "my notes")  # dev is the space, in either order
+    assert code == 0 and "my notes was not in your projects, so xo added it (no repo; give it one with xo " \
+                         "connect 'my notes' --repo https://github.com/OWNER/REPO)" in err
+    assert [(r["method"], r["path"]) for r in xs.requests] == [
+        ("GET", "/me/projects"), ("GET", "/me/spaces"), ("POST", "/me/spaces/dev/projects"),
+        ("POST", "/me/projects"), ("POST", "/me/spaces/dev/projects")]
+    assert xs.requests[3]["body"] == {"name": "my notes"}
+
+
+def test_connect_adds_nothing_when_the_space_is_missing(xs, capsys):
+    xs.route("GET", "/me/projects", body={"success": True, "data": {"projects": []}})
+    xs.route("GET", "/me/spaces", body={"success": True, "data": {"spaces": []}})
+    xs.route("POST", "/me/spaces/test9/projects", status=404,
+             body={"success": False, "error": "You have no space named test9"})
+    code, _, err = run(capsys, "connect", "juanfont/headscale", "test9")
+    assert code == 1 and "You have no space named test9" in err and "xo connect space:test9" in err
+    assert [r["path"] for r in xs.requests if r["method"] == "POST"] == ["/me/spaces/test9/projects"]
+
+
+def test_connect_says_a_project_was_added_when_the_space_then_refuses_it(xs, capsys):
+    xs.routes = _InTurn(xs.routes)
+    xs.route("GET", "/me/projects", body={"success": True, "data": {"projects": []}})
+    xs.route("GET", "/me/spaces", body={"success": True, "data": {"spaces": [{"name": "dev", "rev": 1}]}})
+    xs.routes[("POST", "/me/spaces/dev/projects")] = [
+        NOT_YOURS, (422, {"success": False, "error": "Space dev has 20 projects, the most there can be"}, {})]
+    xs.route("POST", "/me/projects", body={"success": True, "data": {"projects": ["juanfont/headscale"]}})
+    code, out, err = run(capsys, "connect", "juanfont/headscale", "dev")
+    assert code == 1 and out == ""
+    assert "juanfont/headscale is in your projects now, but not in dev: " in err and "20 projects" in err
+
+
+def test_connect_two_new_names_that_are_both_spaces_are_refused(xs, capsys):
+    xs.route("GET", "/me/projects", body={"success": True, "data": {"projects": []}})
+    xs.route("GET", "/me/spaces", body={"success": True, "data": {"spaces": [{"name": "dev"}, {"name": "notes"}]}})
+    code, _, err = run(capsys, "connect", "dev", "notes")
+    assert code == 1 and "dev and notes are both spaces" in err and "project:P space:S" in err
+    assert all(r["method"] == "GET" for r in xs.requests)
+
+
+def test_connect_refuses_a_url_that_is_not_a_github_repo(xs, capsys):
+    code, _, err = run(capsys, "connect", "https://gitlab.com/o/r", "dev")
+    assert code == 1 and "https://github.com/OWNER/REPO" in err and xs.requests == []
+
+
+def test_connect_refuses_a_new_plain_name_close_to_one_of_yours_unless_said(xs, capsys):
+    xs.routes = _InTurn(xs.routes)
+    xs.route("GET", "/me/projects", body={"success": True, "data": {"projects": ["juanfont/headscale"]}})
+    xs.route("GET", "/me/spaces", body={"success": True, "data": {"spaces": [{"name": "dev", "rev": 1}]}})
+    code, _, err = run(capsys, "connect", "headscal", "dev")
+    assert code == 1 and "did you mean headscale?" in err and "xo connect project:headscal SPACE" in err
+    assert all(r["method"] == "GET" for r in xs.requests)
+    xs.routes[("POST", "/me/spaces/dev/projects")] = [NOT_YOURS, LINKED]
+    xs.route("POST", "/me/projects", body={"success": True, "data": {"projects": ["juanfont/headscale", "headscal"]}})
+    code, _, err = run(capsys, "connect", "project:headscal", "space:dev")
+    assert code == 0 and "headscal was not in your projects, so xo added it" in err
+
+
+def test_connect_does_not_guess_a_new_project_for_a_space_that_may_be_missing(xs, capsys):
+    xs.route("GET", "/me/projects", body={"success": True, "data": {"projects": []}})
+    xs.route("GET", "/me/spaces", body={"success": True, "data": {"spaces": [{"name": "notes", "rev": 1}]}})
+    code, _, err = run(capsys, "connect", "notes", "dev")  # a new project notes, for a dev not made yet?
+    assert code == 1 and "xo connect project:dev space:notes" in err and "xo connect space:dev" in err
+    assert all(r["method"] == "GET" for r in xs.requests)
+
+
+def test_connect_a_repo_that_differs_only_in_case_is_not_added_again(xs, capsys):
+    xs.routes = _InTurn(xs.routes)
+    xs.route("GET", "/me/projects", body={"success": True, "data": {"projects": ["juanfont/headscale"]}})
+    xs.routes[("POST", "/me/spaces/dev/projects")] = [NOT_YOURS, LINKED]
+    code, out, err = run(capsys, "connect", "https://github.com/JuanFont/Headscale", "dev")
+    assert code == 0 and json.loads(out) == SPACE and "was not in your projects" not in err
+    assert [r["body"] for r in xs.requests if r["method"] == "POST"] == [
+        {"project": "JuanFont/Headscale"}, {"project": "juanfont/headscale"}]
+
+
 @pytest.mark.parametrize("argv", [
     ["connect", "project:notes", "space:dev", "--ref", "--upload-pack=touch x"],
     ["connect", "project:notes", "space:dev", "--ref=a..b"],
