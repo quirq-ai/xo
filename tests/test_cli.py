@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import os
 import shutil
@@ -1673,6 +1674,23 @@ def test_create_space_with_no_kind_needs_a_github_owner(xs, capsys, github, monk
     assert code == 1 and "run xo login github, or say whose it is with --owner OWNER" in err
     code, _, err = run(capsys, "create", "space", "dev", "--owner=-bad", "--yes")
     assert code == 1 and "--owner is a GitHub user or organization name" in err
+
+
+def test_create_space_with_no_kind_records_the_space_only_once_it_is_pushed(xs, capsys, github):
+    Path("notes").mkdir()
+    Path("notes/n.txt").write_text("n\n")
+    code, out, err = run(capsys, "create", "space", "typo", "--owner", "me", "--yes")  # no repo, no terminal
+    assert code == 0 and json.loads(out)["pushed"] is False and xs.requests == []
+    assert "space typo goes in your spaces once it is pushed" in err
+
+
+@pytest.mark.parametrize("typed,goes_on", [("\n", True), ("y\n", True), ("n\n", False), ("stop\n", False),
+                                           ("no thanks\n", False)])
+def test_waiting_for_the_repository_goes_on_only_at_enter(monkeypatch, capsys, typed, goes_on):
+    monkeypatch.setattr(cli.sys, "stdin", io.StringIO(typed))
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True, raising=False)
+    monkeypatch.setattr(cli.sys.stderr, "isatty", lambda: True, raising=False)
+    assert cli._wait("Press Enter once it exists, or n to stop here") is goes_on
 
 
 def test_connect_repo_renames_a_folder_whose_name_differs_only_in_case(xs, capsys, github):

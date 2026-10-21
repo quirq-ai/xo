@@ -47,7 +47,7 @@
                                             named NAME there too, and record it in your spaces. With no
                                             KIND: this folder becomes space NAME, after you say yes: a
                                             .git with one branch per subfolder and main listing them,
-                                            pushed to github.com/OWNER/NAME, nothing on XO.
+                                            pushed to github.com/OWNER/NAME (public), nothing on XO.
     xo connect PROJECT SPACE [--ref R]      set PROJECT in SPACE at ref R (default main); the names
                                             need no project: or space: in front, and xo connect
                                             SPACE PROJECT works too (when both names are your
@@ -802,24 +802,27 @@ def _create_local_space(args: argparse.Namespace) -> int:
     elif not names.github_owner_ok(owner):
         raise XoError("--owner is a GitHub user or organization name")
     made = spacerepo.create(Path("."), name, owner, ask=lambda q: args.yes or _ask(q), wait=_wait)
-    try:
-        client = _client(args, server=True)
-        _post_server(client, "/me/spaces/connect", {"name": name})
-    except XoError as e:
-        if "already have a space named" not in str(e):
-            print(f"xo: space {name} was not added to your spaces ({e}); xo connect space:{name} adds it",
-                  file=sys.stderr)
+    if made.get("pushed"):  # only a space that is on GitHub goes in your spaces (xo has no delete)
+        try:
+            client = _client(args, server=True)
+            _post_server(client, "/me/spaces/connect", {"name": name})
+        except XoError as e:
+            if "already have a space named" not in str(e):
+                print(f"xo: space {name} was not added to your spaces ({e}); xo connect space:{name} adds it",
+                      file=sys.stderr)
+    else:
+        print(f"xo: space {name} goes in your spaces once it is pushed", file=sys.stderr)
     print(_json(made))
     return 0
 
 
 def _wait(question: str) -> bool:
-    """Enter at a terminal goes on, n stops; without a terminal xo stops here."""
+    """Enter (or y) at a terminal goes on, anything else stops; without a terminal xo stops here."""
     if not (sys.stdin.isatty() and sys.stderr.isatty()):
         return False
     print(f"xo: {question} ", end="", file=sys.stderr, flush=True)
     try:
-        return sys.stdin.readline().strip().lower() not in ("n", "no")
+        return sys.stdin.readline().strip().lower() in ("", "y", "yes")
     except (EOFError, KeyboardInterrupt):
         return False
 
@@ -1496,7 +1499,8 @@ def main(argv: list[str] | None = None) -> int:
     ms.add_argument("space_name", metavar="NAME", help=names.XO_NAME_RULE + "; with no KIND, " + names.SPACE_RULE)
     ms.add_argument("--owner", help="with no KIND: the GitHub user or organization the space's repository is under "
                                     "(default: your gh login)")
-    ms.add_argument("--yes", action="store_true", help="with no KIND: make the space without asking")
+    ms.add_argument("--yes", action="store_true", help="with no KIND: make the space and push it (public) without "
+                                                         "asking")
     ms.set_defaults(run=_create_space)
     space_kinds = ms.add_subparsers(dest="kind", required=False, metavar="KIND",
                                     help="the kind of space XO makes; leave it out to make this folder the space, on GitHub")

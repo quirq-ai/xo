@@ -38,25 +38,32 @@ def environment() -> dict[str, str]:
 
 
 def run(*args: str, cwd: Path | None = None, check: bool = True, env: dict[str, str] | None = None,
-        input: str | None = None) -> str | None:
+        input: bytes | None = None, raw: bool = False) -> str | None:
     """git's output; with check=False, None when git fails instead of an error. env: variables added
-    to git's environment; input: what git reads on stdin (nothing when None)."""
+    to git's environment; input: the bytes git reads on stdin (nothing when None; bytes, so no line
+    ending is changed on the way, as text mode does on Windows); raw: git's output as it is (paths with
+    -z, any bytes), decoded with surrogateescape rather than the locale."""
+    binary = raw or input is not None
     stdin = {"input": input} if input is not None else {"stdin": subprocess.DEVNULL}
     try:
         done = subprocess.run(["git", *SAFE, *args], cwd=cwd, env={**environment(), **(env or {})},
-                              capture_output=True, text=True, timeout=GIT_TIMEOUT, **stdin)
+                              capture_output=True, text=not binary, timeout=GIT_TIMEOUT, **stdin)
     except FileNotFoundError:
         raise XoError("git is not installed; install it and try again") from None
     except subprocess.TimeoutExpired:
         raise XoError(f"git {args[0]} did not finish in {GIT_TIMEOUT:.0f} seconds") from None
+    out, err = done.stdout, done.stderr
+    if binary:
+        out, err = out.decode("utf-8", "surrogateescape"), err.decode("utf-8", "replace")
     if done.returncode != 0:
         if not check:
             return None
-        lines = [line for line in done.stderr.splitlines() if line.strip()]
+        lines = [line for line in err.splitlines() if line.strip()]
         error = XoError(f"git {args[0]} failed: {lines[-1] if lines else f'exit {done.returncode}'}")
-        error.detail = done.stderr  # all of git's message, for a caller that needs to tell failures apart
+        error.detail = err  # all of git's message, for a caller that needs to tell failures apart
+        error.code = done.returncode
         raise error
-    return done.stdout
+    return out
 
 
 def clone(name: str, dest: Path) -> None:
