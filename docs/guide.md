@@ -80,7 +80,7 @@ xo connect notes --repo https://github.com/OWNER/REPO
                                                  # to ./REPO (not moved if its origin is another repo)
 xo connect headscale my-cc --ref main            # put a project in a space, at a branch, tag or sha
 xo connect https://github.com/OWNER/REPO my-cc   # not in your projects yet: xo adds it, then puts
-                                                 # it in my-cc (xo install my-cc clones it)
+                                                 # it in my-cc (xo install space:my-cc clones it)
 xo connect dev                                   # a new space entry in your metadata, no XO space
 xo connect old --id THE_ID                       # an entry for an XO space you already have, or
                                                  # the id for an entry made without one
@@ -110,7 +110,10 @@ xo sync project:headscale                        # git pull --rebase, then push
   the space; xo says so on stderr. Give it as `OWNER/REPO` or a GitHub URL for a repo; a plain
   name becomes a project with no repo, which `xo connect NAME --repo URL` can give one later.
   When neither name is your project, the one that is your space is the space (refused if both
-  are). Nothing is added when the space is missing.
+  are, and when the other name could be a space you do not have yet). Nothing is added when the
+  space is missing. A plain name close to one of your projects' (a typo, most likely) is refused
+  with the one it is close to: xo has no delete, so say `project:NAME` to add it anyway. If the
+  space then refuses the project (it is full, say), the project stays in your projects.
 - `xo install`, `update` and `sync` use your own git and its login, over https only and without
   submodules. A space's projects go in `./SPACE/REPO`; `./SPACE/.xo/state.json` remembers the
   space's rev and refs as installed. A project with no GitHub remote is left as it is.

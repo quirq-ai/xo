@@ -1969,6 +1969,37 @@ def test_connect_refuses_a_url_that_is_not_a_github_repo(xs, capsys):
     assert code == 1 and "https://github.com/OWNER/REPO" in err and xs.requests == []
 
 
+def test_connect_refuses_a_new_plain_name_close_to_one_of_yours_unless_said(xs, capsys):
+    xs.routes = _InTurn(xs.routes)
+    xs.route("GET", "/me/projects", body={"success": True, "data": {"projects": ["juanfont/headscale"]}})
+    xs.route("GET", "/me/spaces", body={"success": True, "data": {"spaces": [{"name": "dev", "rev": 1}]}})
+    code, _, err = run(capsys, "connect", "headscal", "dev")
+    assert code == 1 and "did you mean headscale?" in err and "xo connect project:headscal SPACE" in err
+    assert all(r["method"] == "GET" for r in xs.requests)
+    xs.routes[("POST", "/me/spaces/dev/projects")] = [NOT_YOURS, LINKED]
+    xs.route("POST", "/me/projects", body={"success": True, "data": {"projects": ["juanfont/headscale", "headscal"]}})
+    code, _, err = run(capsys, "connect", "project:headscal", "space:dev")
+    assert code == 0 and "headscal was not in your projects, so xo added it" in err
+
+
+def test_connect_does_not_guess_a_new_project_for_a_space_that_may_be_missing(xs, capsys):
+    xs.route("GET", "/me/projects", body={"success": True, "data": {"projects": []}})
+    xs.route("GET", "/me/spaces", body={"success": True, "data": {"spaces": [{"name": "notes", "rev": 1}]}})
+    code, _, err = run(capsys, "connect", "notes", "dev")  # a new project notes, for a dev not made yet?
+    assert code == 1 and "xo connect project:dev space:notes" in err and "xo connect space:dev" in err
+    assert all(r["method"] == "GET" for r in xs.requests)
+
+
+def test_connect_a_repo_that_differs_only_in_case_is_not_added_again(xs, capsys):
+    xs.routes = _InTurn(xs.routes)
+    xs.route("GET", "/me/projects", body={"success": True, "data": {"projects": ["juanfont/headscale"]}})
+    xs.routes[("POST", "/me/spaces/dev/projects")] = [NOT_YOURS, LINKED]
+    code, out, err = run(capsys, "connect", "https://github.com/JuanFont/Headscale", "dev")
+    assert code == 0 and json.loads(out) == SPACE and "was not in your projects" not in err
+    assert [r["body"] for r in xs.requests if r["method"] == "POST"] == [
+        {"project": "JuanFont/Headscale"}, {"project": "juanfont/headscale"}]
+
+
 @pytest.mark.parametrize("argv", [
     ["connect", "project:notes", "space:dev", "--ref", "--upload-pack=touch x"],
     ["connect", "project:notes", "space:dev", "--ref=a..b"],
