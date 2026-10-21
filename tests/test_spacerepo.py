@@ -324,3 +324,64 @@ def test_the_index_is_the_same_where_text_mode_writes_crlf(here, monkeypatch):
     _make()
     assert _hub(here, "ls-tree", "--name-only", "main").split("\n") == ["README.md", "update", spacerepo.FILE]
     assert b"\r" not in _hub(here, "show", "main:update").encode()
+
+
+def test_a_folder_never_pushed_and_then_left_out_is_not_pushed(here, capsys):
+    (here.root / "me/myspace").rename(here.root / "me/later")
+    Path("diary").mkdir()
+    Path("diary/today.txt").write_text("private\n")
+    assert _make(wait=lambda q: False)["pushed"] is False  # diary made here, not pushed
+    Path(".gitignore").write_text("diary/\n")
+    (here.root / "me/later").rename(here.root / "me/myspace")
+    out = _make()
+    assert out["pushed"] is True and "diary" not in out["branches"]
+    assert "diary" not in _hub(here, "for-each-ref", "--format=%(refname:short)").split()
+    assert "diary: no such folder here now, and GitHub does not have its branch; left out" in capsys.readouterr().err
+
+
+def test_a_repository_deleted_and_made_again_gets_none_of_the_old_history(here):
+    Path("beta/diary.txt").write_text("private\n")
+    assert _make()["pushed"] is True
+    import shutil
+    shutil.rmtree(here.root / "me/myspace")
+    git("init", "-q", "--bare", str(here.root / "me/myspace"))
+    Path("beta/.gitignore").write_text("diary.txt\n")
+    assert _make()["pushed"] is True
+    assert _hub(here, "rev-list", "--count", "beta") == "1"
+    assert _hub(here, "log", "--all", "--format=%h", "--", "diary.txt") == ""
+
+
+def test_the_exclude_of_a_worktree_or_a_gitdir_file_is_followed(here):
+    git("init", "-q", "-b", "main", "../mainrepo")
+    Path("../mainrepo/a").write_text("a\n")
+    git("add", "a", cwd="../mainrepo")
+    git("commit", "-qm", "a", cwd="../mainrepo")
+    with open("../mainrepo/.git/info/exclude", "a") as f:
+        f.write("private.txt\n")
+    git("worktree", "add", "-q", str(Path("delta").resolve()), cwd="../mainrepo")
+    Path("delta/private.txt").write_text("private\n")
+    git("init", "-q", "-b", "main", "--separate-git-dir", str(Path("../sep").resolve()), "eps")
+    Path("eps/e.txt").write_text("e\n")
+    git("add", "e.txt", cwd="eps")
+    git("commit", "-qm", "e", cwd="eps")
+    with open("../sep/info/exclude", "a") as f:
+        f.write("private.txt\n")
+    Path("eps/private.txt").write_text("private\n")
+    _make()
+    assert "private.txt" not in _hub(here, "ls-tree", "-r", "--name-only", "delta").split()
+    assert "private.txt" not in _hub(here, "ls-tree", "-r", "--name-only", "eps").split()
+
+
+def test_inside_a_git_folder_is_refused(here):
+    git("init", "-q", "mono")
+    with pytest.raises(XoError, match="own .git folder"):
+        spacerepo.create(Path("mono/.git"), "myspace", "me", ask=lambda q: True, wait=lambda q: True)
+    assert not Path("mono/.git/.git").exists()
+
+
+@pytest.mark.parametrize("encoding", ["utf-16", "utf-16-be"])
+def test_a_secret_in_utf16_text_stops_it(here, encoding):
+    Path("beta/token.txt").write_bytes(f"GITHUB_TOKEN={TOKEN}\n".encode(encoding))
+    with pytest.raises(XoError, match="secret"):
+        _make()
+    assert _hub(here, "for-each-ref") == ""

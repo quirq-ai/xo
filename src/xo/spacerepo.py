@@ -17,8 +17,10 @@ missing until the push itself, and a repository GitHub redirects to (renamed or 
 
 Running it again makes a new commit only for a folder that changed and pushes again, never forced.
 A commit is always made on top of what GitHub already has, never on one made here that was not
-pushed, so files left out before the first push never reach GitHub in the history. A folder that is
-gone keeps its branch (xo deletes nothing).
+pushed, so files left out before the first push never reach GitHub in the history; what GitHub has
+is asked each run, so a repository deleted and made again starts over. A folder that is gone keeps
+the branch GitHub has of it (xo deletes nothing); one never pushed is dropped. Only main and the
+branches main lists are pushed.
 """
 from __future__ import annotations
 
@@ -134,6 +136,9 @@ def refuse_here(here: Path) -> None:
     if held:
         raise XoError(f"{real} holds {', '.join(held)}, which must never be pushed; run xo create space inside "
                       "the folder whose folders should become the space")
+    if (gitops.run("rev-parse", "--is-inside-git-dir", cwd=here, check=False) or "").strip() == "true":
+        raise XoError(f"{real} is inside a git repository's own .git folder (or a bare repository), whose files "
+                      "hold all of its history; run xo create space in a folder outside it")
     top = gitops.run("rev-parse", "--show-toplevel", cwd=here, check=False)
     if top is not None:
         if Path(top.strip()).resolve() == real:
@@ -289,8 +294,11 @@ def _snapshot(space: Space, folder: Path, probe: _HereIgnore | None = None) -> t
     index.unlink(missing_ok=True)
     (space.repo / "index.lock").unlink(missing_ok=True)  # left by a run that was stopped mid-way
     exclude = _exclude_lines()
-    own = folder / ".git" / "info" / "exclude"
-    if own.is_file():
+    own = None
+    if (folder / ".git").exists():  # a clone: its own exclude, also where .git is a file (worktree, submodule)
+        at = gitops.run("rev-parse", "--git-path", "info/exclude", cwd=folder, check=False)
+        own = folder / at.strip() if at and at.strip() else None
+    if own is not None and own.is_file():
         exclude += ["# the folder's own .git/info/exclude", *own.read_text(errors="replace").splitlines()]
     (space.repo / "info" / "exclude").write_text("\n".join(exclude) + "\n")
     # No filters (git-lfs and the like): the files go in as they are on disk.
@@ -399,9 +407,12 @@ def _blobs(space: Space, shas: list[str]) -> Iterator[tuple[str, bytes]]:
 
 
 def _secret(data: bytes) -> bool:
-    for m in SECRET.finditer(data):
-        if m.group("pw") is None or not _PLACEHOLDER.search(m.group("pw")):
-            return True
+    """Whether data holds a secret; text in UTF-16 (as Windows PowerShell writes it) is read with its
+    NUL bytes taken out."""
+    for text in (data, data.replace(b"\0", b"")) if b"\0" in data else (data,):
+        for m in SECRET.finditer(text):
+            if m.group("pw") is None or not _PLACEHOLDER.search(m.group("pw")):
+                return True
     return False
 
 
@@ -467,10 +478,35 @@ def _index(space: Space, name: str, owner: str, branches: dict[str, dict]) -> st
     return space.git("mktree", "-z", input=entries.encode()).strip()
 
 
-def build(here: Path, name: str, owner: str, chosen: list[Path], probe: _HereIgnore | None = None) -> dict:
-    """Make or update the space's repository from the folders, all checked before main moves."""
+def _entry(space: Space, commit: str) -> dict:
+    tree = space.git("rev-parse", f"{commit}^{{tree}}").strip()
+    listing = space.git("ls-tree", "-r", "-l", "--full-tree", tree) or ""
+    sizes = [int(p[3]) for p in (line.partition("\t")[0].split() for line in listing.splitlines())
+             if len(p) == 4 and p[3].isdigit()]
+    return {"commit": commit, "tree": tree, "files": len(sizes), "bytes": sum(sizes)}
+
+
+def _sync_origin(space: Space, remote: dict[str, str]) -> None:
+    """Make origin's branches here exactly what GitHub has now (remote), so nothing is built on, or
+    kept from, a repository that was deleted, made again or is another one."""
+    have = space.git("for-each-ref", "--format=%(objectname) %(refname)", "refs/remotes/origin/") or ""
+    for line in have.splitlines():
+        sha, _, ref = line.partition(" ")
+        if remote.get(ref.removeprefix("refs/remotes/origin/")) != sha:
+            space.git("update-ref", "-d", ref, sha)
+    for branch, sha in remote.items():
+        if _BRANCH.fullmatch(branch) and space.git("cat-file", "-e", f"{sha}^{{commit}}", check=False) is not None:
+            space.git("update-ref", f"refs/remotes/origin/{branch}", sha)
+
+
+def build(here: Path, name: str, owner: str, chosen: list[Path], probe: _HereIgnore | None = None,
+          remote: dict[str, str] | None = None) -> dict:
+    """Make or update the space's repository from the folders, all checked before main moves. remote:
+    the branches GitHub has now (none when it has no such public repository)."""
     space = Space(here)
     _start(space, name)
+    if remote is not None:
+        _sync_origin(space, remote)
     trees = {}
     for folder in chosen:
         tree, dropped = _snapshot(space, folder, probe)
@@ -486,13 +522,16 @@ def build(here: Path, name: str, owner: str, chosen: list[Path], probe: _HereIgn
     branches = {}
     for folder in chosen:
         sha = _commit(space, folder.name, trees[folder.name], f"{folder.name}: files as of xo create space {name}")
-        listing = space.git("ls-tree", "-r", "-l", "--full-tree", trees[folder.name]) or ""
-        sizes = [int(p[3]) for p in (line.partition("\t")[0].split() for line in listing.splitlines())
-                 if len(p) == 4 and p[3].isdigit()]
-        branches[folder.name] = {"commit": sha, "tree": trees[folder.name], "files": len(sizes), "bytes": sum(sizes)}
+        branches[folder.name] = _entry(space, sha)
     for gone in sorted(set(old) - set(branches), key=str.casefold):
-        _say(f"{gone}: no such folder here now; its branch is kept as it was")
-        branches[gone] = old[gone]
+        base = _tip(space, f"refs/remotes/origin/{gone}") if _BRANCH.fullmatch(gone) else None
+        if base is None:  # never pushed, or not on GitHub now: it goes nowhere
+            space.git("update-ref", "-d", f"refs/heads/{gone}", check=False)
+            _say(f"{gone}: no such folder here now, and GitHub does not have its branch; left out")
+            continue
+        space.git("update-ref", f"refs/heads/{gone}", base)
+        _say(f"{gone}: no such folder here now; its branch is kept as GitHub has it")
+        branches[gone] = _entry(space, base)
     branches = dict(sorted(branches.items(), key=lambda kv: kv[0].casefold()))
     tree = _index(space, name, owner, branches)
     commit = _commit(space, MAIN, tree, f"xo create space {name}: {digest(branches)}")
@@ -511,29 +550,40 @@ def _old_branches(space: Space) -> dict[str, dict]:
 
 
 def on_github(owner: str, name: str) -> bool:
-    """Whether github.com/OWNER/NAME answers someone with no login at all: no credential helper, askpass,
-    .netrc, extra header or user config (so a private one looks missing). A repository GitHub redirects
-    to (renamed or moved, maybe to another owner) is refused: xo pushes only to the one it names."""
+    """Whether github.com/OWNER/NAME answers someone with no login at all (see heads)."""
+    return heads(owner, name) is not None
+
+
+def heads(owner: str, name: str) -> dict[str, str] | None:
+    """The branches github.com/OWNER/NAME has ({name: sha}), asked with no login at all: no credential
+    helper, askpass, .netrc, extra header or user config (so a private one looks missing: None). A
+    repository GitHub redirects to (renamed or moved, maybe to another owner) is refused: xo pushes
+    only to the one it names."""
     empty = tempfile.mkdtemp(prefix="xo-anon-")
     env = {"GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "", "SSH_ASKPASS": "", "HOME": empty,
            "XDG_CONFIG_HOME": empty, "GIT_CONFIG_GLOBAL": os.devnull}
     try:
-        gitops.run("-c", "credential.helper=", "-c", "core.askPass=", "-c", "http.extraHeader=",
-                   "-c", "http.followRedirects=false", "ls-remote", "--heads", "--end-of-options",
-                   f"{gitops.GITHUB}/{owner}/{name}", cwd=Path(empty), env=env)
+        out = gitops.run("-c", "credential.helper=", "-c", "core.askPass=", "-c", "http.extraHeader=",
+                         "-c", "http.followRedirects=false", "ls-remote", "--heads", "--end-of-options",
+                         f"{gitops.GITHUB}/{owner}/{name}", cwd=Path(empty), env=env)
     except XoError as e:
         if re.search(r"returned error: 30[1278]", getattr(e, "detail", "") or ""):
             raise XoError(f"GitHub sends github.com/{owner}/{name} on to another repository (it was renamed or moved); "
                           "xo pushes only to the repository it names, so pick another NAME") from None
-        return False
+        return None
     finally:
         shutil.rmtree(empty, ignore_errors=True)
-    return True
+    found = {}
+    for line in (out or "").splitlines():
+        sha, _, ref = line.partition("\t")
+        if ref.startswith("refs/heads/"):
+            found[ref.removeprefix("refs/heads/")] = sha.strip()
+    return found
 
 
-def push(here: Path, owner: str, name: str) -> None:
-    """main and every branch to github.com/OWNER/NAME with your own git login, never forced, and never
-    to a repository GitHub redirects to."""
+def push(here: Path, owner: str, name: str, branches: list[str]) -> None:
+    """main and the space's branches to github.com/OWNER/NAME with your own git login, never forced, and
+    never to a repository GitHub redirects to. No other branch here is pushed."""
     space = Space(here)
     url = f"{gitops.GITHUB}/{owner}/{name}"
     if space.git("remote", "get-url", "origin", check=False) is None:
@@ -541,14 +591,15 @@ def push(here: Path, owner: str, name: str) -> None:
     else:
         space.git("remote", "set-url", "origin", url)
     try:
-        space.git("push", "--atomic", "--porcelain", "origin", "refs/heads/*:refs/heads/*",
+        space.git("push", "--atomic", "--porcelain", "origin",
+                  *(f"refs/heads/{b}:refs/heads/{b}" for b in [MAIN, *branches]),
                   config=("-c", "http.followRedirects=false"))
     except XoError as e:
         why = getattr(e, "detail", "") or ""
         if "Updates were rejected" in why or "non-fast-forward" in why:
             raise XoError(f"github.com/{owner}/{name} has commits xo did not make (a README or license made with it, "
-                          "or an edit on GitHub), so nothing was pushed; make the repository empty, or pick another "
-                          "NAME") from None
+                          "or an edit on GitHub) or is private (xo builds only on what anyone can see there), so "
+                          "nothing was pushed; make the repository empty and public, or pick another NAME") from None
         raise
 
 
@@ -561,7 +612,8 @@ def create(here: Path, name: str, owner: str, ask: Callable[[str], bool], wait: 
         if not chosen:
             raise XoError(f"{here.resolve()} has no folders to make branches of; run xo create space inside the "
                           "folder that holds them")
-        exists = on_github(owner, name)
+        now = heads(owner, name)
+        exists = now is not None
         lines = [f"  {f.name:<30} {shown(size(f)):>10}" + ("  (a git clone: its files only, not its history)"
                                                           if (f / ".git").exists() else "") for f in chosen]
         _say(f"xo create space {name} makes {here.resolve()} a space: each folder here becomes its own branch of "
@@ -578,7 +630,7 @@ def create(here: Path, name: str, owner: str, ask: Callable[[str], bool], wait: 
         if not ask("Make this folder the space?"):
             raise XoError("nothing was made. To make a space of other folders, run xo create space inside the folder "
                           "that holds them")
-        made = build(here, name, owner, chosen, probe)
+        made = build(here, name, owner, chosen, probe, now or {})
     finally:
         probe.close()
     _say(f"./.git: {len(made['branches'])} branches and main, {made['hash']}")
@@ -590,7 +642,7 @@ def create(here: Path, name: str, owner: str, ask: Callable[[str], bool], wait: 
             _say(f"not pushed; run xo create space {name} here again once it exists")
             made["pushed"] = False
             return made
-    push(here, owner, name)
+    push(here, owner, name, list(made["branches"]))
     _say(f"pushed main and {len(made['branches'])} branches to https://github.com/{owner}/{name}")
     made["pushed"] = True
     return made

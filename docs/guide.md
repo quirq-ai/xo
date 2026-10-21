@@ -149,11 +149,15 @@ xo sync project:headscale                        # git pull --rebase, then push
     your gh login or `--owner`; when it is not there (or is private: xo checks with no login at
     all), xo prints a link to make it, empty, and waits for Enter, then pushes with your own git;
     one GitHub redirects (renamed or moved) is refused. The space goes in your spaces once it is
-    pushed. Run it again to commit what changed, on top of what GitHub has (a commit made here
-    but never pushed is replaced, so a file you left out before the first push is not in the
-    history); a branch whose folder is gone stays. It refuses your home folder, `/`, folders
-    holding `.ssh`, `.aws` or `.gnupg`, any hidden folder of your home (`~/.config`, `~/.aws`) and
-    `~/Library`, and a folder inside another git repository.
+    pushed. Run it again to commit what changed, on top of what GitHub has now (a commit made
+    here but never pushed is replaced, so a file you left out before the first push is not in the
+    history, and a repository you delete and make again starts with none of the old history; a
+    private one cannot be updated); a branch whose folder is gone stays as GitHub has it, and one
+    never pushed is dropped. Only `main` and the branches it lists are pushed. A clone's own
+    exclude is followed also where its `.git` is a file (a worktree or submodule), and a key or
+    token in UTF-16 text stops it too. It refuses your home folder, `/`, folders holding `.ssh`,
+    `.aws` or `.gnupg`, any hidden folder of your home (`~/.config`, `~/.aws`) and `~/Library`, a
+    folder inside another git repository, and a repository's own `.git` folder.
   - `update` first pushes each checkout's branch to its upstream (refused if the remote is ahead:
     run `xo sync`). Then it sends the branch (or, when detached, the commit) each checkout is on,
     and is refused when the space changed since: run `xo sync`. A ref its remote does not have is
