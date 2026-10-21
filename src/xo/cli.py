@@ -987,8 +987,8 @@ def _new_order(client: Client, a: str, b: str, projects: list) -> tuple[str, str
     for a project name that could not be a space: xo connect notes dev, with notes a space and no dev,
     may mean a new project notes for a space dev that is missing, so it is refused, not guessed. With
     neither a space, the first is the project, and the server says the space is missing before
-    anything is added. The refusal names a project of yours that b is close to first, since its
-    project:B form adds b without asking again."""
+    anything is added. The refusal names a project of yours that a plain b is close to first, since
+    its project:B form adds b without asking again; an OWNER/REPO b is never a typo (as in _which)."""
     spaces = _answer(client.request("GET", "/me/spaces").data, "spaces", "a spaces list")
     if not isinstance(spaces, list) or not all(isinstance(sp, dict) and isinstance(sp.get("name"), str)
                                                for sp in spaces):
@@ -998,7 +998,7 @@ def _new_order(client: Client, a: str, b: str, projects: list) -> tuple[str, str
         raise XoError(f"{a} and {b} are both spaces: say which project goes in which with xo connect "
                       f"project:P space:S")
     if a.casefold() in have and b.casefold() not in have:
-        near = _near(projects, b)
+        near = None if names.is_github(b) else _near(projects, b)
         if near is not None:
             raise XoError(f"{b} is not in your projects; did you mean {near}? xo connect {shlex.quote(near)} "
                           f"{shlex.quote(a)} puts it in {a}. To add {b} as a new project, say xo connect "
