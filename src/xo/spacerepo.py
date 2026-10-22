@@ -1,28 +1,35 @@
-"""`xo create space NAME` with no KIND: the folder it runs in becomes a space, a git repository on
-GitHub with one branch per git repository under it.
+"""`xo create space [NAME]` with no KIND: a folder becomes a space, a git repository on GitHub with one
+branch per git repository under it. With no NAME the folder it runs in is the space, named after the
+folder (or the name its space already has); with NAME, the folder ./NAME is.
 
-Every git repository under the current folder (at any depth, but not one inside another) becomes a
-branch called after its path here (`api`, or `work/api`), holding that repository's files as they
-are now, not its history (its .gitignore and this folder's followed, secrets and workflows left
+Every git repository under the space's folder (at any depth, but not one inside another) becomes a
+branch called after its path there (`api`, or `work/api`), holding that repository's files as they
+are now, not its history (its .gitignore and the space folder's followed, secrets and workflows left
 out). Folders that are not git repositories and hold none, and files outside the repositories, are
-not part of the space. `main` is the index: a README table of the branches, xo-space.json with each
-branch's commit and one hash over all of them, and an update script. The space's repository is .git
-here, made bare so that nothing in this folder is ever checked out, written over or shown as
-changed; it is built with git's plumbing only (a scratch index and commit-tree), and the
-repositories' own .git, remotes and branches are never touched.
+not part of the space. The index branch lists them: a README table of the branches, xo-space.json
+with each branch's commit and one hash over all of them, and an update script. Branches are built
+with git's plumbing only (a scratch index of xo's own and commit-tree), and the repositories' own
+.git, remotes and branches are never touched.
 
-Its remote is github.com/OWNER/NAME (OWNER is your gh login unless --owner says otherwise). When
-GitHub does not have it, xo gives the link to make it and waits, then pushes main and every branch
-with your own git login. xo never reads, stores or prints a token: whether the repository exists is
-asked anonymously (no credential helper, askpass, .netrc or extra header), so a private one looks
-missing until the push itself, and a repository GitHub redirects to (renamed or moved) is refused.
+The space's repository is the folder's .git. When there is none, xo makes it bare, so that nothing in
+the folder is ever checked out, written over or shown as changed, and main is the index. When the
+folder is already a git repository, xo attaches to it: it adds the space's branches and keeps the
+index on branch xo-space, never changing your branches, index, staged changes, files or
+.git/info/exclude, and refusing a repository whose branch would clash with one of yours.
+
+Its remote is github.com/OWNER/NAME (OWNER is your gh login unless --owner says otherwise), or, in an
+attached repository, the GitHub repository its origin already is. When GitHub does not have it, xo
+gives the link to make it and waits, then pushes the index and every branch with your own git login.
+xo never reads, stores or prints a token: whether the repository exists is asked anonymously (no
+credential helper, askpass, .netrc or extra header), so a private one looks missing until the push
+itself, and a repository GitHub redirects to (renamed or moved) is refused.
 
 Running it again makes a new commit only for a repository that changed and pushes again, never forced.
 A commit is always made on top of what GitHub already has, never on one made here that was not
 pushed, so files left out before the first push never reach GitHub in the history; what GitHub has
 is asked each run, so a repository deleted and made again starts over. A repository that is gone keeps
-the branch GitHub has of it (xo deletes nothing); one never pushed is dropped. Only main and the
-branches main lists are pushed.
+the branch GitHub has of it (xo deletes nothing); one never pushed is dropped. Only the index and the
+branches it lists are pushed.
 """
 from __future__ import annotations
 
@@ -45,6 +52,7 @@ from xo.client import XoError
 FILE = "xo-space.json"
 SCHEMA = "xo-space/1"
 MAIN = "main"
+ATTACHED_INDEX = "xo-space"  # the index's branch in a git repository that was there before xo (its main is yours)
 MARK = "xo.space"  # set in .git/config when xo makes the repository, so a run that stopped early can run again
 FILE_CAP = 100 * 1024 * 1024  # GitHub refuses any file larger
 # Never copied, whatever any .gitignore says (a negation there cannot bring them back), at any depth
@@ -88,18 +96,49 @@ def _z(paths: list[str]) -> bytes:
 
 
 class Space:
-    """The space's repository: ./.git here, bare, with origin at GitHub."""
+    """The space's repository: ./.git here, with origin at GitHub. Made bare when xo makes it; one that
+    was there before (yours, with its own files and branches) is attached to: xo only adds its own
+    branches, and never touches your branches, index, files or .git/info/exclude."""
 
     def __init__(self, here: Path) -> None:
-        self.here = here
-        self.repo = here / ".git"
+        self.here = here.absolute()  # git runs in here, so --git-dir must not be relative to it
+        self.repo = self.here / ".git"
+        self._scratch: str | None = None
+        self._attached: bool | None = None
 
     def git(self, *args: str, tree: Path | None = None, check: bool = True, config: tuple = (),
             input: bytes | None = None, raw: bool = False) -> str | None:
-        where = ["--git-dir", str(self.repo)]
+        where = ["--git-dir", str(self.repo), "-c", f"core.hooksPath={os.devnull}"]
+        env = None
         if tree is not None:  # the folder a branch is made from: read only, never written
             where += ["--work-tree", str(tree), "-c", "core.bare=false"]
-        return gitops.run(*config, *where, *args, cwd=self.here, check=check, input=input, raw=raw)
+            env = {"GIT_INDEX_FILE": str(self.scratch / "index")}  # never the repository's own index
+        return gitops.run(*config, *where, *args, cwd=self.here, check=check, input=input, raw=raw, env=env)
+
+    @property
+    def scratch(self) -> Path:
+        """A folder of xo's own for this run (the scratch index and exclude list), removed by close."""
+        if self._scratch is None:
+            self._scratch = tempfile.mkdtemp(prefix="xo-space-")
+        return Path(self._scratch)
+
+    def close(self) -> None:
+        if self._scratch is not None:
+            shutil.rmtree(self._scratch, ignore_errors=True)
+            self._scratch = None
+
+    @property
+    def attached(self) -> bool:
+        """Whether ./.git is a repository with a work tree that was there before xo (not one xo made bare)."""
+        if self._attached is None:
+            bare = self.git("rev-parse", "--is-bare-repository", check=False) if self.repo.is_dir() else None
+            self._attached = (bare or "").strip() == "false"
+        return self._attached
+
+    @property
+    def index(self) -> str:
+        """The branch that is the space's index: main, or xo-space in a repository that was there before."""
+        return ATTACHED_INDEX if self.attached else MAIN
 
     def ours(self) -> bool:
         """Whether ./.git is a space repository xo made (bare, and marked so or its main holds xo-space.json)."""
@@ -124,7 +163,8 @@ def _homes() -> set[Path]:
 
 def refuse_here(here: Path) -> None:
     """A space is never made in a home folder, the root, a folder that holds keys or is in one (or in
-    any hidden or settings folder of your home), or inside another git repository."""
+    any hidden or settings folder of your home), or inside another git repository. A git repository
+    here (./.git) is attached to, unless it is a worktree or submodule of another one."""
     real = here.resolve()
     for home in _homes():
         if real == home or real == Path(real.anchor) or real in home.parents:
@@ -146,8 +186,10 @@ def refuse_here(here: Path) -> None:
     top = gitops.run("rev-parse", "--show-toplevel", cwd=here, check=False)
     if top is not None:
         if Path(top.strip()).resolve() == real:
-            raise XoError(f"{real} is already a git repository (./.git); xo makes a space's repository only where "
-                          "there is none, so run it in another folder")
+            if (here / ".git").is_dir():
+                return
+            raise XoError(f"{real} is a worktree or submodule of another git repository (./.git is a file); run xo "
+                          "create space in that repository's own folder, or in another folder")
         raise XoError(f"{real} is inside the git repository {Path(top.strip())}; a .git here would hide that "
                       "repository from git in these folders, so run xo create space in a folder outside it")
 
@@ -190,7 +232,7 @@ def _branch_ok(branch: str) -> bool:
     """A branch name xo makes: each part a folder name git and GitHub both take."""
     return all(_BRANCH.fullmatch(part) and ".." not in part and part.upper() != "HEAD"
                and not part.endswith(("_HEAD", ".lock", ".")) for part in branch.split("/")) and \
-        branch.split("/")[0].casefold() != MAIN and len(branch) <= 200
+        branch.split("/")[0].casefold() not in (MAIN, ATTACHED_INDEX) and len(branch) <= 200
 
 
 def _inside(a: str, b: str) -> bool:
@@ -222,7 +264,8 @@ def folders(here: Path, probe: _HereIgnore | None = None) -> tuple[dict[str, Pat
     bad = [b for b in found if not _branch_ok(b)]
     if bad:
         raise XoError("these git repositories cannot be branch names (each folder name letters, digits, . _ -, "
-                      f"starting with a letter or digit, no .., not HEAD, and not {MAIN} or in a folder {MAIN}): "
+                      f"starting with a letter or digit, no .., not HEAD, and not {MAIN} or {ATTACHED_INDEX} or in a folder "
+                      f"of those names): "
                       + ", ".join(bad) +
                       "; rename them or run elsewhere")
     seen: dict[str, str] = {}
@@ -276,15 +319,39 @@ def _never(path: str) -> bool:
     return False
 
 
+def _your_excludes(space: Space) -> list[str]:
+    """The lines of your own excludes file (core.excludesFile, or git's default ~/.config/git/ignore),
+    which xo's list replaces in an attached repository and so must carry on."""
+    at = space.git("config", "--path", "--get", "core.excludesFile", check=False)
+    if at and at.strip():
+        path = Path(at.strip())
+    else:
+        base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
+        path = Path(base) / "git" / "ignore"
+    try:
+        return path.read_text(errors="replace").splitlines() if path.is_file() else []
+    except OSError:
+        return []
+
+
 def _exclude_lines() -> list[str]:
     """NEVER as git exclude patterns, matching at any depth (so those files are not even read)."""
     return [("**/" + p) if "/" in p.rstrip("/") else p for p in NEVER]
 
 
 def _start(space: Space, name: str) -> None:
+    if space.repo.is_file():
+        raise XoError(f"{space.here.resolve()} is a worktree or submodule of another git repository (./.git is a "
+                      "file); run xo create space in that repository's own folder, or in another folder")
+    if space.attached:
+        fmt = (space.git("rev-parse", "--show-object-format", check=False) or "").strip()
+        if fmt != "sha1":
+            raise XoError(f"{space.here.resolve()}/.git uses {fmt or 'an object format xo cannot read'}, which GitHub "
+                          "does not take; nothing was changed")
+        return
     if space.repo.exists() and not space.ours():
-        raise XoError(f"{space.here.resolve()} is already a git repository (./.git); xo makes a space's "
-                      "repository only where there is none, so run it in another folder")
+        raise XoError(f"{space.here.resolve()}/.git is a bare git repository xo did not make; run xo create space "
+                      "in another folder")
     if not space.repo.exists():
         gitops.run("init", "--quiet", "--bare", "--object-format=sha1", f"--initial-branch={MAIN}",
                    "--end-of-options", str(space.repo))
@@ -328,10 +395,9 @@ def _staged(space: Space, folder: Path) -> list[tuple[str, str]]:
 def _snapshot(space: Space, branch: str, folder: Path, probe: _HereIgnore | None = None) -> tuple[str, list[str]]:
     """The tree of folder's files, built in a scratch index: its .gitignore (and this folder's, and a
     clone's own .git/info/exclude) followed, NEVER left out, workflows and nested repositories dropped.
-    The tree and what was left out."""
-    index = space.repo / "index"
+    The tree and what was left out. The index is xo's own scratch file, never the repository's."""
+    index = space.scratch / "index"
     index.unlink(missing_ok=True)
-    (space.repo / "index.lock").unlink(missing_ok=True)  # left by a run that was stopped mid-way
     exclude = _exclude_lines()
     own = None
     if (folder / ".git").exists():  # a clone: its own exclude, also where .git is a file (worktree, submodule)
@@ -339,10 +405,17 @@ def _snapshot(space: Space, branch: str, folder: Path, probe: _HereIgnore | None
         own = folder / at.strip() if at and at.strip() else None
     if own is not None and own.is_file():
         exclude += ["# the folder's own .git/info/exclude", *own.read_text(errors="replace").splitlines()]
-    (space.repo / "info" / "exclude").write_text("\n".join(exclude) + "\n")
-    # No filters (git-lfs and the like): the files go in as they are on disk.
+    # No filters (git-lfs and the like): the files go in as they are on disk. No fsmonitor, split index or
+    # untracked cache from the repository's config: they belong to its own work tree, not this folder.
     plain = ("-c", "core.autocrlf=false", "-c", "core.safecrlf=false", "-c", "filter.lfs.required=false",
-             "-c", "filter.lfs.clean=", "-c", "filter.lfs.process=")
+             "-c", "filter.lfs.clean=", "-c", "filter.lfs.process=", "-c", "core.fsmonitor=false",
+             "-c", "core.splitIndex=false", "-c", "core.untrackedCache=false")
+    if space.attached:  # your .git/info/exclude stays yours: xo's list goes in a file of its own
+        listed = space.scratch / "exclude"
+        listed.write_text("\n".join(exclude + ["# your own excludes file", *_your_excludes(space)]) + "\n")
+        plain += ("-c", f"core.excludesFile={listed}")
+    else:
+        (space.repo / "info" / "exclude").write_text("\n".join(exclude) + "\n")
     try:
         try:
             space.git("add", "--all", "--", ".", tree=folder, config=plain)
@@ -493,20 +566,20 @@ def digest(branches: dict[str, dict]) -> str:
     return "sha256:" + hashlib.sha256(text.encode()).hexdigest()
 
 
-def _index(space: Space, name: str, owner: str, branches: dict[str, dict]) -> str:
+def _index(space: Space, name: str, github: str, branches: dict[str, dict]) -> str:
     """main's tree: README.md, xo-space.json and update, written as blobs (nothing on disk). Bytes in and
     -z for mktree, so no line ending is ever changed on the way (Windows turns \\n into \\r\\n in text)."""
     hashed = digest(branches)
-    record = {"schema": SCHEMA, "space": name, "github": f"{owner}/{name}", "hash": hashed, "branches": branches}
+    record = {"schema": SCHEMA, "space": name, "github": github, "hash": hashed, "branches": branches}
     rows = "\n".join(f"| [{b}](../../tree/{b}) | {e['files']} | {shown(e['bytes'])} | `{e['commit'][:7]}` |"
                      for b, e in branches.items())
     readme = (f"# {name}\n\nAn xo space: each branch is one git repository's files, as they were when `xo create "
-              f"space {name}` last ran.\n\n| Branch | Files | Size | Commit |\n|---|---|---|---|\n{rows}\n\nHash of all of it: "
-              f"`{hashed}` (sha256 over each branch's git tree id; see {FILE}).\n\nTo update it, run `xo create "
-              f"space {name}` again in the folder that holds these repositories (or `sh update` there, with this "
-              "branch's `update` copied in).\n")
+              f"space` last ran in the space's folder.\n\n| Branch | Files | Size | Commit |\n|---|---|---|---|\n{rows}\n\n"
+              f"Hash of all of it: `{hashed}` (sha256 over each branch's git tree id; see {FILE}).\n\nTo update it, run "
+              "`xo create space` again in the space's folder, the one that holds these repositories (or `sh update` "
+              "there, with this branch's `update` copied in).\n")
     script = ("#!/bin/sh\n# Snapshot every git repository here again and push the branches that changed (xo create "
-              f"space).\nexec xo create space {name} --owner {owner} \"$@\"\n")
+              f"space, run in the space's folder).\nexec xo create space --owner {github.split('/')[0]} \"$@\"\n")
 
     def blob(text: str) -> str:
         return space.git("hash-object", "-w", "--stdin", input=text.encode()).strip()
@@ -525,28 +598,62 @@ def _entry(space: Space, commit: str) -> dict:
     return {"commit": commit, "tree": tree, "files": len(sizes), "bytes": sum(sizes)}
 
 
-def _sync_origin(space: Space, remote: dict[str, str]) -> None:
-    """Make origin's branches here exactly what GitHub has now (remote), so nothing is built on, or
-    kept from, a repository that was deleted, made again or is another one."""
+def _sync_origin(space: Space, remote: dict[str, str], names: set[str]) -> None:
+    """Make origin's branches here that the space uses (names) exactly what GitHub has now (remote), so
+    nothing is built on, or kept from, a repository that was deleted, made again or is another one.
+    origin's other branches are left as they are."""
     have = space.git("for-each-ref", "--format=%(objectname) %(refname)", "refs/remotes/origin/") or ""
     for line in have.splitlines():
         sha, _, ref = line.partition(" ")
-        if remote.get(ref.removeprefix("refs/remotes/origin/")) != sha:
+        branch = ref.removeprefix("refs/remotes/origin/")
+        if branch in names and remote.get(branch) != sha:
             space.git("update-ref", "-d", ref, sha)
     for branch, sha in remote.items():
-        if _branch_ok(branch) and space.git("cat-file", "-e", f"{sha}^{{commit}}", check=False) is not None:
+        if branch in names and _branch_ok(branch) and \
+                space.git("cat-file", "-e", f"{sha}^{{commit}}", check=False) is not None:
             space.git("update-ref", f"refs/remotes/origin/{branch}", sha)
 
 
 def build(here: Path, name: str, owner: str, chosen: dict[str, Path], probe: _HereIgnore | None = None,
-          remote: dict[str, str] | None = None) -> dict:
+          remote: dict[str, str] | None = None, repo: str | None = None) -> dict:
     """Make or update the space's repository from the repositories ({branch: folder}), all checked before
-    main moves. remote:
-    the branches GitHub has now (none when it has no such public repository)."""
+    the index moves. remote: the branches GitHub has now (none when it has no such public repository);
+    repo: the GitHub repository's name (NAME unless an attached repository's origin says otherwise)."""
     space = Space(here)
+    try:
+        return _build(space, name, f"{owner}/{repo or name}", chosen, probe, remote)
+    finally:
+        space.close()
+
+
+def _theirs(space: Space, remote: dict[str, str], known: set[str]) -> set[str]:
+    """In an attached repository, the branches that are yours (here or on GitHub), not the space's."""
+    local = space.git("for-each-ref", "--format=%(refname:strip=2)", "refs/heads/") or ""
+    head = space.git("symbolic-ref", "--quiet", "--short", "HEAD", check=False)  # checked out, maybe no commit yet
+    return ({b for b in local.splitlines() if b} | set(remote) | ({head.strip()} if head else set())) - known
+
+
+def _build(space: Space, name: str, github: str, chosen: dict[str, Path], probe: _HereIgnore | None,
+           remote: dict[str, str] | None) -> dict:
     _start(space, name)
+    index = space.index
+    if space.attached:
+        if space.git("rev-parse", "--verify", "--quiet", f"refs/heads/{index}", check=False) is not None and \
+                space.git("cat-file", "-e", f"refs/heads/{index}:{FILE}", check=False) is None:
+            raise XoError(f"{space.here.resolve()}/.git already has a branch {index} that xo did not make, and xo "
+                          "keeps the space's index there; rename that branch, then run again. Nothing was changed")
+        known = {index, *_old_branches(space)}
+        theirs = _theirs(space, remote or {}, known)
+        clash = sorted(b for b in chosen for t in theirs
+                       if b.casefold() == t.casefold() or _inside(b, t) or _inside(t, b))
+        if clash:
+            raise XoError("these git repositories would be branches that clash with your own branches (here or on "
+                          f"github.com/{github}): " + ", ".join(clash) + "; xo never changes your branches, so rename "
+                          "the folder or the branch, then run again. Nothing was changed")
+        if space.git("config", "--get", MARK, check=False) is None:
+            space.git("config", MARK, name)
     if remote is not None:
-        _sync_origin(space, remote)
+        _sync_origin(space, remote, {index, *chosen, *_old_branches(space)})
     trees = {}
     for branch, folder in chosen.items():
         tree, dropped = _snapshot(space, branch, folder, probe)
@@ -581,14 +688,20 @@ def build(here: Path, name: str, owner: str, chosen: dict[str, Path], probe: _He
         _say(f"{gone}: no such git repository here now; its branch is kept as GitHub has it")
         branches[gone] = _entry(space, base)
     branches = dict(sorted(branches.items(), key=lambda kv: kv[0].casefold()))
-    tree = _index(space, name, owner, branches)
-    commit = _commit(space, MAIN, tree, f"xo create space {name}: {digest(branches)}")
-    return {"space": name, "github": f"{owner}/{name}", "hash": digest(branches), "main": commit,
+    tree = _index(space, name, github, branches)
+    commit = _commit(space, index, tree, f"xo create space {name}: {digest(branches)}")
+    return {"space": name, "github": github, "hash": digest(branches), "index": index, index: commit,
             "branches": {b: e["commit"] for b, e in branches.items()}}
 
 
 def _old_branches(space: Space) -> dict[str, dict]:
-    out = space.git("cat-file", "blob", f"refs/heads/{MAIN}:{FILE}", check=False)
+    """The branches the space's index lists, here (or as GitHub had it when last asked, when there is no
+    index here yet)."""
+    out = None
+    for ref in (f"refs/heads/{space.index}", f"refs/remotes/origin/{space.index}"):
+        out = space.git("cat-file", "blob", f"{ref}:{FILE}", check=False)
+        if out:
+            break
     try:
         record = json.loads(out) if out else {}
     except ValueError:
@@ -629,19 +742,61 @@ def heads(owner: str, name: str) -> dict[str, str] | None:
     return found
 
 
+def _github_url(url: str) -> re.Match | None:
+    """OWNER and REPO of a GitHub URL in the https, git@ or ssh:// form, with no login in it."""
+    return re.fullmatch(f"(?:{re.escape(gitops.GITHUB)}/|https://github\\.com/|git@github\\.com:|ssh://git@github\\.com/)"
+                        r"([A-Za-z0-9][A-Za-z0-9-]{0,38})/([A-Za-z0-9._-]{1,100}?)(?:\.git)?/?", url, re.IGNORECASE)
+
+
+def existing_name(here: Path) -> str | None:
+    """The name the space in here/.git already has (xo marks its repository with it), if any."""
+    if not (here / ".git").is_dir():
+        return None
+    out = Space(here).git("config", "--get", MARK, check=False)
+    return out.strip() if out and out.strip() else None
+
+
+def attached_origin(here: Path) -> tuple[str, str] | None:
+    """(OWNER, REPO) of the GitHub repository an attached repository's origin is (every fetch and push
+    URL), or None when ./.git is not one that was there before xo, or has no origin. Any other origin
+    is refused; its URL is never shown, since it can hold a login."""
+    space = Space(here)
+    if space.repo.is_file() or not space.attached:
+        return None
+    urls = [u.strip() for kind in (["--all"], ["--push", "--all"])
+            for u in (space.git("remote", "get-url", *kind, "origin", check=False) or "").splitlines() if u.strip()]
+    if not urls:
+        return None
+    matched = [_github_url(u) for u in urls]
+    found = {(m.group(1), m.group(2)) for m in matched if m}
+    if not all(matched) or len({(o.casefold(), r.casefold()) for o, r in found}) != 1:
+        raise XoError(f"{here.resolve()}/.git has an origin that is not one github.com repository xo can read "
+                      "(xo never shows a remote's URL, which can hold a login); xo puts a space on GitHub, so point "
+                      "origin at https://github.com/OWNER/REPO, then run again")
+    owner, repo = sorted(found)[0]
+    if repo in (".", "..") or repo.casefold().endswith(".git"):
+        raise XoError(f"{here.resolve()}/.git's origin is not a GitHub repository name xo can use")
+    return owner, repo
+
+
 def push(here: Path, owner: str, name: str, branches: list[str]) -> None:
-    """main and the space's branches to github.com/OWNER/NAME with your own git login, never forced, and
-    never to a repository GitHub redirects to. No other branch here is pushed."""
+    """The index and the space's branches to github.com/OWNER/NAME with your own git login, never forced,
+    and never to a repository GitHub redirects to. No other branch here is pushed. An attached
+    repository's origin is left as it is (attached_origin checked it is this repository), or added
+    when it has none."""
     space = Space(here)
     url = f"{gitops.GITHUB}/{owner}/{name}"
+    to = "origin"
     if space.git("remote", "get-url", "origin", check=False) is None:
         space.git("remote", "add", "origin", url)
+    elif space.attached:
+        to = url
     else:
         space.git("remote", "set-url", "origin", url)
     try:
-        space.git("push", "--atomic", "--porcelain", "origin",
-                  *(f"refs/heads/{b}:refs/heads/{b}" for b in [MAIN, *branches]),
-                  config=("-c", "http.followRedirects=false"))
+        space.git("push", "--atomic", "--porcelain", "--no-follow-tags", "--no-recurse-submodules", to,
+                  *(f"refs/heads/{b}:refs/heads/{b}" for b in [space.index, *branches]),
+                  config=("-c", "http.followRedirects=false", "-c", "push.gpgSign=false"))
     except XoError as e:
         why = getattr(e, "detail", "") or ""
         if "Updates were rejected" in why or "non-fast-forward" in why:
@@ -651,20 +806,29 @@ def push(here: Path, owner: str, name: str, branches: list[str]) -> None:
         raise
 
 
-def create(here: Path, name: str, owner: str, ask: Callable[[str], bool], wait: Callable[[str], bool]) -> dict:
-    """The whole command after the name checks: refuse, show, ask, build, then push."""
+def create(here: Path, name: str, owner: str, ask: Callable[[str], bool], wait: Callable[[str], bool],
+           repo: str | None = None) -> dict:
+    """The whole command after the name checks: refuse, show, ask, build, then push. repo: the GitHub
+    repository's name, when an attached repository's origin names one (attached_origin)."""
+    here = here.absolute()  # git runs in it and in its repositories, each given as a path
     refuse_here(here)
+    repo = repo or name
+    gh = f"{owner}/{repo}"
+    attached = Space(here).attached
     probe = _HereIgnore(here)
     try:
         chosen, skipped = folders(here, probe)
         if not chosen:
             raise XoError(f"{here.resolve()} has no git repositories in it to make branches of; run xo create space "
                           "inside the folder that holds them")
-        now = heads(owner, name)
+        now = heads(owner, repo)
         exists = now is not None
         lines = [f"  {b:<30} {shown(size(f)):>10}" for b, f in chosen.items()]
-        _say(f"xo create space {name} makes {here.resolve()} a space: each git repository here becomes its own branch "
-             f"of github.com/{owner}/{name} (its files as they are now, not its history), and main lists them.\n"
+        where = (f"./.git is already a git repository, so xo adds the space to it: one branch per repository, and "
+                 f"the index on branch {ATTACHED_INDEX} (your branches, files and staged changes are not touched)"
+                 if attached else f"each git repository here becomes its own branch of a new ./.git, and main lists them")
+        _say(f"xo create space {name} makes {here.resolve()} a space on github.com/{gh}: {where}. A branch holds "
+             "the repository's files as they are now, not its history.\n"
              + "\n".join(lines) + "\n"
              + (f"  Left out by ./.gitignore: {', '.join(skipped)}.\n" if skipped else "")
              + "  Folders that are not git repositories (and hold none), files outside the repositories, hidden "
@@ -674,25 +838,26 @@ def create(here: Path, name: str, owner: str, ask: Callable[[str], bool], wait: 
              "and a file that looks like it holds a key, token or password stops it before anything is pushed. xo "
              "cannot find every secret (one in an archive, say), so look through these repositories first. "
              "Everything else is pushed to "
-             + (f"the repository github.com/{owner}/{name}, which is already there and public."
-                if exists else f"a new public repository github.com/{owner}/{name}, which xo asks you to make.")
-             + " Anyone can read it, and what is pushed stays public. Nothing in these folders is changed.")
+             + (f"the repository github.com/{gh}, which is already there and public."
+                if exists else f"a new public repository github.com/{gh}, which xo asks you to make.")
+             + " Anyone can read it, and what is pushed stays public. Nothing in these folders is changed"
+             + (" outside ./.git." if attached else "."))
         if not ask("Make this folder the space?"):
             raise XoError("nothing was made. To make a space of other git repositories, run xo create space inside "
                           "the folder that holds them")
-        made = build(here, name, owner, chosen, probe, now or {})
+        made = build(here, name, owner, chosen, probe, now or {}, repo=repo)
     finally:
         probe.close()
-    _say(f"./.git: {len(made['branches'])} branches and main, {made['hash']}")
-    if not on_github(owner, name):
-        link = f"https://github.com/new?name={name}&owner={owner}&visibility=public"
-        _say(f"github.com/{owner}/{name} does not exist yet (or is private). Make it here, empty (no README, license "
+    _say(f"./.git: {len(made['branches'])} branches and the index ({made['index']}), {made['hash']}")
+    if not on_github(owner, repo):
+        link = f"https://github.com/new?name={repo}&owner={owner}&visibility=public"
+        _say(f"github.com/{gh} does not exist yet (or is private). Make it here, empty (no README, license "
              f"or .gitignore):\n  {link}")
         if not wait("Press Enter once it exists, or n to stop here"):
-            _say(f"not pushed; run xo create space {name} here again once it exists")
+            _say(f"not pushed; once it exists, run xo create space again in {here.resolve()}")
             made["pushed"] = False
             return made
-    push(here, owner, name, list(made["branches"]))
-    _say(f"pushed main and {len(made['branches'])} branches to https://github.com/{owner}/{name}")
+    push(here, owner, repo, list(made["branches"]))
+    _say(f"pushed {made['index']} and {len(made['branches'])} branches to https://github.com/{gh}")
     made["pushed"] = True
     return made

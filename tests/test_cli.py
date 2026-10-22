@@ -1634,29 +1634,30 @@ def test_create_space_says_a_name_field_comes_from_the_command_line(core, capsys
 def test_create_space_with_no_kind_makes_this_folder_a_space_on_github(xs, capsys, github):
     made = {**SPACE, "name": "my.space", "kind": None, "id": None, "rev": 1}
     xs.route("POST", "/me/spaces/connect", body={"success": True, "data": {"space": made}})
-    git("init", "-q", "notes")
-    Path("notes/n.txt").write_text("n\n")
+    git("init", "-q", "My.Space/notes")
+    Path("My.Space/notes/n.txt").write_text("n\n")
     git("init", "-q", "--bare", str(github.root / "me/my.space"))
     code, out, err = run(capsys, "create", "space", "My.Space", "--owner", "me", "--yes")
     assert code == 0 and json.loads(out)["pushed"] is True and json.loads(out)["github"] == "me/my.space"
     assert "lowercase, as on XO and GitHub, so this space is my.space" in err
-    assert "each git repository here becomes its own branch of github.com/me/my.space" in err
+    assert "a space on github.com/me/my.space: each git repository here becomes its own branch" in err
+    assert Path("My.Space/.git").is_dir() and not Path(".git").exists()
     assert [(r["method"], r["path"], r["body"]) for r in xs.requests] == [
         ("POST", "/me/spaces/connect", {"name": "my.space"})]
     assert git(f"--git-dir={github.root / 'me/my.space'}", "show", "notes:n.txt") == "n"
 
 
 def test_create_space_with_no_kind_asks_first_and_needs_a_terminal_or_yes(xs, capsys, github):
-    git("init", "-q", "notes")
+    git("init", "-q", "dev/notes")
     code, _, err = run(capsys, "create", "space", "dev", "--owner", "me")  # no terminal: the answer is no
-    assert code == 1 and "nothing was made" in err and not Path(".git").exists() and xs.requests == []
+    assert code == 1 and "nothing was made" in err and not Path("dev/.git").exists() and xs.requests == []
 
 
 def test_create_space_with_no_kind_still_works_when_it_is_already_in_your_spaces(xs, capsys, github):
     xs.route("POST", "/me/spaces/connect", status=409, body={"success": False,
                                                              "error": "You already have a space named dev"})
-    git("init", "-q", "notes")
-    Path("notes/n.txt").write_text("n\n")
+    git("init", "-q", "dev/notes")
+    Path("dev/notes/n.txt").write_text("n\n")
     git("init", "-q", "--bare", str(github.root / "me/dev"))
     code, _, err = run(capsys, "create", "space", "dev", "--owner", "me", "--yes")
     assert code == 0 and "was not added to your spaces" not in err
@@ -1670,6 +1671,7 @@ def test_create_space_with_no_kind_refuses_a_bad_name(xs, capsys, github, name):
 
 def test_create_space_with_no_kind_needs_a_github_owner(xs, capsys, github, monkeypatch):
     monkeypatch.setattr(cli.github, "installed", lambda: False)
+    Path("dev").mkdir()
     code, _, err = run(capsys, "create", "space", "dev", "--yes")
     assert code == 1 and "run xo login github, or say whose it is with --owner OWNER" in err
     code, _, err = run(capsys, "create", "space", "dev", "--owner=-bad", "--yes")
@@ -1677,11 +1679,60 @@ def test_create_space_with_no_kind_needs_a_github_owner(xs, capsys, github, monk
 
 
 def test_create_space_with_no_kind_records_the_space_only_once_it_is_pushed(xs, capsys, github):
-    git("init", "-q", "notes")
-    Path("notes/n.txt").write_text("n\n")
+    git("init", "-q", "typo/notes")
+    Path("typo/notes/n.txt").write_text("n\n")
     code, out, err = run(capsys, "create", "space", "typo", "--owner", "me", "--yes")  # no repo, no terminal
     assert code == 0 and json.loads(out)["pushed"] is False and xs.requests == []
     assert "space typo goes in your spaces once it is pushed" in err
+
+
+def test_create_space_with_no_name_makes_this_folder_the_space_named_after_it(xs, capsys, github, monkeypatch):
+    xs.route("POST", "/me/spaces/connect", body={"success": True, "data": {"space": SPACE}})
+    git("init", "-q", "Work/notes")
+    Path("Work/notes/n.txt").write_text("n\n")
+    git("init", "-q", "--bare", str(github.root / "me/work"))
+    monkeypatch.chdir("Work")
+    code, out, err = run(capsys, "create", "space", "--owner", "me", "--yes")
+    assert code == 0 and json.loads(out)["github"] == "me/work" and json.loads(out)["pushed"] is True
+    assert "this space is work" in err and Path(".git").is_dir()
+    assert [r["body"] for r in xs.requests] == [{"name": "work"}]
+    git("init", "-q", "more")  # again, with no name: the space keeps its name
+    code, out, _ = run(capsys, "create", "space", "--owner", "me", "--yes")
+    assert code == 0 and list(json.loads(out)["branches"]) == ["more", "notes"]
+
+
+def test_create_space_with_no_name_refuses_a_folder_name_that_is_not_a_space_name(xs, capsys, github, monkeypatch):
+    Path("a b").mkdir()
+    monkeypatch.chdir("a b")
+    code, _, err = run(capsys, "create", "space", "--owner", "me", "--yes")
+    assert code == 1 and "this folder's name, a b, is not a space name" in err and not Path(".git").exists()
+
+
+def test_create_space_with_a_name_needs_the_folder(xs, capsys, github, monkeypatch):
+    git("init", "-q", "notes")
+    code, _, err = run(capsys, "create", "space", "dev", "--owner", "me", "--yes")
+    assert code == 1 and "there is no folder ./dev here" in err and not Path(".git").exists()
+    Path("dev").mkdir()
+    monkeypatch.chdir("dev")
+    code, _, err = run(capsys, "create", "space", "dev", "--owner", "me", "--yes")
+    assert code == 1 and "this folder is dev: run xo create space with no NAME" in err and xs.requests == []
+
+
+def test_create_space_attaches_to_the_folders_own_repository_and_its_github_origin(xs, capsys, github):
+    xs.route("POST", "/me/spaces/connect", body={"success": True, "data": {"space": SPACE}})
+    git("init", "-q", "-b", "main", "dev")
+    git("commit", "-q", "--allow-empty", "-m", "mine", cwd="dev")
+    git("remote", "add", "origin", "https://github.com/alice/dev-monorepo.git", cwd="dev")
+    git("init", "-q", "dev/notes")
+    Path("dev/notes/n.txt").write_text("n\n")
+    git("init", "-q", "--bare", str(github.root / "alice/dev-monorepo"))
+    code, _, err = run(capsys, "create", "space", "dev", "--owner", "me", "--yes")
+    assert code == 1 and "origin is github.com/alice/dev-monorepo, not one of me's" in err
+    code, out, err = run(capsys, "create", "space", "dev", "--yes")  # no gh login needed: origin says whose
+    assert code == 0 and json.loads(out)["github"] == "alice/dev-monorepo" and json.loads(out)["index"] == "xo-space"
+    assert "the space dev goes on github.com/alice/dev-monorepo, ./.git's origin" in err
+    assert git(f"--git-dir={github.root / 'alice/dev-monorepo'}", "show", "notes:n.txt") == "n"
+    assert [r["body"] for r in xs.requests] == [{"name": "dev"}]
 
 
 @pytest.mark.parametrize("typed,goes_on", [("\n", True), ("y\n", True), ("n\n", False), ("stop\n", False),

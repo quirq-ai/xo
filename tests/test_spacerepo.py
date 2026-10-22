@@ -140,10 +140,137 @@ def test_saying_no_makes_nothing(here):
     assert not Path(".git").exists()
 
 
-def test_a_folder_that_is_already_a_repository_is_refused(here):
-    git("init", "-q", ".")
-    with pytest.raises(XoError, match="already a git repository"):
+def _yours():
+    """This folder made your own git repository: a commit on main, a staged file and your own exclude."""
+    git("init", "-q", "-b", "main", ".")
+    Path("top.txt").write_text("mine\n")
+    git("add", "top.txt")
+    git("commit", "-qm", "mine")
+    Path("staged.txt").write_text("staged\n")
+    git("add", "staged.txt")
+    Path(".git/info/exclude").write_text("# mine\n")
+
+
+def _state():
+    return (git("for-each-ref", "--format=%(refname) %(objectname)", "refs/heads/main"), git("symbolic-ref", "HEAD"),
+            Path(".git/index").read_bytes(), Path(".git/info/exclude").read_bytes(), git("status", "--porcelain"))
+
+
+def test_a_folder_that_is_already_a_repository_is_attached_to_without_touching_yours(here, capsys):
+    _yours()
+    before = _state()
+    out = _make()
+    err = capsys.readouterr().err
+    assert out["pushed"] is True and out["index"] == spacerepo.ATTACHED_INDEX and set(out["branches"]) == {
+        "alpha", "beta", "gamma"}
+    assert "already a git repository, so xo adds the space to it" in err and "index on branch xo-space" in err
+    assert _state() == before  # your main, HEAD, index (staged file), exclude and files: all as they were
+    assert sorted(git("for-each-ref", "--format=%(refname:short)", "refs/heads/").split()) == [
+        "alpha", "beta", "gamma", "main", "xo-space"]
+    assert sorted(_hub(here, "for-each-ref", "--format=%(refname:short)").split()) == [
+        "alpha", "beta", "gamma", "xo-space"]  # your main is not pushed
+    assert _hub(here, "ls-tree", "-r", "--name-only", "alpha").split() == [".gitignore", "a.txt", "sub/b.txt"]
+    assert _hub(here, "ls-tree", "--name-only", "xo-space").split() == ["README.md", "update", spacerepo.FILE]
+    assert json.loads(_hub(here, "show", f"xo-space:{spacerepo.FILE}"))["hash"] == out["hash"]
+    assert git("config", "xo.space") == "myspace" and git("config", "core.bare") == "false"
+    assert git("remote", "get-url", "origin") == f"{spacerepo.gitops.GITHUB}/me/myspace"  # it had none
+    assert spacerepo.attached_origin(Path(".")) == ("me", "myspace")
+    again = _make()  # nothing changed: nothing new
+    assert again["branches"] == out["branches"] and again["xo-space"] == out["xo-space"] and _state() == before
+
+
+def test_an_attached_repositorys_github_origin_is_where_the_space_goes(here):
+    _yours()
+    git("remote", "add", "origin", "git@github.com:me/Other.git")
+    git("init", "-q", "--bare", str(here.root / "me/Other"))
+    assert spacerepo.attached_origin(Path(".")) == ("me", "Other")
+    out = spacerepo.create(Path("."), "myspace", "me", ask=lambda q: True, wait=lambda q: True, repo="Other")
+    assert out["github"] == "me/Other" and out["pushed"] is True
+    assert git("config", "remote.origin.url") == "git@github.com:me/Other.git"  # left as it was
+    assert git(f"--git-dir={here.root / 'me/Other'}", "rev-parse", "xo-space") == out["xo-space"]
+    assert _hub(here, "for-each-ref") == ""
+
+
+@pytest.mark.parametrize("url", ["https://gitlab.com/me/x", f"https://me:{TOKEN}@github.com/me/x",
+                                 "https://github.com/me/x/y", "/some/path"])
+def test_an_attached_origin_that_is_not_one_github_repository_is_refused_without_showing_it(here, url):
+    _yours()
+    git("remote", "add", "origin", url)
+    with pytest.raises(XoError, match="point origin at https://github.com/OWNER/REPO") as e:
+        spacerepo.attached_origin(Path("."))
+    assert url not in str(e.value) and TOKEN not in str(e.value)
+    git("remote", "set-url", "origin", "https://github.com/me/x")
+    git("remote", "set-url", "--push", "origin", "https://github.com/someone/else")
+    with pytest.raises(XoError, match="not one github.com repository"):
+        spacerepo.attached_origin(Path("."))
+
+
+def test_a_bare_space_or_no_repository_has_no_attached_origin(here):
+    assert spacerepo.attached_origin(Path(".")) is None
+    _make()
+    assert spacerepo.attached_origin(Path(".")) is None and spacerepo.existing_name(Path(".")) == "myspace"
+
+
+@pytest.mark.parametrize("theirs", ["alpha", "Gamma", "beta/x", "checked-out"])
+def test_a_repository_that_would_clash_with_your_own_branch_is_refused(here, theirs):
+    _yours()
+    if theirs == "checked-out":  # the branch you are on, with no commit yet
+        git("symbolic-ref", "HEAD", "refs/heads/beta")
+    else:
+        git("branch", theirs)
+    with pytest.raises(XoError, match="clash with your own branches") as e:
         _make()
+    assert ("beta" if theirs in ("beta/x", "checked-out") else theirs.lower()) in str(e.value)
+    assert _hub(here, "for-each-ref") == "" and git("for-each-ref", "refs/heads/xo-space") == ""
+    assert "xo.space" not in git("config", "--list")  # nothing was changed
+
+
+def test_a_branch_on_github_that_xo_did_not_make_is_not_built_on(here):
+    _yours()
+    seed = here.root.parent / "seed-alpha"
+    git("clone", "-q", str(here.root / "me/myspace"), str(seed))
+    (seed / "x").write_text("x\n")
+    git("add", "x", cwd=str(seed))
+    git("commit", "-qm", "x", cwd=str(seed))
+    git("push", "-q", "origin", "HEAD:refs/heads/alpha", cwd=str(seed))
+    with pytest.raises(XoError, match="clash with your own branches"):
+        _make()
+
+
+def test_an_attached_repositorys_own_xo_space_branch_is_not_taken_over(here):
+    _yours()
+    git("branch", "xo-space")
+    with pytest.raises(XoError, match="already has a branch xo-space that xo did not make"):
+        _make()
+    assert git("rev-parse", "xo-space") == git("rev-parse", "main")
+
+
+def test_a_worktree_or_submodule_folder_is_refused(here, tmp_path):
+    other = tmp_path / "other"
+    git("init", "-q", "-b", "main", str(other))
+    git("commit", "-q", "--allow-empty", "-m", "x", cwd=str(other))
+    git("worktree", "add", "-q", str(Path(".").resolve() / "wt"), cwd=str(other))
+    os.chdir("wt")
+    _repo("inner")
+    with pytest.raises(XoError, match="worktree or submodule"):
+        _make()
+
+
+def test_a_sha256_repository_is_refused(here):
+    git("init", "-q", "--object-format=sha256", ".")
+    with pytest.raises(XoError, match="GitHub does not take"):
+        _make()
+    assert git("for-each-ref") == ""
+
+
+def test_your_own_excludes_file_still_counts_in_an_attached_repository(here, tmp_path, monkeypatch):
+    _yours()
+    (tmp_path / "xdg/git").mkdir(parents=True)
+    (tmp_path / "xdg/git/ignore").write_text("sub/\n")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    _make()
+    assert _hub(here, "ls-tree", "-r", "--name-only", "alpha").split() == [".gitignore", "a.txt"]
 
 
 @pytest.mark.parametrize("folder", ["main", "-x", "a b", "trail."])

@@ -61,7 +61,8 @@ xo create space my-cc claude-code --volume-size 20 --providers-anthropic-api-key
                                                  # my-cc on XO, recorded in your spaces as my-cc
 xo create space my-codex codex --volume-size 20
 xo create space my-ag antigravity --volume-size 20
-xo create space dev                              # no KIND: this folder as space dev on GitHub, nothing on XO
+xo create space                                  # no NAME, no KIND: this folder as a space on GitHub, nothing on XO
+xo create space dev                              # no KIND: the folder ./dev as space dev on GitHub
 xo create space NAME openclaw --help             # needs a provider key and a chat-channel token
 xo create space NAME hermes --help
 xo create space NAME xo-cowork --help
@@ -128,18 +129,25 @@ xo sync project:headscale                        # git pull --rebase, then push
     (`https://USER@github.com/...`), is refused: move it, or point its origin at the repository.
   - `xo install`, `update` and `sync project:P` look P up in your projects first, so they need the
     xo server.
-  - `xo create space NAME` with no KIND makes the folder you run it in the space, and publishes
+  - `xo create space` with no NAME and no KIND makes the folder you run it in the space, named
+    after that folder (or the name its space already has); `xo create space NAME` makes the folder
+    `./NAME` the space (there must be one). Either way it publishes
     it: the repository is public, anyone can read it, and what is pushed stays public (xo deletes
     nothing). Each git repository under that folder becomes a branch named by its path (`api`, or
     `work/api` for one inside a plain folder `work`), holding its files as they are now, not its
     history. Folders that are not git repositories and hold none, files outside the repositories,
     hidden folders, `node_modules`, `venv` and repositories more than 6 folders down are not
-    included, and a repository in a folder called `main` is refused. It lists each repository with its size
+    included, and a repository in a folder called `main` or `xo-space` is refused. It lists each repository with its size
     and asks first (`--yes` skips the question, and then pushes without asking when the
     repository is already there); say no and run it inside the folder that holds the
-    repositories you mean. It makes `./.git` (bare, so nothing here is checked out or changed;
-    git run inside a folder here that is not its own repository now finds this `.git` and says it
-    needs a work tree). It follows each repository's `.gitignore`, that folder's own `.gitignore`
+    repositories you mean. When the folder has no `.git`, it makes one (bare, so nothing here is
+    checked out or changed; git run inside a folder here that is not its own repository now finds
+    this `.git` and says it needs a work tree), and `main` is the index. When the folder is already
+    a git repository, xo attaches to it: it adds one branch per repository and keeps the index on a
+    branch `xo-space`, and never changes your branches, checkout, staged changes or
+    `.git/info/exclude`. A repository whose branch would clash with one of yours (here or on
+    GitHub, in any case, or a branch inside its name) is refused, and so is a folder that is a
+    worktree or submodule of another repository. It follows each repository's `.gitignore`, that folder's own `.gitignore`
     and a repository's `.git/info/exclude`, and always
     leaves out `.env` files (any case, `.env.*`, `.env-*`, `*.env`, `.envrc`), keys, credential
     stores (`.aws`, `.ssh`, `.gnupg`, `.kube`, `.docker`, `.npmrc`, `.netrc`, `.git-credentials`
@@ -149,18 +157,21 @@ xo sync project:headscale                        # git pull --rebase, then push
     secret (one in an archive, say), so look through the repositories first. `main` holds a README
     listing the branches, `xo-space.json` with one hash of every branch's files (sha256 over each
     branch's git tree id), and an `update` script. The repository is `github.com/OWNER/NAME`, OWNER
-    your gh login or `--owner`; when it is not there (or is private: xo checks with no login at
+    your gh login or `--owner`, or, in a folder that was already a git repository, the GitHub
+    repository its origin is (an origin elsewhere, or with a login in it, is refused; one is added
+    when there is none); when it is not there (or is private: xo checks with no login at
     all), xo prints a link to make it, empty, and waits for Enter, then pushes with your own git;
     one GitHub redirects (renamed or moved) is refused. The space goes in your spaces once it is
     pushed. Run it again to commit what changed, on top of what GitHub has now (a commit made
     here but never pushed is replaced, so a file you left out before the first push is not in the
     history, and a repository you delete and make again starts with none of the old history; a
     private one cannot be updated); a branch whose folder is gone stays as GitHub has it, and one
-    never pushed is dropped. Only `main` and the branches it lists are pushed. A clone's own
+    never pushed is dropped. Only the index and the branches it lists are pushed. A clone's own
     exclude is followed also where its `.git` is a file (a worktree or submodule), and a key or
     token in UTF-16 text stops it too. It refuses your home folder, `/`, folders holding `.ssh`,
     `.aws` or `.gnupg`, any hidden folder of your home (`~/.config`, `~/.aws`) and `~/Library`, a
-    folder inside another git repository, and a repository's own `.git` folder.
+    folder inside another git repository (the folder may be one itself), and a repository's own
+    `.git` folder.
   - `update` first pushes each checkout's branch to its upstream (refused if the remote is ahead:
     run `xo sync`). Then it sends the branch (or, when detached, the commit) each checkout is on,
     and is refused when the space changed since: run `xo sync`. A ref its remote does not have is

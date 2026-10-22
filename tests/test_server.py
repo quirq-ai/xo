@@ -1641,8 +1641,8 @@ def test_projects_shows_up_on_the_status_page_as_its_route(xo_server, alice):
 def test_create_space_with_no_kind_end_to_end(xo_server, clerk, alice, monkeypatch, capfd, github):
     monkeypatch.setenv("XO_URL", xo_server.url)
     monkeypatch.setenv("XO_API_KEY", USER_KEY)
-    subprocess.run(["git", "init", "-q", "notes"], check=True)
-    (Path("notes") / "n.txt").write_text("n\n")
+    subprocess.run(["git", "init", "-q", "dev/notes"], check=True)
+    (Path("dev/notes") / "n.txt").write_text("n\n")
     subprocess.run(["git", "init", "-q", "--bare", str(github.root / "me/dev")], check=True)
     assert cli.main(["create", "space", "dev", "--owner", "me", "--yes"]) == 0
     out, err = capfd.readouterr()

@@ -348,7 +348,7 @@ html { scroll-behavior: smooth; }
 				<tr><td>xo spaces --space-id ID</td><td>server, then XO</td><td><code>GET /spaces/{spaceId}</code>: connection URLs; they carry a session token</td></tr>
 				<tr><td>xo me</td><td>server only</td><td>Your profile, primary email and both metadata buckets, printed as <code>{"xo": {..., "public_data", "private_data"}}</code>; credential-looking values masked</td></tr>
 				<tr><td>xo projects [add NAME]</td><td>server only</td><td>Read or append to the <code>projects</code> list in your private metadata</td></tr>
-				<tr><td>xo create space NAME</td><td>git and GitHub, then server</td><td>No KIND: this folder&#39;s <code>.git</code>, one branch per git repository under it and a <code>main</code> index, pushed to <code>github.com/OWNER/NAME</code>; then a space entry with nothing on XO (<code>POST /me/spaces/connect</code>)</td></tr>
+				<tr><td>xo create space [NAME]</td><td>git and GitHub, then server</td><td>No KIND: the folder&#39;s <code>.git</code> (this folder, named after itself, or <code>./NAME</code>), one branch per git repository under it and an index branch (<code>main</code> in a <code>.git</code> xo makes, <code>xo-space</code> in one already there), pushed to <code>github.com/OWNER/NAME</code> or the folder&#39;s GitHub origin; then a space entry with nothing on XO (<code>POST /me/spaces/connect</code>)</td></tr>
 				<tr><td>xo create project NAME [URL]</td><td>server, then git</td><td>Adds the project, then clones <code>OWNER/REPO</code> into <code>./REPO</code> or runs <code>git init</code> for a plain name; a NAME given with a URL must be its <code>REPO</code> or <code>OWNER/REPO</code></td></tr>
 				<tr><td>xo connect P S [--ref R]</td><td>server only</td><td>Sets P in space S at <code>--ref</code> (default <code>main</code>)</td></tr>
 				<tr><td>xo connect P --repo URL</td><td>server, then git</td><td>A project made with a name only gets its repo and is recorded as <code>OWNER/REPO</code> (refused while P is in a space); <code>./P</code> gets that origin only if it has none, and moves to <code>./REPO</code> only if its origin is that repo</td></tr>
@@ -641,7 +641,7 @@ html { scroll-behavior: smooth; }
 <h4><code>/user-metadata</code> (no xo command)</h4>
 <p>xo has no command for it since <code>xo me</code> covers your own profile. The server's admin-only route stays as it was: <code>GET</code> and <code>PATCH /user-metadata/{userId}</code>, 20 a minute per key, a key with the <code>xo_admin</code> claim whose id is in <code>XO_ADMIN_KEY_IDS</code>, allow-listed keys only, one audit line per request. Admin needs two locks, and none is issued yet: until a key has the claim and its id is listed, every caller gets 403. PATCH changes only top-level keys named in <code>XO_EDITABLE_*_KEYS</code>.</p>
 <h3 id="cmd-spaces-on-xo">Spaces on XO</h3>
-<p>Every space on XO is created one way, <code>xo create space NAME KIND</code>, and recorded in your spaces. With no KIND, <code>xo create space NAME</code> makes the folder it runs in a space on GitHub and records it, with nothing on XO. The old <code>xo claude-code</code>, <code>xo codex</code>, ... commands are gone and say so.</p>
+<p>Every space on XO is created one way, <code>xo create space NAME KIND</code>, and recorded in your spaces. With no KIND, <code>xo create space</code> makes the folder it runs in a space on GitHub (<code>xo create space NAME</code> makes <code>./NAME</code> one) and records it, with nothing on XO. The old <code>xo claude-code</code>, <code>xo codex</code>, ... commands are gone and say so.</p>
 <h4><code>xo create space NAME KIND</code></h4>
 <figure>
 <div class="canvas">
@@ -708,10 +708,10 @@ html { scroll-behavior: smooth; }
 </div>
 <figcaption><strong>One name, on XO and in your spaces.</strong> KIND is <code>claude-code</code>, <code>codex</code>, <code>antigravity</code>, <code>hermes</code>, <code>openclaw</code>, <code>xo-cowork</code> or <code>nebius-openclaw</code>; NAME is 1 to 32 letters, digits or hyphens. XO lowercases space names, so xo lowercases NAME before it sends it and says so when that changes it. Everything recording needs is checked before XO is called. Every kind but <code>nebius-openclaw</code> stores your key inside the new space, and xo says so first.</figcaption>
 </figure>
-<h4><code>xo create space NAME</code></h4>
+<h4><code>xo create space [NAME]</code></h4>
 <figure>
 <div class="canvas">
-<svg class="d" viewBox="0 0 960 824" role="img" aria-label="xo create space NAME: This folder, one branch per git repository, on GitHub.">
+<svg class="d" viewBox="0 0 960 824" role="img" aria-label="xo create space [NAME]: A folder, one branch per git repository, on GitHub.">
 <defs>
 <marker id="c40a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
 <marker id="c40h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk hot"/></marker>
@@ -730,13 +730,13 @@ html { scroll-behavior: smooth; }
 <text class="t" x="840" y="31" text-anchor="middle">xo server</text>
 <rect class="box" x="20" y="58" width="200" height="46" rx="8"/>
 <text class="m" x="120" y="78" text-anchor="middle">xo create space dev</text>
-<text class="s" x="120" y="95" text-anchor="middle">no KIND</text>
+<text class="s" x="120" y="95" text-anchor="middle">./dev, no KIND</text>
 <rect class="box" x="20" y="142" width="200" height="46" rx="8"/>
 <text class="t" x="120" y="162" text-anchor="middle">find git repos, sizes</text>
 <text class="s" x="120" y="179" text-anchor="middle">ask: yes, or run it elsewhere</text>
 <line class="edge" x1="120" y1="104" x2="120" y2="140" marker-end="url(#c40a)"/>
 <rect class="box" x="260" y="226" width="200" height="46" rx="8"/>
-<text class="t" x="360" y="246" text-anchor="middle">.git (bare), per repo</text>
+<text class="t" x="360" y="246" text-anchor="middle">.git (new or yours), per repo</text>
 <text class="s" x="360" y="263" text-anchor="middle">add, write-tree, commit-tree</text>
 <path class="edge" d="M120,188 V208 H360 V224" marker-end="url(#c40a)"/>
 <text class="lbl" x="240" y="203" text-anchor="middle">folders</text>
@@ -746,7 +746,7 @@ html { scroll-behavior: smooth; }
 <path class="edge dash" d="M360,272 V292 H120 V308" marker-end="url(#c40a)"/>
 <text class="lbl" x="240" y="287" text-anchor="middle">trees</text>
 <rect class="box" x="260" y="394" width="200" height="46" rx="8"/>
-<text class="t" x="360" y="414" text-anchor="middle">main</text>
+<text class="t" x="360" y="414" text-anchor="middle">index: main or xo-space</text>
 <text class="s" x="360" y="431" text-anchor="middle">README, xo-space.json, update</text>
 <path class="edge" d="M120,356 V376 H360 V392" marker-end="url(#c40a)"/>
 <text class="lbl" x="240" y="371" text-anchor="middle">index</text>
@@ -772,7 +772,7 @@ html { scroll-behavior: smooth; }
 <text class="lbl" x="720" y="707" text-anchor="middle">name</text>
 </svg>
 </div>
-<figcaption><strong>This folder, one branch per git repository, on GitHub, public.</strong> Each git repository under the folder (at any depth, not one inside another) becomes a branch named by its path, its files only; plain folders and files outside the repositories are left out. xo lists each repository with its size and asks first, and refuses your home folder, <code>/</code>, folders holding <code>.ssh</code>, <code>.aws</code> or <code>.gnupg</code>, hidden folders of your home, a folder inside another git repository and a <code>.git</code> folder. <code>./.git</code> is bare, so nothing here is checked out or changed; each branch is built with plumbing only, following each folder&#39;s <code>.gitignore</code> and this folder&#39;s, and leaving out <code>.env</code> files, keys and credential stores whatever a <code>.gitignore</code> says, nested repositories&#39; history and <code>.github/workflows</code>. A key, token or password in a file or its name, a file over 100 MB, a Git LFS pointer, a git-crypt file or a bare repository stops it before any commit. <code>main</code> holds a README, <code>xo-space.json</code> (one hash of every branch) and <code>update</code>. The check for <code>github.com/OWNER/NAME</code> uses no login, so a private repository looks missing; xo prints a link to make it, waits, and pushes with your own git. A rerun commits only what changed.</figcaption>
+<figcaption><strong>A folder, one branch per git repository, on GitHub, public.</strong> With no NAME it is the folder xo runs in, named after itself; with NAME it is <code>./NAME</code>. Each git repository under the folder (at any depth, not one inside another) becomes a branch named by its path, its files only; plain folders and files outside the repositories are left out. xo lists each repository with its size and asks first, and refuses your home folder, <code>/</code>, folders holding <code>.ssh</code>, <code>.aws</code> or <code>.gnupg</code>, hidden folders of your home, a folder inside another git repository and a <code>.git</code> folder. A new <code>./.git</code> is bare, so nothing here is checked out or changed, and <code>main</code> is the index; a folder that is already a git repository is attached to, with the index on <code>xo-space</code>, its origin used when it is on GitHub, and your branches, checkout and staged changes untouched; each branch is built with plumbing only, following each folder&#39;s <code>.gitignore</code> and this folder&#39;s, and leaving out <code>.env</code> files, keys and credential stores whatever a <code>.gitignore</code> says, nested repositories&#39; history and <code>.github/workflows</code>. A key, token or password in a file or its name, a file over 100 MB, a Git LFS pointer, a git-crypt file or a bare repository stops it before any commit. The index holds a README, <code>xo-space.json</code> (one hash of every branch) and <code>update</code>. The check for <code>github.com/OWNER/NAME</code> uses no login, so a private repository looks missing; xo prints a link to make it, waits, and pushes with your own git. A rerun commits only what changed.</figcaption>
 </figure>
 <h4><code>xo claude-code | codex | ... (removed)</code></h4>
 <figure>
