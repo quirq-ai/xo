@@ -146,7 +146,7 @@ xo sync project:headscale                        # git pull --rebase, then push
     a git repository, xo attaches to it: it adds one branch per repository and keeps the index on a
     branch `xo-space`, and never changes your branches, checkout, staged changes or
     `.git/info/exclude`. A branch stays xo's only while it is where xo last left it and is not
-    checked out: commit on one, or check it out, and xo never moves or deletes it again (a
+    checked out in any worktree: commit on one, or check it out, and xo never moves or deletes it again (a
     repository whose branch it was is then refused, and one that is gone leaves it as it is). A repository whose branch would clash with one of yours (here or on
     GitHub, in any case, or a branch inside its name) is refused, and so is a folder that is a
     worktree or submodule of another repository. It follows each repository's `.gitignore`, that folder's own `.gitignore`

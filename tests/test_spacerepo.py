@@ -324,6 +324,89 @@ def test_the_branch_you_have_checked_out_is_never_moved(here):
     assert git("rev-parse", "beta") == tip
 
 
+def test_a_commit_you_make_on_a_space_branch_while_xo_runs_is_never_pushed_off(here, monkeypatch):
+    _yours()
+    _make()
+    Path("alpha/a.txt").write_text("changed\n")
+    check, mine = spacerepo._check, []
+
+    def meanwhile(space, name, tree):  # you commit on alpha while xo is snapshotting
+        if not mine:
+            mine.append(git("commit-tree", "alpha^{tree}", "-p", "alpha", "-m", "mine"))
+            git("update-ref", "refs/heads/alpha", mine[0])
+        return check(space, name, tree)
+    monkeypatch.setattr(spacerepo, "_check", meanwhile)
+    with pytest.raises(XoError, match="alpha changed while xo ran"):
+        _make()
+    assert git("rev-parse", "alpha") == mine[0]
+
+
+def test_a_branch_checked_out_in_another_worktree_is_yours(here, tmp_path, capsys):
+    _yours()
+    out = _make()
+    import shutil
+    shutil.rmtree("gamma")
+    git("worktree", "add", "-q", str(tmp_path / "wt-gamma"), "gamma")
+    git("worktree", "add", "-q", str(tmp_path / "wt-beta"), "beta")
+    with pytest.raises(XoError, match="clash with your own branches.*: beta;"):
+        _make()
+    shutil.rmtree("beta")
+    again = _make()
+    assert git("rev-parse", "gamma") == out["branches"]["gamma"] and "gamma" not in again["branches"]
+    assert git("rev-parse", "beta") == out["branches"]["beta"] and "beta" not in again["branches"]
+
+
+def test_a_space_branch_that_is_a_symbolic_ref_never_moves_the_branch_it_names(here):
+    _yours()
+    out = _make()
+    mine = git("rev-parse", "main")
+    git("update-ref", "-d", "refs/heads/alpha")
+    git("symbolic-ref", "refs/heads/alpha", "refs/heads/main")
+    Path("alpha/a.txt").write_text("changed\n")
+    with pytest.raises(XoError, match="clash with your own branches.*: alpha;"):
+        _make()
+    assert git("rev-parse", "main") == mine and git("symbolic-ref", "refs/heads/alpha") == "refs/heads/main"
+    assert _hub(here, "rev-parse", "alpha") == out["branches"]["alpha"]
+
+
+def test_a_run_stopped_mid_move_can_run_again(here):
+    _yours()
+    _make()
+    Path("alpha/a.txt").write_text("changed\n")
+    real = spacerepo.Space.git
+
+    def stop(self, *args, **kw):
+        if args[:2] == ("update-ref", "--no-deref") and args[2] == "refs/heads/alpha":
+            raise KeyboardInterrupt
+        return real(self, *args, **kw)
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(spacerepo.Space, "git", stop)
+        with pytest.raises(KeyboardInterrupt):
+            _make()
+    again = _make()
+    assert _hub(here, "show", "alpha:a.txt") == "changed" and again["pushed"] is True
+
+
+def test_what_is_pushed_is_what_was_checked_even_if_a_branch_moves_during_the_wait(here):
+    _yours()
+    seen = {}
+
+    def wait(q):  # GitHub has no such repository yet; meanwhile a branch moves
+        sha = git("commit-tree", "alpha^{tree}", "-p", "alpha", "-m", "after the check")
+        git("update-ref", "refs/heads/alpha", sha)
+        seen["moved"] = sha
+        return True
+    import shutil
+    shutil.rmtree(here.root / "me/myspace")
+    real = spacerepo.on_github
+    spacerepo.on_github = lambda o, n: (git("init", "-q", "--bare", str(here.root / "me/myspace")), False)[1]
+    try:
+        out = spacerepo.create(Path("."), "myspace", "me", ask=lambda q: True, wait=wait)
+    finally:
+        spacerepo.on_github = real
+    assert _hub(here, "rev-parse", "alpha") == out["branches"]["alpha"] != seen["moved"]
+
+
 def test_your_remote_tracking_branches_are_left_alone(here):
     _yours()
     mine = git("rev-parse", "main")
