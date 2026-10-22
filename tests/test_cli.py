@@ -1708,14 +1708,39 @@ def test_create_space_with_no_name_refuses_a_folder_name_that_is_not_a_space_nam
     assert code == 1 and "this folder's name, a b, is not a space name" in err and not Path(".git").exists()
 
 
-def test_create_space_with_a_name_needs_the_folder(xs, capsys, github, monkeypatch):
-    git("init", "-q", "notes")
-    code, _, err = run(capsys, "create", "space", "dev", "--owner", "me", "--yes")
-    assert code == 1 and "there is no folder ./dev here" in err and not Path(".git").exists()
-    Path("dev").mkdir()
+def test_create_space_with_a_name_makes_the_folder_when_it_is_missing(xs, capsys, github, monkeypatch):
+    xs.route("POST", "/me/spaces/connect", body={"success": True, "data": {"space": SPACE}})
+    git("init", "-q", "notes")  # here, not in ./dev: not part of the new space
+    git("init", "-q", "--bare", str(github.root / "me/dev"))
+    code, out, err = run(capsys, "create", "space", "dev", "--owner", "me", "--yes")
+    assert code == 0 and json.loads(out)["pushed"] is True and json.loads(out)["branches"] == {}
+    assert "there is no such folder yet, so xo makes it" in err and Path("dev/.git").is_dir()
+    assert not Path(".git").exists() and [r["body"] for r in xs.requests] == [{"name": "dev"}]
+    assert git(f"--git-dir={github.root / 'me/dev'}", "ls-tree", "--name-only", "main").split() == [
+        "README.md", "update", "xo-space.json"]
+    git("init", "-q", "dev/notes")  # a repository put in it later becomes a branch on the next run
+    Path("dev/notes/n.txt").write_text("n\n")
     monkeypatch.chdir("dev")
-    code, _, err = run(capsys, "create", "space", "dev", "--owner", "me", "--yes")
-    assert code == 1 and "this folder is dev: run xo create space with no NAME" in err and xs.requests == []
+    code, out, _ = run(capsys, "create", "space", "--owner", "me", "--yes")
+    assert code == 0 and list(json.loads(out)["branches"]) == ["notes"]
+
+
+def test_create_space_with_a_name_leaves_nothing_behind_when_it_stops(xs, capsys, github):
+    code, _, err = run(capsys, "create", "space", "dev", "--owner", "me")  # no terminal: the answer is no
+    assert code == 1 and "nothing was made" in err and not Path("dev").exists() and xs.requests == []
+    Path("file").write_text("x\n")
+    code, _, err = run(capsys, "create", "space", "file", "--owner", "me", "--yes")
+    assert code == 1 and "./file is a file, not a folder" in err
+
+
+def test_create_space_with_its_own_name_inside_the_space_points_to_no_name(xs, capsys, github, monkeypatch):
+    git("init", "-q", "dev/notes")
+    git("init", "-q", "--bare", str(github.root / "me/dev"))
+    run(capsys, "create", "space", "dev", "--owner", "me", "--yes")
+    monkeypatch.chdir("dev")
+    code, _, err = run(capsys, "create", "space", "dev", "--owner", "me", "--yes")  # an older update script
+    assert code == 1 and "this folder is already space dev: run xo create space with no NAME" in err
+    assert not Path("dev").exists()
 
 
 def test_create_space_attaches_to_the_folders_own_repository_and_its_github_origin(xs, capsys, github):

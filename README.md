@@ -44,7 +44,7 @@ xo spaces --space-id 6f1c2c1e-...   # connection URLs for a space you own
 | Command | Request | Body |
 |---|---|---|
 | `xo create space NAME KIND` | `POST /me/spaces` on your xo server: it creates the space through XO (`POST /KIND`) with NAME as its name there, then records it in your `spaces` as NAME | the flags of KIND, below |
-| `xo create space [NAME]` | no KIND: after you say yes, the folder (this one, named after itself, or `./NAME`) gets one branch per git repository under it (its files, not its history) and an index branch that lists them: a new bare `.git` with `main` as the index, or, when the folder is already a git repository, that one, with the index on `xo-space` and your own branches untouched. Pushed to `github.com/OWNER/NAME`, or the GitHub repository the folder's origin is (a link to make it if it is missing); then `POST /me/spaces/connect`, nothing on XO | none |
+| `xo create space [NAME]` | no KIND: after you say yes, the folder (this one, named after itself, or `./NAME`, made if it is not there) gets one branch per git repository under it (its files, not its history) and an index branch that lists them: a new bare `.git` with `main` as the index, or, when the folder is already a git repository, that one, with the index on `xo-space` and your own branches untouched. Pushed to `github.com/OWNER/NAME`, or the GitHub repository the folder's origin is (a link to make it if it is missing); then `POST /me/spaces/connect`, nothing on XO | none |
 | &nbsp;&nbsp;KIND `claude-code` | `POST /claude-code` | volume size; Anthropic provider |
 | &nbsp;&nbsp;KIND `codex` | `POST /codex` | volume size |
 | &nbsp;&nbsp;KIND `antigravity` | `POST /antigravity` | volume size |
