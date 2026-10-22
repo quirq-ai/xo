@@ -29,6 +29,7 @@ def auto(monkeypatch):
     calls = {"spawned": [], "installed": [], "rerun": []}
 
     def popen(cmd, **kwargs):
+        assert kwargs["cwd"] == selfupdate.state_path().parent
         calls["spawned"].append(cmd)
     monkeypatch.setattr(selfupdate.subprocess, "Popen", popen)
 
@@ -74,7 +75,7 @@ def test_a_hand_installed_xo_is_left_alone(auto, monkeypatch):
 
 def test_the_check_runs_in_the_background_once_a_day(auto):
     assert selfupdate.before(["list"]) is None
-    assert auto["spawned"] and auto["spawned"][0][1:] == ["-m", "xo.selfupdate"]
+    assert auto["spawned"] and auto["spawned"][0][1:] == ["-I", "-m", "xo.selfupdate"], "isolated from the cwd"
     assert selfupdate.before(["list"]) is None
     assert len(auto["spawned"]) == 1, "the second command must not start another check"
     assert auto["installed"] == []
@@ -148,7 +149,7 @@ def test_install_runs_setups_update_at_the_pin(monkeypatch):
         return subprocess.CompletedProcess(cmd, 0, "", "")
     monkeypatch.setattr(selfupdate.subprocess, "run", run)
     assert selfupdate.install(B)
-    assert seen[0][1:] == ["-m", "pip", "install", "--force-reinstall", "--no-deps", "--quiet",
+    assert seen[0][1:] == ["-I", "-m", "pip", "install", "--force-reinstall", "--no-deps", "--quiet",
                            "--disable-pip-version-check", f"quirq-xo @ git+https://github.com/quirq-ai/xo@{B}"]
 
 
@@ -205,3 +206,36 @@ def test_windows_moves_xo_exe_aside(monkeypatch, tmp_path):
     assert exe.read_text() == "new"
     selfupdate._clean_old()
     assert list(tmp_path.glob("xo.exe.*.old")) == []
+
+
+def test_one_update_at_a_time(auto):
+    """A command that finds the lock held runs on the xo it has, and updates nothing."""
+    state(pin=B, pin_at=time.time() + 5, checked=time.time())
+    with selfupdate._locked() as mine:
+        assert mine
+        with selfupdate._locked() as other:
+            assert not other
+        if os.name != "nt":  # flock locks are per open file, so a second open in this process is refused too
+            assert selfupdate.before(["list"]) is None
+            assert auto["installed"] == [] and auto["rerun"] == []
+    assert selfupdate.before(["list"]) == 7 and auto["installed"] == [B]
+
+
+def test_an_update_another_xo_finished_is_not_repeated(auto, monkeypatch):
+    state(pin=B, pin_at=time.time() + 5, checked=time.time())
+    seen = iter([A, B])  # A before the lock, B once it is held
+    monkeypatch.setattr(selfupdate, "installed_commit", lambda: next(seen))
+    assert selfupdate.before(["list"]) == 7
+    assert auto["installed"] == [] and auto["rerun"] == [["list"]]
+
+
+def test_the_rerun_starts_the_venvs_xo_script(monkeypatch, tmp_path):
+    seen = []
+    monkeypatch.setattr(selfupdate, "_scripts", lambda: tmp_path)
+    monkeypatch.setattr(selfupdate.os, "execve", lambda path, argv, env: seen.append((path, argv, env)))
+    monkeypatch.setattr(selfupdate.subprocess, "run", lambda cmd, env: seen.append((cmd[0], cmd, env))
+                        or subprocess.CompletedProcess(cmd, 0))
+    selfupdate._rerun(["list", "spaces"])
+    path, argv, env = seen[0]
+    exe = tmp_path / ("xo.exe" if os.name == "nt" else "xo")
+    assert str(path) == str(exe) and argv == [str(exe), "list", "spaces"] and env[selfupdate.RAN_ENV] == "1"

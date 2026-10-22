@@ -26,6 +26,7 @@ jobs:
   windows-self-update:
     # Auto-update on Windows (src/xo/selfupdate.py install): pip must replace xo.exe while an xo.exe
     # is running, which Windows allows only after the running file is renamed aside.
+    if: github.event_name == 'pull_request'
     runs-on: windows-2025
     timeout-minutes: 15
     steps:

@@ -10,10 +10,17 @@ to xo login's key), which holds the one commit setup installed. Then, before a c
 
 An xo installed any other way (by hand at another commit, or from a checkout) is left alone: xo
 updates only while it is still at the commit the marker names, and the next Update in setup
-writes the marker again. Nothing runs when CI is set.
+writes the marker again. Nothing runs when CI is set. "Newest" is whatever setup's main says: if
+setup moves the pin back (a revert), xo follows it back.
+
+Every Python this starts runs isolated (-I) from the config folder, and the re-run starts the venv's
+own xo script, so no file in the folder you ran xo from is ever imported. One update at a time:
+an update holds auto-update.lock, and a command that finds it held runs on the xo it has.
 """
 from __future__ import annotations
 
+import contextlib
+import importlib
 import json
 import os
 import re
@@ -33,7 +40,7 @@ DIST = "quirq-xo"
 COMMIT = re.compile(r"[0-9a-f]{40}")
 DAY = 24 * 3600
 RETRY = 3600  # after a check or an update that failed
-CHECK_TIMEOUT = 10.0
+CHECK_TIMEOUT = 10.0  # in the background only: no command waits for it
 PIP_TIMEOUT = 300.0
 RAN_ENV = "XO_AUTO_UPDATE_RAN"  # set on the re-run after an update, so it never loops
 MAX_LOG = 64 * 1024
@@ -51,8 +58,35 @@ def log_path() -> Path:
     return credentials_path().with_name("auto-update.log")
 
 
+def lock_path() -> Path:
+    return credentials_path().with_name("auto-update.lock")
+
+
+@contextlib.contextmanager
+def _locked():
+    """Yield True while this process holds the update lock, False when another one does."""
+    path = lock_path()
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        try:
+            if os.name == "nt":
+                import msvcrt
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            yield False
+            return
+        yield True  # the lock goes with the file descriptor, closed below
+    finally:
+        os.close(fd)
+
+
 def installed_commit() -> str | None:
     """The commit pip installed this xo from, when it came from quirq-ai/xo by git; else None."""
+    importlib.invalidate_caches()  # another process may have reinstalled xo since this one started
     try:
         text = metadata.distribution(DIST).read_text("direct_url.json")
         data = json.loads(text or "")
@@ -161,7 +195,7 @@ def _start_check(state: dict) -> None:
     else:
         kwargs["start_new_session"] = True
     try:
-        subprocess.Popen([sys.executable, "-m", "xo.selfupdate"], **kwargs)
+        subprocess.Popen([sys.executable, "-I", "-m", "xo.selfupdate"], cwd=state_path().parent, **kwargs)
     except OSError as e:
         _log(f"could not start the check: {e}")
 
@@ -194,11 +228,11 @@ def install(pin: str) -> bool:
         except OSError as e:
             _log(f"update to {pin}: could not move xo.exe aside: {e}")
             return False
-    cmd = [sys.executable, "-m", "pip", "install", "--force-reinstall", "--no-deps", "--quiet",
+    cmd = [sys.executable, "-I", "-m", "pip", "install", "--force-reinstall", "--no-deps", "--quiet",
            "--disable-pip-version-check", f"{DIST} @ git+{REPO}@{pin}"]
     try:
         done = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True,
-                              errors="replace", timeout=PIP_TIMEOUT)
+                              errors="replace", timeout=PIP_TIMEOUT, cwd=state_path().parent)
         ok, detail = done.returncode == 0, (done.stderr or done.stdout).strip()[-2000:]
     except (OSError, subprocess.TimeoutExpired) as e:
         ok, detail = False, str(e)
@@ -212,11 +246,14 @@ def install(pin: str) -> bool:
 
 
 def _rerun(argv: list[str]) -> int:
-    """Run the same command again on the xo just installed, in a fresh process."""
+    """Run the same command again on the xo just installed: the venv's own xo script, by path."""
     env = {**os.environ, RAN_ENV: "1"}
-    cmd = [sys.executable, "-m", "xo.cli", *argv]
+    script = _scripts() / ("xo.exe" if os.name == "nt" else "xo")
+    cmd = [str(script), *argv]
+    sys.stdout.flush()
+    sys.stderr.flush()
     if os.name != "nt":
-        os.execve(sys.executable, cmd, env)
+        os.execve(script, cmd, env)
     try:
         return subprocess.run(cmd, env=env).returncode
     except KeyboardInterrupt:
@@ -242,17 +279,31 @@ def before(argv: list[str]) -> int | None:
         # Only a pin read after the marker was written: an older one may be behind what setup installed since.
         if (isinstance(pin, str) and COMMIT.fullmatch(pin) and pin != marker and _number(state.get("pin_at")) > written
                 and not (state.get("failed") == pin and time.time() - failed_at < RETRY)):
-            print(f"xo: updating to {pin[:7]}, setup's newest reviewed xo (auto-update is on)", file=sys.stderr)
-            if install(pin):
-                _write(marker_path(), pin + "\n")
-                state.pop("failed", None)
-                state.pop("failed_at", None)
-                _save_state(state)
+            with _locked() as mine:
+                now = installed_commit() if mine else None
+                if now == pin:
+                    ok = True  # another xo updated it since this one started
+                elif now == marker:
+                    print(f"xo: updating to {pin[:7]}, setup's newest reviewed xo (auto-update is on)",
+                          file=sys.stderr)
+                    if install(pin):
+                        _write(marker_path(), pin + "\n")
+                        state = _read_state()
+                        state.pop("failed", None)
+                        state.pop("failed_at", None)
+                        _save_state(state)
+                        ok = True
+                    else:
+                        state = _read_state()
+                        state["failed"], state["failed_at"] = pin, time.time()
+                        _save_state(state)
+                        print(f"xo: could not update (details in {log_path()}); running this xo, "
+                              "will try again in an hour", file=sys.stderr)
+                        ok = False
+                else:
+                    ok = False  # another xo is updating (lock held) or xo changed meanwhile: run this one
+            if ok:
                 return _rerun(argv)
-            state["failed"], state["failed_at"] = pin, time.time()
-            _save_state(state)
-            print(f"xo: could not update (details in {log_path()}); running this xo, will try again in an hour",
-                  file=sys.stderr)
         if time.time() - _number(state.get("checked")) >= DAY:
             _start_check(state)
     except Exception as e:  # noqa: BLE001 - auto-update never stops a command

@@ -21,17 +21,19 @@ also install the [GitHub CLI](https://cli.github.com) (`brew install gh` on a Ma
 
 ### Auto-update
 
-[qq-setup](https://github.com/quirq-ai/setup) can keep xo up to date for you; it is off unless
-you turn it on there. It then writes `auto-update` next to xo login's key, naming the commit it
-installed. With that file:
+xo can keep itself up to date. It is off unless an `auto-update` file next to xo login's key
+names the commit xo was installed at; [qq-setup](https://github.com/quirq-ai/setup) will write it
+once its "keep qq and xo up to date" option ships (until then nothing turns it on). With that file:
 
 - At most once a day xo starts a background check that reads setup's reviewed commits
   (`pins.json` on setup's `main`). Your command never waits for it, so xo works offline.
 - When that check found a newer reviewed xo, the next command updates xo first (the same
   `pip install --force-reinstall --no-deps` setup runs) and then runs on the new xo. If the update
   fails, the command runs on the xo you have, and xo tries again an hour later.
+- "Newest" is whatever setup's `main` says, so if setup moves its pin back, xo follows it back.
 - An xo installed another way (another commit by hand, or from a checkout) is never touched;
-  setup's Update puts it back under auto-update. Nothing runs when `CI` is set.
+  setup's Update puts it back under auto-update. Nothing runs when `CI` is set. One update runs at
+  a time: a command that finds another update running runs on the xo it has.
 - What it did is in `auto-update.log` next to the key. `xo --version` names the installed commit.
 
 ## Log in
