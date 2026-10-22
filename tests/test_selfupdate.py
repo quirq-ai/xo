@@ -239,3 +239,16 @@ def test_the_rerun_starts_the_venvs_xo_script(monkeypatch, tmp_path):
     path, argv, env = seen[0]
     exe = tmp_path / ("xo.exe" if os.name == "nt" else "xo")
     assert str(path) == str(exe) and argv == [str(exe), "list", "spaces"] and env[selfupdate.RAN_ENV] == "1"
+
+
+def test_an_unwritable_marker_still_runs_the_updated_xo(auto, monkeypatch):
+    state(pin=B, pin_at=time.time() + 5, checked=time.time())
+    real = selfupdate._write
+
+    def write(path, text):
+        if path == selfupdate.marker_path():
+            raise PermissionError("read-only")
+        real(path, text)
+    monkeypatch.setattr(selfupdate, "_write", write)
+    assert selfupdate.before(["list"]) == 7 and auto["installed"] == [B]
+    assert "could not write" in selfupdate.log_path().read_text()

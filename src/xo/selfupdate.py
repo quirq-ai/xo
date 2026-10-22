@@ -68,6 +68,7 @@ def _locked():
     path = lock_path()
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    held = False
     try:
         try:
             if os.name == "nt":
@@ -76,11 +77,18 @@ def _locked():
             else:
                 import fcntl
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            held = True
         except OSError:
             yield False
             return
-        yield True  # the lock goes with the file descriptor, closed below
+        yield True  # on POSIX the lock goes with the file descriptor, closed below
     finally:
+        if held and os.name == "nt":
+            try:
+                import msvcrt
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)  # Windows asks for an explicit unlock
+            except OSError:
+                pass
         os.close(fd)
 
 
@@ -287,7 +295,11 @@ def before(argv: list[str]) -> int | None:
                     print(f"xo: updating to {pin[:7]}, setup's newest reviewed xo (auto-update is on)",
                           file=sys.stderr)
                     if install(pin):
-                        _write(marker_path(), pin + "\n")
+                        try:
+                            _write(marker_path(), pin + "\n")
+                        except OSError as e:
+                            # xo is updated either way; only auto-update stops until setup's next Update.
+                            _log(f"updated to {pin}, but could not write {marker_path()}: {e}")
                         state = _read_state()
                         state.pop("failed", None)
                         state.pop("failed_at", None)
