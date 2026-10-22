@@ -191,6 +191,16 @@ def test_an_attached_repositorys_github_origin_is_where_the_space_goes(here):
     assert _hub(here, "for-each-ref") == ""
 
 
+def test_a_private_origin_is_not_called_a_new_public_repository(here, capsys):
+    _yours()
+    git("remote", "add", "origin", "https://github.com/me/hidden")
+    with pytest.raises(XoError, match="nothing was made"):
+        spacerepo.create(Path("."), "myspace", "me", ask=lambda q: False, wait=lambda q: False, repo="hidden")
+    err = capsys.readouterr().err
+    assert "this folder's origin, which xo cannot see without a login: if it is private" in err
+    assert "a new public repository" not in err
+
+
 @pytest.mark.parametrize("url", ["https://gitlab.com/me/x", f"https://me:{TOKEN}@github.com/me/x",
                                  "https://github.com/me/x/y", "/some/path"])
 def test_an_attached_origin_that_is_not_one_github_repository_is_refused_without_showing_it(here, url):
@@ -243,6 +253,84 @@ def test_an_attached_repositorys_own_xo_space_branch_is_not_taken_over(here):
     with pytest.raises(XoError, match="already has a branch xo-space that xo did not make"):
         _make()
     assert git("rev-parse", "xo-space") == git("rev-parse", "main")
+
+
+def _xo_space_from_elsewhere(here, lists):
+    """An xo-space branch on GitHub that this folder did not push, whose index lists these branches."""
+    seed = here.root.parent / "seed-index"
+    git("init", "-q", "-b", "xo-space", str(seed))
+    record = {"schema": spacerepo.SCHEMA, "branches": {b: {"commit": "0" * 40, "tree": "0" * 40} for b in lists}}
+    (seed / spacerepo.FILE).write_text(json.dumps(record))
+    git("add", ".", cwd=str(seed))
+    git("commit", "-qm", "index", cwd=str(seed))
+    git("push", "-q", str(here.root / "me/myspace"), "xo-space", cwd=str(seed))
+
+
+def test_an_index_on_github_this_folder_did_not_push_never_touches_your_branches(here):
+    _yours()
+    git("branch", "develop")
+    _xo_space_from_elsewhere(here, ["main", "develop", "alpha"])
+    git("remote", "add", "origin", f"{spacerepo.gitops.GITHUB}/me/myspace")
+    git("fetch", "-q", "origin")
+    before = git("for-each-ref", "--format=%(refname) %(objectname)")
+    with pytest.raises(XoError, match="already has a branch xo-space that xo did not make here"):
+        _make()
+    assert git("for-each-ref", "--format=%(refname) %(objectname)") == before
+
+
+def test_a_local_index_xo_did_not_write_is_not_trusted(here):
+    _yours()
+    tree = git("mktree", "--missing")  # an empty tree is enough: xo must refuse before reading it
+    sha = git("commit-tree", tree, "-m", "fake index")
+    git("update-ref", "refs/heads/xo-space", sha)
+    with pytest.raises(XoError, match="already has a branch xo-space that xo did not make here"):
+        _make()
+    assert git("rev-parse", "main") == git("rev-parse", "HEAD")
+
+
+def test_a_space_branch_you_took_over_is_never_moved_or_deleted(here, capsys):
+    _yours()
+    out = _make()
+    # gamma's folder goes away; you check its branch out and commit on it.
+    import shutil
+    shutil.rmtree("gamma")
+    git("checkout", "-q", "gamma")
+    git("commit", "-q", "--allow-empty", "-m", "mine on gamma")
+    mine = git("rev-parse", "gamma")
+    again = _make()
+    assert git("rev-parse", "gamma") == mine and git("symbolic-ref", "--short", "HEAD") == "gamma"
+    assert "gamma" not in again["branches"] and "left as it is, out of the space" in capsys.readouterr().err
+    assert _hub(here, "rev-parse", "gamma") == out["branches"]["gamma"]  # GitHub's copy is not changed either
+
+
+def test_a_repository_whose_branch_you_committed_on_is_refused_not_snapshotted_over(here):
+    _yours()
+    _make()
+    mine = git("commit-tree", "alpha^{tree}", "-p", "alpha", "-m", "mine on alpha")
+    git("update-ref", "refs/heads/alpha", mine)  # as a commit on alpha would
+    with pytest.raises(XoError, match="clash with your own branches.*: alpha;"):
+        _make()
+    assert git("rev-parse", "alpha") == mine
+
+
+def test_the_branch_you_have_checked_out_is_never_moved(here):
+    _yours()
+    _make()
+    git("symbolic-ref", "HEAD", "refs/heads/beta")  # xo's own commit, but you are on it now
+    Path("beta/readme").write_text("changed\n")
+    tip = git("rev-parse", "beta")
+    with pytest.raises(XoError, match="clash with your own branches.*: beta;"):
+        _make()
+    assert git("rev-parse", "beta") == tip
+
+
+def test_your_remote_tracking_branches_are_left_alone(here):
+    _yours()
+    mine = git("rev-parse", "main")
+    git("update-ref", "refs/remotes/origin/alpha", mine)
+    git("update-ref", "refs/remotes/origin/xo-space", mine)
+    _make()
+    assert git("rev-parse", "refs/remotes/origin/alpha") == mine == git("rev-parse", "refs/remotes/origin/xo-space")
 
 
 def test_a_worktree_or_submodule_folder_is_refused(here, tmp_path):
