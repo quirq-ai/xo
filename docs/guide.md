@@ -19,6 +19,25 @@ the xo server and the platform on every call, and a create copies it into the ne
 Follow the [quickstart](quickstart.md) step 1 (Python 3.11 or newer, one paste). For `github`,
 also install the [GitHub CLI](https://cli.github.com) (`brew install gh` on a Mac).
 
+### Auto-update
+
+xo can keep itself up to date. It is off unless an `auto-update` file next to xo login's key
+names the commit xo was installed at; [qq-setup](https://github.com/quirq-ai/setup) will write it
+once its "keep qq and xo up to date" option ships (until then nothing turns it on). With that file:
+
+- At most once a day xo starts a background check that reads setup's reviewed commits
+  (`pins.json` on setup's `main`). Your command never waits for it, so xo works offline.
+- When that check found a newer reviewed xo, the next command updates xo first (the same
+  `pip install --force-reinstall --no-deps` setup runs) and then runs on the new xo. If the update
+  fails, the command runs on the xo you have, and xo tries again an hour later.
+  On Windows a running `xo.exe` cannot be replaced, so the command runs on the xo you have while
+  a background helper waits for every xo to exit, then updates; the next xo uses it.
+- "Newest" is whatever setup's `main` says, so if setup moves its pin back, xo follows it back.
+- An xo installed another way (another commit by hand, or from a checkout) is never touched;
+  setup's Update puts it back under auto-update. Nothing runs when `CI` is set. One update runs at
+  a time: a command that finds another update running runs on the xo it has.
+- What it did is in `auto-update.log` next to the key. `xo --version` names the installed commit.
+
 ## Log in
 
 ```sh
@@ -237,7 +256,7 @@ with `--api-key -`.
 
 Each step says what you should see. Nothing here creates anything until step 5.
 
-1. `xo --version` prints `xo 0.1.0`.
+1. `xo --version` prints `xo 0.1.0`, and, once you run an xo with auto-update, the commit it was installed from, such as `(abc1234)`.
 2. `xo login` prints the three addresses, then `xo: me: logged in as ...` and
    `xo: github: connected to github.com as ...` (or `skipped` without gh).
 3. `xo status` shows three lines: me `key saved by xo login`, xo, and github `logged in as ...`.

@@ -725,7 +725,7 @@ flowchart LR
 
 ## 7. Access model
 
-- `client.py` is the only CLI code that talks to XO; `gitops.py` runs git and `github.py` runs gh. `Clerk` and `Core` in `server.py` are the only server code that talks out.
+- `client.py` is the only CLI code that talks to XO, and also reads qq-setup's `pins.json` for auto-update; `gitops.py` runs git, `github.py` runs gh and `selfupdate.py` runs pip. `Clerk` and `Core` in `server.py` are the only server code that talks out.
 - The key is never printed, and is redacted in escaped forms too. Plain `http://` is refused except to this machine.
 - `/me` returns your own email and both metadata buckets, with credential-like values masked;
   `XO_ME_PRIVATE_KEYS` can narrow the private keys it shows.
@@ -763,6 +763,7 @@ src/xo/
   commands.py       CLI    spec operations to commands and flags
   spec.py           CLI    load and check the OpenAPI spec
   github.py         CLI    gh login, status, logout
+  selfupdate.py     CLI    auto-update (off unless qq-setup's marker): daily background check, pip update
   names.py          shared project, space and ref rules; the only module both sides import
   services.py/.json shared services list and saved addresses
   openapi.json      shared bundled core API spec

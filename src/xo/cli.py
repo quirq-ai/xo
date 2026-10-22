@@ -118,7 +118,7 @@ from pathlib import Path
 from typing import Any, NoReturn
 from urllib.parse import quote
 
-from xo import __version__, commands, github, gitops, names, services, spacerepo, spec, weblogin, workspace
+from xo import __version__, commands, github, gitops, names, selfupdate, services, spacerepo, spec, weblogin, workspace
 from xo.client import (CORE_PATH, DEFAULT_TIMEOUT, KEY_ENV, MAYBE_RECEIVED, MIN_SECRET, Client, Login, XoError,
                        api_key, check_key, credentials_path, forget_login, read_key, redact, save_login, saved_login,
                        xo_url)
@@ -1471,7 +1471,9 @@ def main(argv: list[str] | None = None) -> int:
     common = _common()
     parser = _Parser(prog="xo", description=__doc__, parents=[common],
                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--version", action="version", version=f"xo {__version__}")
+    commit = selfupdate.installed_commit()
+    parser.add_argument("--version", action="version",
+                        version=f"xo {__version__}" + (f" ({commit[:7]})" if commit else ""))
     sub = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
 
     o = sub.add_parser("ops", parents=[common], help="list the API's operations")
@@ -1610,6 +1612,10 @@ def main(argv: list[str] | None = None) -> int:
             setattr(args, name, default)
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(errors="backslashreplace")
+    if args.command != "serve":
+        ran = selfupdate.before(argv)
+        if ran is not None:
+            return ran
     try:
         code = args.run(args)
         sys.stdout.flush()
