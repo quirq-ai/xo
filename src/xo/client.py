@@ -289,6 +289,29 @@ def _one_line(value: Any) -> str:
     return " ".join(str(value).split())
 
 
+MAX_PINS = 4096
+
+
+def get_pins(url: str, timeout: float) -> object:
+    """GET qq-setup's pins.json (for auto-update): https only, no key, no redirect, at most MAX_PINS bytes."""
+    if urllib.parse.urlsplit(url).scheme != "https":
+        raise XoError("the pins address is not https")
+    req = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": f"xo/{__version__}"})
+    try:
+        with urllib.request.build_opener(_NoRedirect).open(req, timeout=timeout) as resp:
+            raw = resp.read(MAX_PINS + 1)
+    except urllib.error.HTTPError as e:
+        raise XoError(f"pins.json answered HTTP {e.code}") from None
+    except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException, ValueError):
+        raise XoError("pins.json could not be reached") from None
+    if len(raw) > MAX_PINS:
+        raise XoError(f"pins.json is over {MAX_PINS} bytes")
+    try:
+        return json.loads(raw)
+    except ValueError:
+        raise XoError("pins.json is not JSON") from None
+
+
 class Client:
     def __init__(self, base: str, key: str | None, timeout: float = DEFAULT_TIMEOUT):
         self.base = base

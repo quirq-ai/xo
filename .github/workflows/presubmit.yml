@@ -23,3 +23,37 @@ jobs:
         run: |
           xo --version
           xo --help | grep -q 'xo ops'
+  windows-self-update:
+    # Auto-update on Windows (src/xo/selfupdate.py install): pip must replace xo.exe while an xo.exe
+    # is running, which Windows allows only after the running file is renamed aside.
+    runs-on: windows-2025
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.13"
+      - run: python -m pip install --quiet -e ".[test]"
+      - run: python -m pytest -q -p no:cacheprovider tests/test_selfupdate.py
+      - name: a running xo.exe is replaced by an update to this PR's head
+        shell: pwsh
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          CLERK_SECRET_KEY: sk_test_ci_dummy_not_a_secret
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python -m venv "$env:RUNNER_TEMP\v"
+          $py = "$env:RUNNER_TEMP\v\Scripts\python.exe"
+          $xo = "$env:RUNNER_TEMP\v\Scripts\xo.exe"
+          & $py -m pip install --quiet --disable-pip-version-check .
+          $p = Start-Process -FilePath $xo -ArgumentList 'serve', '--port', '0' -PassThru -WindowStyle Hidden
+          Start-Sleep -Seconds 5
+          if ($p.HasExited) { throw 'xo serve exited, so nothing held xo.exe' }
+          & $py -c "import sys; from xo import selfupdate; sys.exit(0 if selfupdate.install(sys.argv[1]) else 1)" $env:HEAD_SHA
+          if ($LASTEXITCODE -ne 0) { Get-Content "$env:USERPROFILE\.config\xo\auto-update.log"; throw 'the update failed' }
+          $v = & $xo --version
+          Write-Output $v
+          if ($v -ne "xo 0.1.0 ($($env:HEAD_SHA.Substring(0, 7)))") { throw "xo.exe is not the updated xo: $v" }
+          Stop-Process -Id $p.Id
