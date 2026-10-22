@@ -26,6 +26,7 @@ def auto(monkeypatch):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(A + "\n")
     monkeypatch.setattr(selfupdate, "installed_commit", lambda: A)
+    monkeypatch.setattr(selfupdate, "WINDOWS", False)  # the update-first path; Windows' own test sets it
     calls = {"spawned": [], "installed": [], "rerun": []}
 
     def popen(cmd, **kwargs):
