@@ -1,13 +1,15 @@
 """`xo create space NAME` with no KIND: the folder it runs in becomes a space, a git repository on
-GitHub with one branch per folder.
+GitHub with one branch per git repository under it.
 
-Every folder under the current one becomes a branch called after it, holding that folder's files
-as they are now (its .gitignore and this folder's followed, secrets and workflows left out); `main`
-is the index: a README table of the branches, xo-space.json with each branch's commit and one hash
-over all of them, and an update script. The repository is .git here, made bare so that nothing in
-this folder is ever checked out, written over or shown as changed; it is built with git's plumbing
-only (a scratch index and commit-tree), and the folders' own .git, remotes and branches are never
-touched.
+Every git repository under the current folder (at any depth, but not one inside another) becomes a
+branch called after its path here (`api`, or `work/api`), holding that repository's files as they
+are now, not its history (its .gitignore and this folder's followed, secrets and workflows left
+out). Folders that are not git repositories and hold none, and files outside the repositories, are
+not part of the space. `main` is the index: a README table of the branches, xo-space.json with each
+branch's commit and one hash over all of them, and an update script. The space's repository is .git
+here, made bare so that nothing in this folder is ever checked out, written over or shown as
+changed; it is built with git's plumbing only (a scratch index and commit-tree), and the
+repositories' own .git, remotes and branches are never touched.
 
 Its remote is github.com/OWNER/NAME (OWNER is your gh login unless --owner says otherwise). When
 GitHub does not have it, xo gives the link to make it and waits, then pushes main and every branch
@@ -15,10 +17,10 @@ with your own git login. xo never reads, stores or prints a token: whether the r
 asked anonymously (no credential helper, askpass, .netrc or extra header), so a private one looks
 missing until the push itself, and a repository GitHub redirects to (renamed or moved) is refused.
 
-Running it again makes a new commit only for a folder that changed and pushes again, never forced.
+Running it again makes a new commit only for a repository that changed and pushes again, never forced.
 A commit is always made on top of what GitHub already has, never on one made here that was not
 pushed, so files left out before the first push never reach GitHub in the history; what GitHub has
-is asked each run, so a repository deleted and made again starts over. A folder that is gone keeps
+is asked each run, so a repository deleted and made again starts over. A repository that is gone keeps
 the branch GitHub has of it (xo deletes nothing); one never pushed is dropped. Only main and the
 branches main lists are pushed.
 """
@@ -69,7 +71,9 @@ _PLACEHOLDER = re.compile(rb"(?i)[$<{%*]|^(?:pass(?:word|wd)?|pwd|secret|changem
 _KEYS = (".ssh", ".aws", ".gnupg", ".kube", ".docker", ".azure", ".password-store", ".config/gcloud")
 # Folders in a home folder where programs keep settings and logins (besides any hidden one).
 _SETTINGS = ("Library", "AppData")
-_BRANCH = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
+_BRANCH = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")  # one part of a branch name (a folder's name)
+_DEPTH = 6  # how deep xo looks for git repositories
+_SKIP = ("node_modules", "venv", "__pycache__")  # folders never looked into for git repositories
 _IDENTITY = ["-c", "user.name=xo", "-c", "user.email=xo@localhost", "-c", "commit.gpgsign=false",
              "-c", f"core.hooksPath={os.devnull}"]
 
@@ -124,18 +128,18 @@ def refuse_here(here: Path) -> None:
     real = here.resolve()
     for home in _homes():
         if real == home or real == Path(real.anchor) or real in home.parents:
-            raise XoError(f"{real} is your home folder or above it; run xo create space inside the folder whose "
-                          "folders should become the space")
+            raise XoError(f"{real} is your home folder or above it; run xo create space inside the folder that "
+                          "holds the git repositories for the space")
         if home in real.parents:
             top = real.relative_to(home).parts[0]
             if top.startswith(".") or top in _SETTINGS:
                 raise XoError(f"{real} is {'' if real == home / top else 'in '}{home / top}, where programs keep "
                               "settings, logins and keys, which must never be pushed; run xo create space inside "
-                              "the folder whose folders should become the space")
+                              "the folder that holds the git repositories for the space")
     held = [k for k in _KEYS if (here / k).exists()]
     if held:
         raise XoError(f"{real} holds {', '.join(held)}, which must never be pushed; run xo create space inside "
-                      "the folder whose folders should become the space")
+                      "the folder that holds the git repositories for the space")
     if (gitops.run("rev-parse", "--is-inside-git-dir", cwd=here, check=False) or "").strip() == "true":
         raise XoError(f"{real} is inside a git repository's own .git folder (or a bare repository), whose files "
                       "hold all of its history; run xo create space in a folder outside it")
@@ -177,25 +181,60 @@ class _HereIgnore:
             shutil.rmtree(self.tmp, ignore_errors=True)
 
 
-def folders(here: Path, probe: _HereIgnore | None = None) -> tuple[list[Path], list[str]]:
-    """The folders that become branches: every folder here but hidden ones, links and those this
-    folder's .gitignore leaves out; and those left out that way."""
-    found = sorted((p for p in here.iterdir() if p.is_dir() and not p.is_symlink() and not p.name.startswith(".")),
-                   key=lambda p: p.name.casefold())
-    ignored = probe.ignored([f"{p.name}/" for p in found]) if probe else set()
-    skipped = [p.name for p in found if f"{p.name}/" in ignored]
-    found = [p for p in found if f"{p.name}/" not in ignored]
-    bad = [p.name for p in found if not _BRANCH.fullmatch(p.name) or p.name.casefold() == MAIN or ".." in p.name
-           or p.name.upper() == "HEAD" or p.name.endswith(("_HEAD", ".lock", "."))]
+def _is_repo(folder: Path) -> bool:
+    """A git repository's work tree: .git is a folder (a clone) or a file (a worktree or submodule)."""
+    return (folder / ".git").is_dir() or (folder / ".git").is_file()
+
+
+def _branch_ok(branch: str) -> bool:
+    """A branch name xo makes: each part a folder name git and GitHub both take."""
+    return all(_BRANCH.fullmatch(part) and ".." not in part and part.upper() != "HEAD"
+               and not part.endswith(("_HEAD", ".lock", ".")) for part in branch.split("/")) and \
+        branch.split("/")[0].casefold() != MAIN and len(branch) <= 200
+
+
+def _inside(a: str, b: str) -> bool:
+    """Whether branch b sits inside branch a's name (a/...), in any case: git cannot hold both."""
+    return b.casefold().startswith(a.casefold() + "/")
+
+
+def folders(here: Path, probe: _HereIgnore | None = None) -> tuple[dict[str, Path], list[str]]:
+    """The git repositories that become branches, {branch: folder}: every repository under here (not
+    one inside another, nor in hidden folders, links, node_modules or what this folder's .gitignore
+    leaves out); and the folders left out by that .gitignore."""
+    found: dict[str, Path] = {}
+    skipped: list[str] = []
+
+    def look(at: Path, rel: str, depth: int) -> None:
+        kids = sorted((p for p in at.iterdir() if p.is_dir() and not p.is_symlink() and not p.name.startswith(".")
+                       and p.name not in _SKIP), key=lambda p: p.name.casefold())
+        names = [f"{rel}{p.name}/" for p in kids]
+        ignored = probe.ignored(names) if probe else set()
+        for p, name in zip(kids, names):
+            if name in ignored:
+                skipped.append(name.rstrip("/"))
+            elif _is_repo(p):
+                found[name.rstrip("/")] = p
+            elif depth < _DEPTH:
+                look(p, name, depth + 1)
+
+    look(here, "", 1)
+    bad = [b for b in found if not _branch_ok(b)]
     if bad:
-        raise XoError("these folders cannot be branch names (letters, digits, . _ -, starting with a letter or "
-                      f"digit, no .., and not {MAIN} or HEAD): " + ", ".join(bad) + "; rename them or run elsewhere")
+        raise XoError("these git repositories cannot be branch names (each folder name letters, digits, . _ -, "
+                      f"starting with a letter or digit, no .., not HEAD, and not {MAIN} or in a folder {MAIN}): "
+                      + ", ".join(bad) +
+                      "; rename them or run elsewhere")
     seen: dict[str, str] = {}
-    for p in found:
-        if p.name.casefold() in seen:
-            raise XoError(f"{seen[p.name.casefold()]} and {p.name} differ only in case, which GitHub cannot keep "
+    for b in found:
+        if b.casefold() in seen:
+            raise XoError(f"{seen[b.casefold()]} and {b} differ only in case, which GitHub cannot keep "
                           "apart as branches; rename one")
-        seen[p.name.casefold()] = p.name
+        seen[b.casefold()] = b
+    inside = sorted(f"{a} and {b}" for a in found for b in found if _inside(a, b))
+    if inside:
+        raise XoError("one git repository's branch would sit inside another's name, which git cannot hold (the "
+                      "folders differ only in case): " + ", ".join(inside) + "; rename one")
     return found, skipped
 
 
@@ -286,7 +325,7 @@ def _staged(space: Space, folder: Path) -> list[tuple[str, str]]:
     return [(meta, path) for meta, _, path in (rec.partition("\t") for rec in out.split("\0") if rec)]
 
 
-def _snapshot(space: Space, folder: Path, probe: _HereIgnore | None = None) -> tuple[str, list[str]]:
+def _snapshot(space: Space, branch: str, folder: Path, probe: _HereIgnore | None = None) -> tuple[str, list[str]]:
     """The tree of folder's files, built in a scratch index: its .gitignore (and this folder's, and a
     clone's own .git/info/exclude) followed, NEVER left out, workflows and nested repositories dropped.
     The tree and what was left out."""
@@ -309,7 +348,7 @@ def _snapshot(space: Space, folder: Path, probe: _HereIgnore | None = None) -> t
             space.git("add", "--all", "--", ".", tree=folder, config=plain)
         except XoError as e:
             if "does not have a commit checked out" in (getattr(e, "detail", "") or ""):
-                raise XoError(f"{folder.name}: it holds a git repository with no commit yet; commit in it or move "
+                raise XoError(f"{branch}: it holds a git repository with no commit yet; commit in it or move "
                               "it, then run again. Nothing was pushed") from None
             raise
         dropped, drop, flows, never = [], [], False, 0
@@ -330,23 +369,23 @@ def _snapshot(space: Space, folder: Path, probe: _HereIgnore | None = None) -> t
             dropped.append(f"{never} file(s) xo never pushes (.env files, keys, credential stores)")
         gone = set(drop)
         keep = [path for _, path in staged if path not in gone]
-        here_ignored = probe.ignored([f"{folder.name}/{p}" for p in keep]) if probe else set()
+        here_ignored = probe.ignored([f"{branch}/{p}" for p in keep]) if probe else set()
         if here_ignored:
-            out = [p for p in keep if f"{folder.name}/{p}" in here_ignored]
+            out = [p for p in keep if f"{branch}/{p}" in here_ignored]
             drop += out
             dropped.append(f"{len(out)} file(s) this folder's .gitignore leaves out")
-            keep = [p for p in keep if f"{folder.name}/{p}" not in here_ignored]
+            keep = [p for p in keep if f"{branch}/{p}" not in here_ignored]
         if drop:
             space.git("update-index", "--force-remove", "-z", "--stdin", tree=folder, input=_z(drop))
-        _refuse_encrypted(space, folder, keep)
-        _refuse_bare(folder, keep)
+        _refuse_encrypted(space, branch, folder, keep)
+        _refuse_bare(branch, folder, keep)
         tree = space.git("write-tree", tree=folder).strip()
     finally:
         index.unlink(missing_ok=True)
     return tree, dropped
 
 
-def _refuse_encrypted(space: Space, folder: Path, paths: list[str]) -> None:
+def _refuse_encrypted(space: Space, branch: str, folder: Path, paths: list[str]) -> None:
     """Stop on files a git filter keeps encrypted in their repository (git-crypt, transcrypt): here
     they are decrypted, and xo would push them so."""
     if not paths:
@@ -356,19 +395,19 @@ def _refuse_encrypted(space: Space, folder: Path, paths: list[str]) -> None:
     bad = [fields[i] for i in range(0, len(fields) - 2, 3)
            if fields[i + 2] not in ("unspecified", "unset", "set", "lfs")]
     if bad:
-        raise XoError(f"{folder.name}: " + ", ".join(bad[:10]) + " go through a git filter (such as git-crypt) that "
+        raise XoError(f"{branch}: " + ", ".join(bad[:10]) + " go through a git filter (such as git-crypt) that "
                       "keeps them encrypted in their repository; here they are decrypted, and xo would push them "
                       "so. Add them to its .gitignore. Nothing was pushed")
 
 
-def _refuse_bare(folder: Path, paths: list[str]) -> None:
+def _refuse_bare(branch: str, folder: Path, paths: list[str]) -> None:
     """Stop on a bare git repository among the files: pushing it would publish its whole history."""
     for p in paths:
         if p == "HEAD" or p.endswith("/HEAD"):
             where = folder / p[:-4] if p != "HEAD" else folder
             if (where / "objects").is_dir() and (where / "config").is_file():
                 shown_at = p[:-5] or "the folder itself"
-                raise XoError(f"{folder.name}: {shown_at} is a git repository (a bare one), and pushing it would "
+                raise XoError(f"{branch}: {shown_at} is a git repository (a bare one), and pushing it would "
                               "publish its whole history; move it out or add it to its .gitignore. Nothing was "
                               "pushed")
 
@@ -461,12 +500,12 @@ def _index(space: Space, name: str, owner: str, branches: dict[str, dict]) -> st
     record = {"schema": SCHEMA, "space": name, "github": f"{owner}/{name}", "hash": hashed, "branches": branches}
     rows = "\n".join(f"| [{b}](../../tree/{b}) | {e['files']} | {shown(e['bytes'])} | `{e['commit'][:7]}` |"
                      for b, e in branches.items())
-    readme = (f"# {name}\n\nAn xo space: each branch is one folder, as it was when `xo create space {name}` last "
-              f"ran.\n\n| Branch | Files | Size | Commit |\n|---|---|---|---|\n{rows}\n\nHash of all of it: "
+    readme = (f"# {name}\n\nAn xo space: each branch is one git repository's files, as they were when `xo create "
+              f"space {name}` last ran.\n\n| Branch | Files | Size | Commit |\n|---|---|---|---|\n{rows}\n\nHash of all of it: "
               f"`{hashed}` (sha256 over each branch's git tree id; see {FILE}).\n\nTo update it, run `xo create "
-              f"space {name}` again in the folder that holds these folders (or `sh update` there, with this "
+              f"space {name}` again in the folder that holds these repositories (or `sh update` there, with this "
               "branch's `update` copied in).\n")
-    script = ("#!/bin/sh\n# Snapshot every folder here again and push the branches that changed (xo create "
+    script = ("#!/bin/sh\n# Snapshot every git repository here again and push the branches that changed (xo create "
               f"space).\nexec xo create space {name} --owner {owner} \"$@\"\n")
 
     def blob(text: str) -> str:
@@ -495,42 +534,51 @@ def _sync_origin(space: Space, remote: dict[str, str]) -> None:
         if remote.get(ref.removeprefix("refs/remotes/origin/")) != sha:
             space.git("update-ref", "-d", ref, sha)
     for branch, sha in remote.items():
-        if _BRANCH.fullmatch(branch) and space.git("cat-file", "-e", f"{sha}^{{commit}}", check=False) is not None:
+        if _branch_ok(branch) and space.git("cat-file", "-e", f"{sha}^{{commit}}", check=False) is not None:
             space.git("update-ref", f"refs/remotes/origin/{branch}", sha)
 
 
-def build(here: Path, name: str, owner: str, chosen: list[Path], probe: _HereIgnore | None = None,
+def build(here: Path, name: str, owner: str, chosen: dict[str, Path], probe: _HereIgnore | None = None,
           remote: dict[str, str] | None = None) -> dict:
-    """Make or update the space's repository from the folders, all checked before main moves. remote:
+    """Make or update the space's repository from the repositories ({branch: folder}), all checked before
+    main moves. remote:
     the branches GitHub has now (none when it has no such public repository)."""
     space = Space(here)
     _start(space, name)
     if remote is not None:
         _sync_origin(space, remote)
     trees = {}
-    for folder in chosen:
-        tree, dropped = _snapshot(space, folder, probe)
-        _check(space, folder.name, tree)
+    for branch, folder in chosen.items():
+        tree, dropped = _snapshot(space, branch, folder, probe)
+        _check(space, branch, tree)
         for d in dropped:
-            _say(f"{folder.name}: left out {d}")
-        trees[folder.name] = tree
+            _say(f"{branch}: left out {d}")
+        trees[branch] = tree
     old = _old_branches(space)
     clash = {b.casefold(): b for b in old if b not in trees and b.casefold() in {t.casefold() for t in trees}}
     if clash:
-        raise XoError("these folders differ only in case from a branch the space already has: " +
+        raise XoError("these repositories differ only in case from a branch the space already has: " +
                       ", ".join(clash.values()) + "; GitHub cannot keep them apart, so rename the folder back")
-    branches = {}
-    for folder in chosen:
-        sha = _commit(space, folder.name, trees[folder.name], f"{folder.name}: files as of xo create space {name}")
-        branches[folder.name] = _entry(space, sha)
-    for gone in sorted(set(old) - set(branches), key=str.casefold):
-        base = _tip(space, f"refs/remotes/origin/{gone}") if _BRANCH.fullmatch(gone) else None
+    kept = {}
+    for gone in sorted(set(old) - set(trees), key=str.casefold):
+        base = _tip(space, f"refs/remotes/origin/{gone}") if _branch_ok(gone) else None
         if base is None:  # never pushed, or not on GitHub now: it goes nowhere
             space.git("update-ref", "-d", f"refs/heads/{gone}", check=False)
-            _say(f"{gone}: no such folder here now, and GitHub does not have its branch; left out")
+            _say(f"{gone}: no such git repository here now, and GitHub does not have its branch; left out")
             continue
+        kept[gone] = base
+    nested = sorted(f"{o} and {n}" for o in kept for n in trees if _inside(o, n) or _inside(n, o))
+    if nested:
+        raise XoError("a branch cannot sit inside another branch's name, as these would: " + ", ".join(nested) +
+                      "; GitHub has the first and xo deletes nothing, so delete that branch on GitHub (or move "
+                      "the repository), then run again. Nothing was pushed")
+    branches = {}
+    for branch in chosen:
+        sha = _commit(space, branch, trees[branch], f"{branch}: files as of xo create space {name}")
+        branches[branch] = _entry(space, sha)
+    for gone, base in kept.items():
         space.git("update-ref", f"refs/heads/{gone}", base)
-        _say(f"{gone}: no such folder here now; its branch is kept as GitHub has it")
+        _say(f"{gone}: no such git repository here now; its branch is kept as GitHub has it")
         branches[gone] = _entry(space, base)
     branches = dict(sorted(branches.items(), key=lambda kv: kv[0].casefold()))
     tree = _index(space, name, owner, branches)
@@ -610,26 +658,28 @@ def create(here: Path, name: str, owner: str, ask: Callable[[str], bool], wait: 
     try:
         chosen, skipped = folders(here, probe)
         if not chosen:
-            raise XoError(f"{here.resolve()} has no folders to make branches of; run xo create space inside the "
-                          "folder that holds them")
+            raise XoError(f"{here.resolve()} has no git repositories in it to make branches of; run xo create space "
+                          "inside the folder that holds them")
         now = heads(owner, name)
         exists = now is not None
-        lines = [f"  {f.name:<30} {shown(size(f)):>10}" + ("  (a git clone: its files only, not its history)"
-                                                          if (f / ".git").exists() else "") for f in chosen]
-        _say(f"xo create space {name} makes {here.resolve()} a space: each folder here becomes its own branch of "
-             f"github.com/{owner}/{name}, and main lists them.\n" + "\n".join(lines) + "\n"
+        lines = [f"  {b:<30} {shown(size(f)):>10}" for b, f in chosen.items()]
+        _say(f"xo create space {name} makes {here.resolve()} a space: each git repository here becomes its own branch "
+             f"of github.com/{owner}/{name} (its files as they are now, not its history), and main lists them.\n"
+             + "\n".join(lines) + "\n"
              + (f"  Left out by ./.gitignore: {', '.join(skipped)}.\n" if skipped else "")
-             + "  Files directly in this folder and hidden folders are not included. Each folder's .gitignore (and "
-             "this folder's) is followed; .env files, keys, credential stores, nested repositories and "
-             ".github/workflows are left out, and a file that looks like it holds a key, token or password stops it "
-             "before anything is pushed. xo cannot find every secret (one in an archive, say), so look through "
-             "these folders first. Everything else is pushed to "
+             + "  Folders that are not git repositories (and hold none), files outside the repositories, hidden "
+             f"folders, node_modules and venv, and repositories more than {_DEPTH} folders down are not part of the "
+             "space. Each repository's .gitignore (and this folder's) is followed; .env "
+             "files, keys, credential stores, repositories inside a repository and .github/workflows are left out, "
+             "and a file that looks like it holds a key, token or password stops it before anything is pushed. xo "
+             "cannot find every secret (one in an archive, say), so look through these repositories first. "
+             "Everything else is pushed to "
              + (f"the repository github.com/{owner}/{name}, which is already there and public."
                 if exists else f"a new public repository github.com/{owner}/{name}, which xo asks you to make.")
              + " Anyone can read it, and what is pushed stays public. Nothing in these folders is changed.")
         if not ask("Make this folder the space?"):
-            raise XoError("nothing was made. To make a space of other folders, run xo create space inside the folder "
-                          "that holds them")
+            raise XoError("nothing was made. To make a space of other git repositories, run xo create space inside "
+                          "the folder that holds them")
         made = build(here, name, owner, chosen, probe, now or {})
     finally:
         probe.close()
