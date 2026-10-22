@@ -17,7 +17,12 @@ TOKEN = "ghp_" + "x" * 36  # token-shaped, made here: never a real one
 
 @pytest.fixture
 def here(github):
-    """Three folders in the folder xo runs in, and an empty me/myspace on the stand-in GitHub."""
+    """Three git repositories in the folder xo runs in (gamma with a commit), a plain folder that is not
+    part of the space, and an empty me/myspace on the stand-in GitHub."""
+    git("init", "-q", "-b", "main", "alpha")
+    git("init", "-q", "-b", "main", "beta")
+    Path("notes").mkdir()
+    Path("notes/todo.txt").write_text("not a repository\n")
     Path("alpha/sub").mkdir(parents=True)
     Path("alpha/a.txt").write_text("a\n")
     Path("alpha/sub/b.txt").write_text("b\n")
@@ -35,6 +40,12 @@ def here(github):
     return github
 
 
+def _repo(path):
+    """A git repository at path, any name (git init run inside it)."""
+    Path(path).mkdir(parents=True, exist_ok=True)
+    git("init", "-q", cwd=str(path))
+
+
 def _make(**kw):
     return spacerepo.create(Path("."), "myspace", "me", ask=kw.get("ask", lambda q: True),
                             wait=kw.get("wait", lambda q: True))
@@ -44,12 +55,13 @@ def _hub(github, *args):
     return git(f"--git-dir={github.root / 'me/myspace'}", *args)
 
 
-def test_each_folder_is_a_branch_and_main_is_the_index(here, capsys):
+def test_each_git_repository_is_a_branch_and_main_is_the_index(here, capsys):
     gamma_head = git("rev-parse", "HEAD", cwd="gamma")
     out = _make()
     err = capsys.readouterr().err
     assert out["pushed"] is True and set(out["branches"]) == {"alpha", "beta", "gamma"}
-    assert "alpha" in err and "(a git clone: its files only, not its history)" in err
+    assert "alpha" in err and "each git repository here becomes its own branch" in err
+    assert "not its history" in err and "notes" not in out["branches"]
     assert sorted(_hub(here, "for-each-ref", "--format=%(refname:short)").split()) == ["alpha", "beta", "gamma",
                                                                                          "main"]
     assert _hub(here, "ls-tree", "-r", "--name-only", "alpha").split() == [".gitignore", "a.txt", "sub/b.txt"]
@@ -62,7 +74,7 @@ def test_each_folder_is_a_branch_and_main_is_the_index(here, capsys):
     assert "| [beta](../../tree/beta) | 1 |" in _hub(here, "show", "main:README.md")
     # The folders are as they were: gamma's own repository untouched, nothing checked out here.
     assert git("rev-parse", "HEAD", cwd="gamma") == gamma_head and git("status", "--porcelain", cwd="gamma") == ""
-    assert sorted(p.name for p in Path(".").iterdir()) == [".git", "alpha", "beta", "gamma"]
+    assert sorted(p.name for p in Path(".").iterdir()) == [".git", "alpha", "beta", "gamma", "notes"]
     assert git("config", "core.bare", cwd=".git") == "true"
 
 
@@ -82,7 +94,7 @@ def test_a_folder_that_is_gone_keeps_its_branch(here, capsys):
     shutil.rmtree("gamma")
     out = _make()
     assert out["branches"]["gamma"] == first["branches"]["gamma"]
-    assert "gamma: no such folder here now; its branch is kept" in capsys.readouterr().err
+    assert "gamma: no such git repository here now; its branch is kept" in capsys.readouterr().err
 
 
 def test_a_missing_repository_gets_a_link_and_waits(here, capsys):
@@ -136,16 +148,16 @@ def test_a_folder_that_is_already_a_repository_is_refused(here):
 
 @pytest.mark.parametrize("folder", ["main", "-x", "a b", "trail."])
 def test_folders_that_cannot_be_branches_are_refused(here, folder):
-    Path(folder).mkdir()
+    _repo(folder)
     with pytest.raises(XoError, match="cannot be branch names"):
         _make()
     assert not Path(".git").exists()
 
 
 def test_folders_that_differ_only_in_case_are_refused(here):
-    Path("Alpha").mkdir()
-    if len({p.name for p in Path(".").iterdir()}) < 4:
+    if Path("ALPHA").exists():
         pytest.skip("this filesystem ignores case")
+    _repo("Alpha")
     with pytest.raises(XoError, match="differ only in case"):
         _make()
 
@@ -281,7 +293,7 @@ def test_hidden_and_settings_folders_of_home_are_refused(here, monkeypatch, wher
 
 @pytest.mark.parametrize("folder", ["a..b", "HEAD", "ORIG_HEAD"])
 def test_names_git_refuses_as_branches_are_refused(here, folder):
-    Path(folder).mkdir()
+    _repo(folder)
     with pytest.raises(XoError, match="cannot be branch names"):
         _make()
 
@@ -328,7 +340,7 @@ def test_the_index_is_the_same_where_text_mode_writes_crlf(here, monkeypatch):
 
 def test_a_folder_never_pushed_and_then_left_out_is_not_pushed(here, capsys):
     (here.root / "me/myspace").rename(here.root / "me/later")
-    Path("diary").mkdir()
+    _repo("diary")
     Path("diary/today.txt").write_text("private\n")
     assert _make(wait=lambda q: False)["pushed"] is False  # diary made here, not pushed
     Path(".gitignore").write_text("diary/\n")
@@ -336,7 +348,7 @@ def test_a_folder_never_pushed_and_then_left_out_is_not_pushed(here, capsys):
     out = _make()
     assert out["pushed"] is True and "diary" not in out["branches"]
     assert "diary" not in _hub(here, "for-each-ref", "--format=%(refname:short)").split()
-    assert "diary: no such folder here now, and GitHub does not have its branch; left out" in capsys.readouterr().err
+    assert "diary: no such git repository here now, and GitHub does not have its branch; left out" in capsys.readouterr().err
 
 
 def test_a_repository_deleted_and_made_again_gets_none_of_the_old_history(here):
@@ -385,3 +397,39 @@ def test_a_secret_in_utf16_text_stops_it(here, encoding):
     with pytest.raises(XoError, match="secret"):
         _make()
     assert _hub(here, "for-each-ref") == ""
+
+
+def test_only_git_repositories_become_branches_at_any_depth(here, capsys):
+    _repo("work/api")
+    Path("work/api/main.py").write_text("print(1)\n")
+    Path("work/plan.txt").write_text("outside any repository\n")
+    _repo("work/api/vendor/lib")  # a repository inside a repository: left out, as before
+    Path("work/api/vendor/lib/x.txt").write_text("x\n")
+    git("add", ".", cwd="work/api/vendor/lib")
+    git("commit", "-qm", "x", cwd="work/api/vendor/lib")
+    _repo("node_modules/pkg")
+    _repo(".hidden/repo")
+    Path("top.txt").write_text("a file here, outside the repositories\n")
+    out = _make()
+    assert set(out["branches"]) == {"alpha", "beta", "gamma", "work/api"}
+    assert _hub(here, "ls-tree", "-r", "--name-only", "work/api").split() == ["main.py"]
+    assert "work/api" in json.loads(_hub(here, "show", f"main:{spacerepo.FILE}"))["branches"]
+    assert "Folders that are not git repositories" in capsys.readouterr().err
+
+
+def test_a_folder_with_no_repositories_is_refused(github):
+    Path("notes").mkdir()
+    Path("notes/a.txt").write_text("a\n")
+    git("init", "-q", "--bare", str(github.root / "me/myspace"))
+    with pytest.raises(XoError, match="has no git repositories"):
+        _make()
+    assert not Path(".git").exists()
+
+
+def test_a_repository_inside_a_gone_branch_name_is_refused(here):
+    _make()
+    import shutil
+    shutil.rmtree("gamma")
+    _repo("gamma/api")
+    with pytest.raises(XoError, match="cannot sit inside another branch's name.*gamma and gamma/api"):
+        _make()

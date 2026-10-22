@@ -130,20 +130,22 @@ xo sync project:headscale                        # git pull --rebase, then push
     xo server.
   - `xo create space NAME` with no KIND makes the folder you run it in the space, and publishes
     it: the repository is public, anyone can read it, and what is pushed stays public (xo deletes
-    nothing). It lists each subfolder with its size and asks first (`--yes` skips the question,
-    and then pushes without asking when the repository is already there); say no and run it
-    inside the folder that holds the folders you mean. Files directly in that folder and hidden
-    folders are not included. It makes `./.git` (bare, so nothing here is checked out or changed;
-    git run inside a subfolder that is not its own repository now finds this `.git` and says it
-    needs a work tree) with one branch per subfolder holding its files. It follows each folder's
-    `.gitignore`, that folder's own `.gitignore` and a clone's `.git/info/exclude`, and always
+    nothing). Each git repository under that folder becomes a branch named by its path (`api`, or
+    `work/api` for one inside a plain folder `work`), holding its files as they are now, not its
+    history. Folders that are not git repositories and hold none, files outside the repositories,
+    hidden folders and `node_modules` are not included. It lists each repository with its size
+    and asks first (`--yes` skips the question, and then pushes without asking when the
+    repository is already there); say no and run it inside the folder that holds the
+    repositories you mean. It makes `./.git` (bare, so nothing here is checked out or changed;
+    git run inside a folder here that is not its own repository now finds this `.git` and says it
+    needs a work tree). It follows each repository's `.gitignore`, that folder's own `.gitignore`
+    and a repository's `.git/info/exclude`, and always
     leaves out `.env` files (any case, `.env.*`, `.env-*`, `*.env`, `.envrc`), keys, credential
     stores (`.aws`, `.ssh`, `.gnupg`, `.kube`, `.docker`, `.npmrc`, `.netrc`, `.git-credentials`
-    and more), `.github/workflows` and repositories nested deeper in a folder (a clone that is
-    itself one of the folders keeps its files, not its history). It stops before anything is
+    and more), `.github/workflows` and repositories inside a repository. It stops before anything is
     pushed on a file that holds or is named like a key, token or password, a file over 100 MB, a
     Git LFS pointer, a file git-crypt keeps encrypted, or a bare repository. xo cannot find every
-    secret (one in an archive, say), so look through the folders first. `main` holds a README
+    secret (one in an archive, say), so look through the repositories first. `main` holds a README
     listing the branches, `xo-space.json` with one hash of every branch's files (sha256 over each
     branch's git tree id), and an `update` script. The repository is `github.com/OWNER/NAME`, OWNER
     your gh login or `--owner`; when it is not there (or is private: xo checks with no login at

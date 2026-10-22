@@ -46,7 +46,7 @@
                                             openclaw, xo-cowork, nebius-openclaw): create a space on XO
                                             named NAME there too, and record it in your spaces. With no
                                             KIND: this folder becomes space NAME, after you say yes: a
-                                            .git with one branch per subfolder and main listing them,
+                                            .git with one branch per git repo in it and main listing them,
                                             pushed to github.com/OWNER/NAME (public), nothing on XO.
     xo connect PROJECT SPACE [--ref R]      set PROJECT in SPACE at ref R (default main); the names
                                             need no project: or space: in front, and xo connect
@@ -783,8 +783,8 @@ def _create_space(args: argparse.Namespace) -> int:
 
 def _create_local_space(args: argparse.Namespace) -> int:
     """`xo create space NAME`: the folder it runs in becomes space NAME, a git repository with one
-    branch per folder here, pushed to github.com/OWNER/NAME (see xo/spacerepo.py). It asks first,
-    showing every folder; then the space is recorded in your spaces too."""
+    branch per git repository here, pushed to github.com/OWNER/NAME (see xo/spacerepo.py). It asks first,
+    showing every repository; then the space is recorded in your spaces too."""
     if not names.space_ok(args.space_name) or args.space_name.lower().endswith(".git"):
         raise XoError(names.SPACE_RULE)
     name = args.space_name.lower()
@@ -1495,7 +1495,7 @@ def main(argv: list[str] | None = None) -> int:
     mp.set_defaults(run=_create_project)
     ms = mksub.add_parser("space", parents=[common], usage="xo create space [-h] NAME [--owner OWNER] [--yes] | NAME KIND [flags]",
                           help="create a space and record it in your spaces: on XO with xo create space NAME KIND, "
-                               "or this folder, one branch per subfolder on GitHub, with xo create space NAME")
+                               "or this folder, one branch per git repo in it on GitHub, with xo create space NAME")
     ms.add_argument("space_name", metavar="NAME", help=names.XO_NAME_RULE + "; with no KIND, " + names.SPACE_RULE)
     ms.add_argument("--owner", help="with no KIND: the GitHub user or organization the space's repository is under "
                                     "(default: your gh login)")
