@@ -73,7 +73,7 @@ _KEYS = (".ssh", ".aws", ".gnupg", ".kube", ".docker", ".azure", ".password-stor
 _SETTINGS = ("Library", "AppData")
 _BRANCH = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")  # one part of a branch name (a folder's name)
 _DEPTH = 6  # how deep xo looks for git repositories
-_SKIP = ("node_modules",)  # folders never looked into for git repositories
+_SKIP = ("node_modules", "venv", "__pycache__")  # folders never looked into for git repositories
 _IDENTITY = ["-c", "user.name=xo", "-c", "user.email=xo@localhost", "-c", "commit.gpgsign=false",
              "-c", f"core.hooksPath={os.devnull}"]
 
@@ -190,7 +190,12 @@ def _branch_ok(branch: str) -> bool:
     """A branch name xo makes: each part a folder name git and GitHub both take."""
     return all(_BRANCH.fullmatch(part) and ".." not in part and part.upper() != "HEAD"
                and not part.endswith(("_HEAD", ".lock", ".")) for part in branch.split("/")) and \
-        branch.casefold() != MAIN and len(branch) <= 200
+        branch.split("/")[0].casefold() != MAIN and len(branch) <= 200
+
+
+def _inside(a: str, b: str) -> bool:
+    """Whether branch b sits inside branch a's name (a/...), in any case: git cannot hold both."""
+    return b.casefold().startswith(a.casefold() + "/")
 
 
 def folders(here: Path, probe: _HereIgnore | None = None) -> tuple[dict[str, Path], list[str]]:
@@ -217,7 +222,8 @@ def folders(here: Path, probe: _HereIgnore | None = None) -> tuple[dict[str, Pat
     bad = [b for b in found if not _branch_ok(b)]
     if bad:
         raise XoError("these git repositories cannot be branch names (each folder name letters, digits, . _ -, "
-                      f"starting with a letter or digit, no .., and not {MAIN} or HEAD): " + ", ".join(bad) +
+                      f"starting with a letter or digit, no .., not HEAD, and not {MAIN} or in a folder {MAIN}): "
+                      + ", ".join(bad) +
                       "; rename them or run elsewhere")
     seen: dict[str, str] = {}
     for b in found:
@@ -225,6 +231,10 @@ def folders(here: Path, probe: _HereIgnore | None = None) -> tuple[dict[str, Pat
             raise XoError(f"{seen[b.casefold()]} and {b} differ only in case, which GitHub cannot keep "
                           "apart as branches; rename one")
         seen[b.casefold()] = b
+    inside = sorted(f"{a} and {b}" for a in found for b in found if _inside(a, b))
+    if inside:
+        raise XoError("one git repository's branch would sit inside another's name, which git cannot hold (the "
+                      "folders differ only in case): " + ", ".join(inside) + "; rename one")
     return found, skipped
 
 
@@ -549,21 +559,24 @@ def build(here: Path, name: str, owner: str, chosen: dict[str, Path], probe: _He
     if clash:
         raise XoError("these repositories differ only in case from a branch the space already has: " +
                       ", ".join(clash.values()) + "; GitHub cannot keep them apart, so rename the folder back")
-    nested = sorted(f"{o} and {n}" for o in old for n in trees if o != n and
-                    (n.casefold().startswith(o.casefold() + "/") or o.casefold().startswith(n.casefold() + "/")))
-    if nested:
-        raise XoError("a branch cannot sit inside another branch's name, as these would: " + ", ".join(nested) +
-                      "; the space already has the first, so move or rename the repository")
-    branches = {}
-    for branch in chosen:
-        sha = _commit(space, branch, trees[branch], f"{branch}: files as of xo create space {name}")
-        branches[branch] = _entry(space, sha)
-    for gone in sorted(set(old) - set(branches), key=str.casefold):
+    kept = {}
+    for gone in sorted(set(old) - set(trees), key=str.casefold):
         base = _tip(space, f"refs/remotes/origin/{gone}") if _branch_ok(gone) else None
         if base is None:  # never pushed, or not on GitHub now: it goes nowhere
             space.git("update-ref", "-d", f"refs/heads/{gone}", check=False)
             _say(f"{gone}: no such git repository here now, and GitHub does not have its branch; left out")
             continue
+        kept[gone] = base
+    nested = sorted(f"{o} and {n}" for o in kept for n in trees if _inside(o, n) or _inside(n, o))
+    if nested:
+        raise XoError("a branch cannot sit inside another branch's name, as these would: " + ", ".join(nested) +
+                      "; GitHub has the first and xo deletes nothing, so delete that branch on GitHub (or move "
+                      "the repository), then run again. Nothing was pushed")
+    branches = {}
+    for branch in chosen:
+        sha = _commit(space, branch, trees[branch], f"{branch}: files as of xo create space {name}")
+        branches[branch] = _entry(space, sha)
+    for gone, base in kept.items():
         space.git("update-ref", f"refs/heads/{gone}", base)
         _say(f"{gone}: no such git repository here now; its branch is kept as GitHub has it")
         branches[gone] = _entry(space, base)
@@ -654,8 +667,9 @@ def create(here: Path, name: str, owner: str, ask: Callable[[str], bool], wait: 
              f"of github.com/{owner}/{name} (its files as they are now, not its history), and main lists them.\n"
              + "\n".join(lines) + "\n"
              + (f"  Left out by ./.gitignore: {', '.join(skipped)}.\n" if skipped else "")
-             + "  Folders that are not git repositories (and hold none), files outside the repositories and hidden "
-             "folders are not part of the space. Each repository's .gitignore (and this folder's) is followed; .env "
+             + "  Folders that are not git repositories (and hold none), files outside the repositories, hidden "
+             f"folders, node_modules and venv, and repositories more than {_DEPTH} folders down are not part of the "
+             "space. Each repository's .gitignore (and this folder's) is followed; .env "
              "files, keys, credential stores, repositories inside a repository and .github/workflows are left out, "
              "and a file that looks like it holds a key, token or password stops it before anything is pushed. xo "
              "cannot find every secret (one in an archive, say), so look through these repositories first. "

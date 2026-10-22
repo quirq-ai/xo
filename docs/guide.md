@@ -133,7 +133,8 @@ xo sync project:headscale                        # git pull --rebase, then push
     nothing). Each git repository under that folder becomes a branch named by its path (`api`, or
     `work/api` for one inside a plain folder `work`), holding its files as they are now, not its
     history. Folders that are not git repositories and hold none, files outside the repositories,
-    hidden folders and `node_modules` are not included. It lists each repository with its size
+    hidden folders, `node_modules`, `venv` and repositories more than 6 folders down are not
+    included, and a repository in a folder called `main` is refused. It lists each repository with its size
     and asks first (`--yes` skips the question, and then pushes without asking when the
     repository is already there); say no and run it inside the folder that holds the
     repositories you mean. It makes `./.git` (bare, so nothing here is checked out or changed;

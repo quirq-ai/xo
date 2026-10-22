@@ -431,5 +431,35 @@ def test_a_repository_inside_a_gone_branch_name_is_refused(here):
     import shutil
     shutil.rmtree("gamma")
     _repo("gamma/api")
-    with pytest.raises(XoError, match="cannot sit inside another branch's name.*gamma and gamma/api"):
+    with pytest.raises(XoError, match="cannot sit inside another branch's name.*gamma and gamma/api.*delete that "
+                                      "branch on GitHub"):
+        _make()
+
+
+@pytest.mark.parametrize("repo", ["main/y", "Main/y"])
+def test_a_repository_in_a_folder_called_main_is_refused(here, repo):
+    _repo(repo)
+    with pytest.raises(XoError, match="cannot be branch names"):
+        _make()
+    assert not Path(".git").exists()
+
+
+def test_a_branch_never_pushed_does_not_block_one_inside_its_name(here):
+    (here.root / "me/myspace").rename(here.root / "me/later")
+    assert _make(wait=lambda q: False)["pushed"] is False  # gamma made here, never pushed
+    import shutil
+    shutil.rmtree("gamma")
+    _repo("gamma/api")
+    Path("gamma/api/a.txt").write_text("a\n")
+    (here.root / "me/later").rename(here.root / "me/myspace")
+    out = _make()
+    assert out["pushed"] is True and "gamma/api" in out["branches"] and "gamma" not in out["branches"]
+
+
+def test_repositories_whose_names_nest_but_for_case_are_refused(here):
+    _repo("Gamma2")
+    _repo("gamma2/api")
+    if not Path("Gamma2").exists() or Path("GAMMA2").exists():
+        pytest.skip("this filesystem ignores case")
+    with pytest.raises(XoError, match="sit inside another's name.*Gamma2 and gamma2/api"):
         _make()
