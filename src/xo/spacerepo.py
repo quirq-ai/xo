@@ -907,14 +907,23 @@ def create(here: Path, name: str, owner: str, ask: Callable[[str], bool], wait: 
     is not there yet is made first (an empty space: its index lists no branches until git repositories
     are put in it), and taken away again, still empty, if anything stops before the space is built."""
     here = here.absolute()  # git runs in it and in its repositories, each given as a path
-    new = not here.exists()
+    new = not (here.exists() or here.is_symlink())
     if new:
-        here.mkdir()
+        try:
+            os.mkdir(here)  # never through a link put there since: that would make a space of its target
+        except OSError as e:
+            raise XoError(f"could not make the folder {here}: {e.strerror or e}") from None
+    elif not here.is_dir():
+        raise XoError(f"{here} is not a folder (a file, or a link to nothing); xo create space makes a folder a space")
     try:
         return _create(here, name, owner, ask, wait, repo, new)
     except BaseException:
-        if new and here.is_dir() and not any(here.iterdir()):
-            here.rmdir()  # xo has no delete, so it leaves nothing behind
+        if new:
+            try:
+                if not here.is_symlink() and here.is_dir() and not any(here.iterdir()):
+                    here.rmdir()  # xo has no delete, so it leaves nothing behind
+            except OSError:
+                pass  # what stopped the run is the error to show, not this
         raise
 
 
@@ -928,7 +937,9 @@ def _create(here: Path, name: str, owner: str, ask: Callable[[str], bool], wait:
     probe = _HereIgnore(here)
     try:
         chosen, skipped = folders(here, probe)
-        if not chosen and not new:
+        # An empty space (made with a new folder, then stopped at the GitHub step) can be run again as it is.
+        empty = new or (Space(here).ours() and not _old_branches(Space(here)))
+        if not chosen and not empty:
             raise XoError(f"{here.resolve()} has no git repositories in it to make branches of; run xo create space "
                           "inside the folder that holds them")
         now = heads(owner, repo)
@@ -937,9 +948,10 @@ def _create(here: Path, name: str, owner: str, ask: Callable[[str], bool], wait:
         where = (f"./.git is already a git repository, so xo adds the space to it: one branch per repository, and "
                  f"the index on branch {ATTACHED_INDEX} (your branches, files and staged changes are not touched)"
                  if attached else "each git repository here becomes its own branch of a new ./.git, and main lists them")
-        if new:
-            where = ("there is no such folder yet, so xo makes it, with a new ./.git whose main lists no branches "
-                     "yet (put git repositories in it and run xo create space again in it to add them)")
+        if not chosen:
+            where = ("there is no such folder yet, so xo makes it, with a new ./.git whose main lists no branches"
+                     if new else "it has no git repositories in it yet, so main lists no branches")
+            where += " yet (put git repositories in it and run xo create space again in it to add them)"
         _say(f"xo create space {name} makes {here.resolve()} a space on github.com/{gh}: {where}. A branch holds "
              "the repository's files as they are now, not its history.\n"
              + "\n".join(lines) + "\n"

@@ -832,7 +832,7 @@ def _create_local_space(args: argparse.Namespace) -> int:
         if name == (spacerepo.existing_name(Path(".")) or "").lower():
             raise XoError(f"there is no folder ./{given} here, and this folder is already space {name}: run xo create "
                           "space with no NAME to update it")
-        # Otherwise ./NAME is made, after you say yes (spacerepo.create).
+        # Otherwise spacerepo.create makes ./NAME, and takes it away again if you say no or anything stops.
     origin = spacerepo.attached_origin(here)
     owner, repo = args.owner, None
     if origin is not None:
