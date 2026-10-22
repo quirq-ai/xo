@@ -827,12 +827,12 @@ def _create_local_space(args: argparse.Namespace) -> int:
     if name != given:
         print(f"xo: space names are lowercase, as on XO and GitHub, so this space is {name}", file=sys.stderr)
     if args.space_name is not None and not here.is_dir():
-        if name in ((spacerepo.existing_name(Path(".")) or "").lower(), Path.cwd().name.lower()):
-            raise XoError(f"there is no folder ./{given} here, and this folder is {name}: run xo create space with no "
-                          "NAME to make this folder the space")
-        raise XoError(f"there is no folder ./{given} here; xo create space NAME makes the folder ./NAME a space, so "
-                      "make it (with the space's git repositories in it) or run xo create space with no NAME inside "
-                      "the folder that holds them")
+        if here.exists() or here.is_symlink():
+            raise XoError(f"./{given} is a file, not a folder; xo create space NAME makes the folder ./NAME a space")
+        if name == (spacerepo.existing_name(Path(".")) or "").lower():
+            raise XoError(f"there is no folder ./{given} here, and this folder is already space {name}: run xo create "
+                          "space with no NAME to update it")
+        # Otherwise ./NAME is made, after you say yes (spacerepo.create).
     origin = spacerepo.attached_origin(here)
     owner, repo = args.owner, None
     if origin is not None:

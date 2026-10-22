@@ -131,7 +131,8 @@ xo sync project:headscale                        # git pull --rebase, then push
     xo server.
   - `xo create space` with no NAME and no KIND makes the folder you run it in the space, named
     after that folder (or the name its space already has); `xo create space NAME` makes the folder
-    `./NAME` the space (there must be one). Either way it publishes
+    `./NAME` the space, making the folder when it is not there (an empty space until you put git
+    repositories in it and run it again there). Either way it publishes
     it: the repository is public, anyone can read it, and what is pushed stays public (xo deletes
     nothing). Each git repository under that folder becomes a branch named by its path (`api`, or
     `work/api` for one inside a plain folder `work`), holding its files as they are now, not its

@@ -903,8 +903,23 @@ def push(here: Path, owner: str, name: str, refs: dict[str, str]) -> None:
 def create(here: Path, name: str, owner: str, ask: Callable[[str], bool], wait: Callable[[str], bool],
            repo: str | None = None) -> dict:
     """The whole command after the name checks: refuse, show, ask, build, then push. repo: the GitHub
-    repository's name, when an attached repository's origin names one (attached_origin)."""
+    repository's name, when an attached repository's origin names one (attached_origin). A folder that
+    is not there yet is made first (an empty space: its index lists no branches until git repositories
+    are put in it), and taken away again, still empty, if anything stops before the space is built."""
     here = here.absolute()  # git runs in it and in its repositories, each given as a path
+    new = not here.exists()
+    if new:
+        here.mkdir()
+    try:
+        return _create(here, name, owner, ask, wait, repo, new)
+    except BaseException:
+        if new and here.is_dir() and not any(here.iterdir()):
+            here.rmdir()  # xo has no delete, so it leaves nothing behind
+        raise
+
+
+def _create(here: Path, name: str, owner: str, ask: Callable[[str], bool], wait: Callable[[str], bool],
+            repo: str | None, new: bool) -> dict:
     refuse_here(here)
     from_origin = repo is not None
     repo = repo or name
@@ -913,7 +928,7 @@ def create(here: Path, name: str, owner: str, ask: Callable[[str], bool], wait: 
     probe = _HereIgnore(here)
     try:
         chosen, skipped = folders(here, probe)
-        if not chosen:
+        if not chosen and not new:
             raise XoError(f"{here.resolve()} has no git repositories in it to make branches of; run xo create space "
                           "inside the folder that holds them")
         now = heads(owner, repo)
@@ -922,6 +937,9 @@ def create(here: Path, name: str, owner: str, ask: Callable[[str], bool], wait: 
         where = (f"./.git is already a git repository, so xo adds the space to it: one branch per repository, and "
                  f"the index on branch {ATTACHED_INDEX} (your branches, files and staged changes are not touched)"
                  if attached else "each git repository here becomes its own branch of a new ./.git, and main lists them")
+        if new:
+            where = ("there is no such folder yet, so xo makes it, with a new ./.git whose main lists no branches "
+                     "yet (put git repositories in it and run xo create space again in it to add them)")
         _say(f"xo create space {name} makes {here.resolve()} a space on github.com/{gh}: {where}. A branch holds "
              "the repository's files as they are now, not its history.\n"
              + "\n".join(lines) + "\n"

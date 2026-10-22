@@ -761,3 +761,10 @@ def test_repositories_whose_names_nest_but_for_case_are_refused(here):
         pytest.skip("this filesystem ignores case")
     with pytest.raises(XoError, match="sit inside another's name.*Gamma2 and gamma2/api"):
         _make()
+
+
+def test_a_new_folder_xo_made_is_taken_away_when_it_is_refused(here):
+    git("init", "-q", ".")
+    with pytest.raises(XoError, match="inside the git repository"):
+        spacerepo.create(Path("new"), "new", "me", ask=lambda q: True, wait=lambda q: True)
+    assert not Path("new").exists()
