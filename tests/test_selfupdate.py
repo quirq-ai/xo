@@ -191,21 +191,56 @@ def test_serve_never_updates(auto, monkeypatch):
         pass
 
 
-@pytest.mark.skipif(os.name != "nt", reason="the running xo.exe is only locked on Windows")
-def test_windows_moves_xo_exe_aside(monkeypatch, tmp_path):
-    exe = tmp_path / "xo.exe"
-    exe.write_text("old")
-    monkeypatch.setattr(selfupdate, "_scripts", lambda: tmp_path)
+def test_windows_defers_the_update_until_xo_exits(auto, monkeypatch, capsys):
+    """A running xo.exe cannot be replaced: a detached helper updates later, and this xo runs."""
+    monkeypatch.setattr(selfupdate, "WINDOWS", True)
+    deferred = []
+    monkeypatch.setattr(selfupdate, "_defer", lambda pin, marker: deferred.append((pin, marker)))
+    state(pin=B, pin_at=time.time() + 5, checked=time.time(), pending=B, pending_at=time.time() - 2 * 3600)
+    assert selfupdate.before(["list"]) is None
+    assert deferred == [(B, A)] and auto["installed"] == [] and auto["rerun"] == []
+    assert "once this command ends" in capsys.readouterr().err
+    state(pin=B, pin_at=time.time() + 5, checked=time.time(), pending=B, pending_at=time.time())
+    assert selfupdate.before(["list"]) is None
+    assert len(deferred) == 1, "one helper per pin within the hour"
 
-    def run(cmd, **kwargs):
-        assert not exe.exists(), "xo.exe must be moved aside before pip writes it"
-        exe.write_text("new")
-        return subprocess.CompletedProcess(cmd, 0, "", "")
-    monkeypatch.setattr(selfupdate.subprocess, "run", run)
-    assert selfupdate.install(B)
-    assert exe.read_text() == "new"
-    selfupdate._clean_old()
-    assert list(tmp_path.glob("xo.exe.*.old")) == []
+
+def test_the_helper_waits_for_xo_exe_then_updates(auto, monkeypatch, tmp_path):
+    monkeypatch.setattr(selfupdate, "_scripts", lambda: tmp_path)
+    frees = iter([False, False, True])
+    monkeypatch.setattr(selfupdate, "_exe_free", lambda exe: next(frees))
+    monkeypatch.setattr(selfupdate.time, "sleep", lambda s: None)
+    assert selfupdate.install_when_free(B, A) == 0
+    assert auto["installed"] == [B] and selfupdate.marker_path().read_text().strip() == B
+
+
+def test_the_helper_leaves_a_changed_xo_and_gives_up_in_time(auto, monkeypatch, tmp_path):
+    monkeypatch.setattr(selfupdate, "_scripts", lambda: tmp_path)
+    monkeypatch.setattr(selfupdate, "_exe_free", lambda exe: True)
+    assert selfupdate.install_when_free(B, "d" * 40) == 0 and auto["installed"] == []
+    monkeypatch.setattr(selfupdate, "_exe_free", lambda exe: False)
+    monkeypatch.setattr(selfupdate.time, "sleep", lambda s: None)
+    assert selfupdate.install_when_free(B, A, wait=0) == 1 and auto["installed"] == []
+    assert json.loads(selfupdate.state_path().read_text())["failed"] == B
+
+
+def test_the_helper_takes_only_full_commits():
+    assert selfupdate._main(["--install", "x", "--from", A]) == 0  # not an install: falls back to the check
+
+
+@pytest.mark.skipif(os.name != "nt", reason="only Windows locks a running .exe")
+def test_exe_free_sees_a_running_exe(tmp_path):
+    import shutil
+    exe = tmp_path / "busy.exe"
+    shutil.copy(os.path.join(os.environ["SystemRoot"], "System32", "PING.EXE"), exe)
+    p = subprocess.Popen([str(exe), "-n", "30", "127.0.0.1"], stdout=subprocess.DEVNULL)
+    try:
+        time.sleep(1)
+        assert not selfupdate._exe_free(exe)
+    finally:
+        p.kill()
+        p.wait()
+    assert selfupdate._exe_free(exe)
 
 
 def test_one_update_at_a_time(auto):

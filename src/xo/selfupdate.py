@@ -5,6 +5,8 @@ to xo login's key), which holds the one commit setup installed. Then, before a c
 
 - When an earlier check found a newer reviewed commit, xo updates to it first (the same
   `pip install --force-reinstall --no-deps` setup runs), then runs the command on the new xo.
+  On Windows a running xo.exe cannot be replaced, so a detached helper updates as soon as no
+  xo runs, and the next xo uses it.
 - At most once a day it starts a check in the background: a detached process reads setup's
   pins.json and records the commit. The command never waits on the network, so it works offline.
 
@@ -42,6 +44,8 @@ DAY = 24 * 3600
 RETRY = 3600  # after a check or an update that failed
 CHECK_TIMEOUT = 10.0  # in the background only: no command waits for it
 PIP_TIMEOUT = 300.0
+WINDOWS = os.name == "nt"
+WAIT_FREE = 1800.0  # Windows: how long the helper waits for running xos to exit
 RAN_ENV = "XO_AUTO_UPDATE_RAN"  # set on the re-run after an update, so it never loops
 MAX_LOG = 64 * 1024
 
@@ -212,30 +216,8 @@ def _scripts() -> Path:
     return Path(sys.executable).parent
 
 
-def _clean_old() -> None:
-    """Delete the xo.exe copies an earlier update moved aside (Windows only; one still running stays)."""
-    if os.name != "nt":
-        return
-    for old in _scripts().glob("xo.exe.*.old"):
-        try:
-            old.unlink()
-        except OSError:
-            pass
-
-
 def install(pin: str) -> bool:
-    """pip-install xo at `pin` into this venv. On Windows the running xo.exe cannot be overwritten
-    but can be renamed, so it is moved aside first and put back if pip fails."""
-    exe = _scripts() / "xo.exe"
-    aside = exe.with_name(f"xo.exe.{os.getpid()}.old")
-    moved = False
-    if os.name == "nt" and exe.exists():
-        try:
-            os.replace(exe, aside)
-            moved = True
-        except OSError as e:
-            _log(f"update to {pin}: could not move xo.exe aside: {e}")
-            return False
+    """pip-install xo at `pin` into this venv: setup's own Update command."""
     cmd = [sys.executable, "-I", "-m", "pip", "install", "--force-reinstall", "--no-deps", "--quiet",
            "--disable-pip-version-check", f"{DIST} @ git+{REPO}@{pin}"]
     try:
@@ -244,13 +226,71 @@ def install(pin: str) -> bool:
         ok, detail = done.returncode == 0, (done.stderr or done.stdout).strip()[-2000:]
     except (OSError, subprocess.TimeoutExpired) as e:
         ok, detail = False, str(e)
-    if not ok and moved and not exe.exists():
-        try:
-            os.replace(aside, exe)
-        except OSError:
-            pass
     _log(f"update to {pin}: {'done' if ok else 'failed'}" + (f"\n{detail}" if detail and not ok else ""))
     return ok
+
+
+def _apply(pin: str) -> bool:
+    """install(pin), then record it: the marker on success (best-effort), the failure otherwise."""
+    ok = install(pin)
+    if ok:
+        try:
+            _write(marker_path(), pin + "\n")
+        except OSError as e:
+            # xo is updated either way; only auto-update stops until setup's next Update.
+            _log(f"updated to {pin}, but could not write {marker_path()}: {e}")
+    state = _read_state()
+    state.pop("pending", None)
+    if ok:
+        state.pop("failed", None)
+        state.pop("failed_at", None)
+    else:
+        state["failed"], state["failed_at"] = pin, time.time()
+    _save_state(state)
+    return ok
+
+
+def _exe_free(exe: Path) -> bool:
+    """Whether Windows would let pip replace xo.exe: no running xo holds it open."""
+    try:
+        with open(exe, "r+b"):
+            return True
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+
+
+def _defer(pin: str, marker: str) -> None:
+    """Windows: a running xo.exe cannot be replaced, so a detached helper updates once every xo has
+    exited, and the next xo uses it."""
+    state = _read_state()
+    state["pending"], state["pending_at"] = pin, time.time()
+    _save_state(state)
+    flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+    subprocess.Popen([sys.executable, "-I", "-m", "xo.selfupdate", "--install", pin, "--from", marker],
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     close_fds=True, creationflags=flags, cwd=state_path().parent)
+
+
+def install_when_free(pin: str, was: str, wait: float = WAIT_FREE) -> int:
+    """The Windows helper: wait until no xo.exe runs, then update, if xo is still at `was`."""
+    exe = _scripts() / "xo.exe"
+    end = time.time() + wait
+    while not _exe_free(exe):
+        if time.time() > end:
+            _log(f"update to {pin}: xo.exe stayed in use for {int(wait)} s; will try again later")
+            state = _read_state()
+            state.pop("pending", None)
+            state["failed"], state["failed_at"] = pin, time.time()
+            _save_state(state)
+            return 1
+        time.sleep(2)
+    with _locked() as mine:
+        if not mine or installed_commit() != was:
+            _log(f"update to {pin}: skipped, another update ran or xo changed meanwhile")
+            return 0
+        return 0 if _apply(pin) else 1
 
 
 def _rerun(argv: list[str]) -> int:
@@ -278,7 +318,6 @@ def before(argv: list[str]) -> int | None:
         return None
     marker, written = found
     try:
-        _clean_old()
         if installed_commit() != marker:
             return None  # installed another way since setup: leave it until setup's Update
         state = _read_state()
@@ -286,32 +325,24 @@ def before(argv: list[str]) -> int | None:
         failed_at = _number(state.get("failed_at"))
         # Only a pin read after the marker was written: an older one may be behind what setup installed since.
         if (isinstance(pin, str) and COMMIT.fullmatch(pin) and pin != marker and _number(state.get("pin_at")) > written
-                and not (state.get("failed") == pin and time.time() - failed_at < RETRY)):
+                and not (state.get("failed") == pin and time.time() - failed_at < RETRY)
+                and not (state.get("pending") == pin and time.time() - _number(state.get("pending_at")) < RETRY)):
             with _locked() as mine:
                 now = installed_commit() if mine else None
                 if now == pin:
                     ok = True  # another xo updated it since this one started
+                elif now == marker and WINDOWS:
+                    _defer(pin, marker)
+                    print(f"xo: updating to {pin[:7]}, setup's newest reviewed xo, once this command ends "
+                          "(Windows cannot replace a running xo); the next xo uses it", file=sys.stderr)
+                    ok = False
                 elif now == marker:
                     print(f"xo: updating to {pin[:7]}, setup's newest reviewed xo (auto-update is on)",
                           file=sys.stderr)
-                    if install(pin):
-                        try:
-                            _write(marker_path(), pin + "\n")
-                        except OSError as e:
-                            # xo is updated either way; only auto-update stops until setup's next Update.
-                            _log(f"updated to {pin}, but could not write {marker_path()}: {e}")
-                        state = _read_state()
-                        state.pop("failed", None)
-                        state.pop("failed_at", None)
-                        _save_state(state)
-                        ok = True
-                    else:
-                        state = _read_state()
-                        state["failed"], state["failed_at"] = pin, time.time()
-                        _save_state(state)
+                    ok = _apply(pin)
+                    if not ok:
                         print(f"xo: could not update (details in {log_path()}); running this xo, "
                               "will try again in an hour", file=sys.stderr)
-                        ok = False
                 else:
                     ok = False  # another xo is updating (lock held) or xo changed meanwhile: run this one
             if ok:
@@ -323,5 +354,12 @@ def before(argv: list[str]) -> int | None:
     return None
 
 
+def _main(argv: list[str]) -> int:
+    """`python -m xo.selfupdate`: the daily check, or (Windows) `--install PIN --from COMMIT`."""
+    if len(argv) == 4 and argv[0] == "--install" and argv[2] == "--from" and all(COMMIT.fullmatch(a) for a in argv[1::2]):
+        return install_when_free(argv[1], argv[3])
+    return check()
+
+
 if __name__ == "__main__":
-    sys.exit(check())
+    sys.exit(_main(sys.argv[1:]))

@@ -24,8 +24,8 @@ jobs:
           xo --version
           xo --help | grep -q 'xo ops'
   windows-self-update:
-    # Auto-update on Windows (src/xo/selfupdate.py install): pip must replace xo.exe while an xo.exe
-    # is running, which Windows allows only after the running file is renamed aside.
+    # Auto-update on Windows (src/xo/selfupdate.py install_when_free): a running xo.exe cannot be
+    # replaced or renamed, so a detached helper waits until no xo runs, then updates.
     if: github.event_name == 'pull_request'
     runs-on: windows-2025
     timeout-minutes: 15
@@ -38,7 +38,7 @@ jobs:
           python-version: "3.13"
       - run: python -m pip install --quiet -e ".[test]"
       - run: python -m pytest -q -p no:cacheprovider tests/test_selfupdate.py
-      - name: a running xo.exe is replaced by an update to this PR's head
+      - name: the helper waits for a running xo.exe, then updates it
         shell: pwsh
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -48,13 +48,19 @@ jobs:
           python -m venv "$env:RUNNER_TEMP\v"
           $py = "$env:RUNNER_TEMP\v\Scripts\python.exe"
           $xo = "$env:RUNNER_TEMP\v\Scripts\xo.exe"
-          & $py -m pip install --quiet --disable-pip-version-check .
+          & $py -m pip install --quiet --disable-pip-version-check "quirq-xo @ git+https://github.com/quirq-ai/xo@$env:HEAD_SHA"
           $p = Start-Process -FilePath $xo -ArgumentList 'serve', '--port', '0' -PassThru -WindowStyle Hidden
           Start-Sleep -Seconds 5
           if ($p.HasExited) { throw 'xo serve exited, so nothing held xo.exe' }
-          & $py -c "import sys; from xo import selfupdate; sys.exit(0 if selfupdate.install(sys.argv[1]) else 1)" $env:HEAD_SHA
-          if ($LASTEXITCODE -ne 0) { Get-Content "$env:USERPROFILE\.config\xo\auto-update.log"; throw 'the update failed' }
+          $before = (Get-Item $xo).LastWriteTimeUtc
+          $h = Start-Process -FilePath $py -ArgumentList '-I', '-m', 'xo.selfupdate', '--install', $env:HEAD_SHA, '--from', $env:HEAD_SHA -PassThru -WindowStyle Hidden
+          $null = $h.Handle
+          Start-Sleep -Seconds 8
+          if ($h.HasExited) { throw 'the helper did not wait for the running xo.exe' }
+          Stop-Process -Id $p.Id
+          if (-not $h.WaitForExit(300000)) { throw 'the helper did not finish within 5 minutes' }
+          if ($h.ExitCode -ne 0) { Get-Content "$env:USERPROFILE\.config\xo\auto-update.log"; throw 'the update failed' }
+          if ((Get-Item $xo).LastWriteTimeUtc -eq $before) { throw 'xo.exe was not rewritten' }
           $v = & $xo --version
           Write-Output $v
           if ($v -ne "xo 0.1.0 ($($env:HEAD_SHA.Substring(0, 7)))") { throw "xo.exe is not the updated xo: $v" }
-          Stop-Process -Id $p.Id

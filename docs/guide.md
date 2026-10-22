@@ -30,6 +30,8 @@ once its "keep qq and xo up to date" option ships (until then nothing turns it o
 - When that check found a newer reviewed xo, the next command updates xo first (the same
   `pip install --force-reinstall --no-deps` setup runs) and then runs on the new xo. If the update
   fails, the command runs on the xo you have, and xo tries again an hour later.
+  On Windows a running `xo.exe` cannot be replaced, so the command runs on the xo you have while
+  a background helper waits for every xo to exit, then updates; the next xo uses it.
 - "Newest" is whatever setup's `main` says, so if setup moves its pin back, xo follows it back.
 - An xo installed another way (another commit by hand, or from a checkout) is never touched;
   setup's Update puts it back under auto-update. Nothing runs when `CI` is set. One update runs at
