@@ -80,8 +80,10 @@ xo create space my-cc claude-code --volume-size 20 --providers-anthropic-api-key
                                                  # my-cc on XO, recorded in your spaces as my-cc
 xo create space my-codex codex --volume-size 20
 xo create space my-ag antigravity --volume-size 20
-xo create space                                  # no NAME, no KIND: this folder as a space on GitHub, nothing on XO
-xo create space dev                              # no KIND: the folder ./dev as space dev on GitHub
+xo create space                                  # no NAME, no KIND: this folder as a space on the quirq hub
+                                                 # (on GitHub before xo login finds a hub), nothing on XO
+xo create space dev                              # no KIND: the folder ./dev as space dev, the same way
+xo create space dev --owner me                   # on github.com/me/dev, hub or not
 xo create space NAME openclaw --help             # needs a provider key and a chat-channel token
 xo create space NAME hermes --help
 xo create space NAME xo-cowork --help
@@ -154,7 +156,8 @@ xo sync project:headscale                        # git pull --rebase, then push
     `./NAME` the space, making the folder when it is not there (an empty space until you put git
     repositories in it and run it again there; if it stops at the GitHub step, run it again there
     to push it). Either way it publishes
-    it: the repository is public, anyone can read it, and what is pushed stays public (xo deletes
+    it: the repository is public (or the quirq hub's, which anyone can read, once xo login found a
+    hub: see The quirq hub below), anyone can read it, and what is pushed stays public (xo deletes
     nothing). Each git repository under that folder becomes a branch named by its path (`api`, or
     `work/api` for one inside a plain folder `work`), holding its files as they are now, not its
     history. Folders that are not git repositories and hold none, files outside the repositories,
@@ -230,11 +233,19 @@ xo sync project:headscale                        # git pull --rebase, then push
   - Anyone can read the hub in this version: what `update` and `sync` push there, commits not on
     GitHub yet included, can be read by anyone. So a project GitHub does not show to everyone (xo
     checks with no login at all) is refused before anything is sent.
-  - `sync` never rewrites a commit GitHub already has: when your branch and the hub's have both
-    moved on and yours holds commits on GitHub, it stops and asks you to merge the hub's in by hand.
+  - `sync` never rewrites a commit GitHub already has (it fetches origin first to know): when your
+    branch and the hub's have both moved on and yours holds commits on GitHub, it stops and asks you
+    to merge the hub's in by hand.
+  - `xo create space` puts a folder space on the hub too, as your agent's space NAME
+    (`quirq://hub.quirq.dev/AGENT/NAME`), made there when it is missing, with no GitHub repository
+    and no link to follow: the folder's `.git` gets a `quirq` remote (pushed by URL when the folder
+    was a git repository already, whose `origin` stays yours). Anyone can read what is pushed there.
+    `--owner OWNER` puts it on GitHub instead, and a space already on GitHub stays there (run with
+    `--owner` again or not). A name with `--` in it is refused on the hub, which keeps those for the
+    projects' copies (`OWNER--REPO`).
   - Without the hub's client, `xo login` deletes what xo saved about the hub (if anything) and
     says "skipped"; spaces then stay on GitHub alone until you install it and log in again.
-  - `project:P` commands and `xo create space` stay on GitHub. `xo logout` deletes what xo saved
+  - `project:P` commands stay on GitHub. `xo logout` deletes what xo saved
     about the hub; the hub's client keeps its own login (`spacehub auth logout`).
 - `xo share` puts an invite in the other user's `shared` list; nothing else of theirs is changed
   or shown to you. A space's local projects are left out of it.

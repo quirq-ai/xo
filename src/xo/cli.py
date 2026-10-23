@@ -844,7 +844,8 @@ def _create_space(args: argparse.Namespace) -> int:
 
 def _create_local_space(args: argparse.Namespace) -> int:
     """`xo create space [NAME]`: a folder becomes a space, a git repository with one branch per git
-    repository in it, pushed to GitHub (see xo/spacerepo.py). With no NAME it is this folder, named
+    repository in it, pushed to the quirq hub once xo login found one, else (or with --owner, or when the
+    space is on GitHub already) to GitHub (see xo/spacerepo.py). With no NAME it is this folder, named
     after itself (or the name its space already has); with NAME it is ./NAME. A .git already there is
     attached to. It asks first, showing every repository; then the space is recorded in your spaces too."""
     if args.space_name is None:
@@ -871,9 +872,17 @@ def _create_local_space(args: argparse.Namespace) -> int:
             raise XoError(f"there is no folder ./{given} here, and this folder is already space {name}: run xo create "
                           "space with no NAME to update it")
         # Otherwise spacerepo.create makes ./NAME, and takes it away again if you say no or anything stops.
-    origin = spacerepo.attached_origin(here)
+    hub, was = quirq.settings(), spacerepo.published(here)
+    if args.owner is not None or "github" in was:
+        hub = None  # --owner says GitHub, and a space on GitHub already stays there
+    quirq.ready(hub)
+    origin = None if hub else spacerepo.attached_origin(here)
     owner, repo = args.owner, None
-    if origin is not None:
+    if owner is None and "/" in was.get("github", ""):
+        owner = was["github"].split("/")[0]  # the GitHub owner it was put under
+    if hub is not None:
+        pass  # ./.git's origin, if any, is yours and left as it is
+    elif origin is not None:
         if owner is not None and owner.casefold() != origin[0].casefold():
             raise XoError(f"{here.resolve()}/.git's origin is github.com/{origin[0]}/{origin[1]}, not one of "
                           f"{owner}'s; leave out --owner, or point origin elsewhere")
@@ -887,8 +896,8 @@ def _create_local_space(args: argparse.Namespace) -> int:
                           "whose it is with --owner OWNER")
     elif not names.github_owner_ok(owner):
         raise XoError("--owner is a GitHub user or organization name")
-    made = spacerepo.create(here, name, owner, ask=lambda q: args.yes or _ask(q), wait=_wait, repo=repo)
-    if made.get("pushed"):  # only a space that is on GitHub goes in your spaces (xo has no delete)
+    made = spacerepo.create(here, name, owner, ask=lambda q: args.yes or _ask(q), wait=_wait, repo=repo, hub=hub)
+    if made.get("pushed"):  # only a space that is pushed goes in your spaces (xo has no delete)
         try:
             client = _client(args, server=True)
             _post_server(client, "/me/spaces/connect", {"name": name})
@@ -1591,18 +1600,19 @@ def main(argv: list[str] | None = None) -> int:
     mp.set_defaults(run=_create_project)
     ms = mksub.add_parser("space", parents=[common], usage="xo create space [-h] [NAME] [--owner OWNER] [--yes] | NAME KIND [flags]",
                           help="create a space and record it in your spaces: on XO with xo create space NAME KIND, "
-                               "or a folder, one branch per git repo in it on GitHub, with xo create space [NAME]")
+                               "or a folder, one branch per git repo in it on the quirq hub (on GitHub before xo login finds a hub, "
+                               "or with --owner), with xo create space [NAME]")
     ms.add_argument("space_name", metavar="NAME", nargs="?",
                     help=names.XO_NAME_RULE + "; with no KIND, " + names.SPACE_RULE + ", and the folder ./NAME is "
                          "the space (with no NAME, this folder is, named after itself)")
-    ms.add_argument("--owner", help="with no KIND: the GitHub user or organization the space's repository is under "
-                                    "(default: your gh login)")
+    ms.add_argument("--owner", help="with no KIND: put the space on GitHub, not the quirq hub, under this GitHub user or "
+                                    "organization (with no hub, the default is your gh login)")
     ms.add_argument("--yes", action="store_true", help="with no KIND: make the space and push it (public) without "
                                                          "asking")
     ms.set_defaults(run=_create_space)
     space_kinds = ms.add_subparsers(dest="kind", required=False, metavar="KIND", action=_KindOrName,
                                     help="the kind of space XO makes; leave it out to make a folder the space, on "
-                                         "GitHub")
+                                         "the quirq hub (or GitHub)")
     cn = sub.add_parser("connect", parents=[common],
                         help="set a project's ref in one of your spaces, give a project its repo, or make a new "
                              "space entry")

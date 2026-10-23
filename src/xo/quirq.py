@@ -62,7 +62,11 @@ class Hub:
 
     def url(self, project: str) -> str:
         """The quirq URL of project's copy on this hub: a space of the agent's own, OWNER--REPO."""
-        return f"{SCHEME}://{self.host}/{self.agent}/{name(project)}"
+        return self.space_url(name(project))
+
+    def space_url(self, space: str) -> str:
+        """The quirq URL of the agent's hub space called space (a folder space of xo create space)."""
+        return f"{SCHEME}://{self.host}/{self.agent}/{space}"
 
 
 def name(project: str) -> str:
@@ -181,8 +185,13 @@ def link(hub: Hub, token: str) -> None:
 
 def create(hub: Hub, project: str) -> None:
     """Make the agent's space for project on the hub; one that is already there is left as it is."""
+    make(hub, name(project), f"xo: a copy of github.com/{project}")
+
+
+def make(hub: Hub, space: str, description: str) -> None:
+    """Make the agent's hub space called space; one that is already there is left as it is."""
     try:
-        _client(hub, "space", "create", name(project), "-d", f"xo: a copy of github.com/{project}")
+        _client(hub, "space", "create", space, "-d", description)
     except XoError as e:
         if "already exists" not in getattr(e, "detail", ""):
             raise
