@@ -109,7 +109,7 @@ def test_sync_stops_when_both_changed_one_project(space):
     _stored(space).update(rev=4, projects=[{"o/a": "other"}, {"o/b": "v1"}, {"notes": "main"}])
     git("fetch", "-q", cwd="dev/a")
     git("switch", "-q", "feature", cwd="dev/a")
-    with pytest.raises(XoError, match="both you and the space changed o/a.*./dev/a were rebased and pushed"):
+    with pytest.raises(XoError, match="both you and the space changed o/a.*No checkout was moved"):
         workspace.sync(space.client, "space", "dev")
     assert space.store.patches == [] and git("branch", "--show-current", cwd="dev/a") == "feature"
 
@@ -413,7 +413,7 @@ def test_sync_stops_when_the_space_went_back_to_an_older_rev(space):
     # A stale writer put rev 1 back, and someone may have recorded on top of it: neither side wins.
     _stored(space).update(rev=1, projects=[{"o/a": "main"}, {"o/b": "v1"}, {"notes": "main"}])
     patches = len(space.store.patches)
-    with pytest.raises(XoError, match="went back to rev 1 from your rev 2.*o/a.*./dev/a were rebased and pushed.*nothing was recorded"):
+    with pytest.raises(XoError, match="went back to rev 1 from your rev 2.*o/a.*nothing was recorded"):
         workspace.sync(space.client, "space", "dev")
     assert git("branch", "--show-current", cwd="dev/a") == "feature" and len(space.store.patches) == patches
 

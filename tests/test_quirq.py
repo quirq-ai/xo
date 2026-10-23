@@ -1,0 +1,222 @@
+"""A space's GitHub projects through the quirq hub: xo login finds the hub, install adds the quirq
+remote, update and sync push to and rebase on the hub and never on GitHub. SYNTHETIC: the hub here is
+bare repositories over file:// standing in for quirq://hub.quirq.dev/AGENT/OWNER--REPO (git-remote-quirq
+is space-hub's, not tested here)."""
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+
+import pytest
+
+from conftest import KEY, git
+from test_cli import core, login, run, xs  # noqa: F401 - fixtures
+from test_workspace import _stored, space  # noqa: F401 - fixtures
+from xo import gitops, quirq, spacerepo, workspace
+from xo.client import XoError
+
+TOKEN = "hub_token_never_printed"
+
+
+@pytest.fixture
+def hub(space, tmp_path, monkeypatch):  # noqa: F811
+    """xo login found the hub at https://hub.quirq.dev as agent alice; its copies are bare repos."""
+    root = tmp_path / "quirqhub"
+    root.mkdir()
+    made: list[str] = []
+    monkeypatch.setattr(quirq, "installed", lambda: True)
+    monkeypatch.setattr(quirq.Hub, "url", lambda self, project: f"file://{root}/{quirq.name(project)}.git")
+
+    def create(hub, project):
+        made.append(project)
+        git("init", "-q", "--bare", str(root / f"{quirq.name(project)}.git"))
+    monkeypatch.setattr(quirq, "create", create)
+    quirq.save(quirq.Hub("https://hub.quirq.dev", "alice"))
+    space.made, space.quirq_root = made, root
+    return space
+
+
+def _on_github(space, project, ref):
+    return git("rev-parse", "--verify", "--quiet", ref, cwd=space.hub.root / project)
+
+
+def test_a_hub_url_is_always_a_quirq_url_named_after_the_agent_and_repo():
+    h = quirq.Hub("https://hub.quirq.dev", "alice")
+    assert h.url("juanfont/headscale") == "quirq://hub.quirq.dev/alice/juanfont--headscale"
+    assert h.websocket == "wss://hub.quirq.dev"
+    with pytest.raises(XoError, match="no GitHub repo"):
+        h.url("notes")
+    with pytest.raises(XoError):
+        quirq.parse("http://hub.quirq.dev", "alice")
+    with pytest.raises(XoError):
+        quirq.parse("https://hub.quirq.dev/x", "alice")
+    with pytest.raises(XoError):
+        quirq.parse("https://hub.quirq.dev", "Al ice")
+
+
+def test_update_pushes_new_work_to_the_hub_and_never_to_github(hub):
+    workspace.install(hub.client, "space", "dev")
+    assert git("remote", "get-url", "quirq", cwd="dev/a").startswith("file://")
+    git("switch", "-q", "-c", "feature", cwd="dev/a")
+    Path("dev/a/README").write_text("agent work\n")
+    git("commit", "-q", "-am", "agent work", cwd="dev/a")
+    mine = git("rev-parse", "HEAD", cwd="dev/a")
+    out = workspace.update(hub.client, "space", "dev")
+    assert out["projects"][0] == {"o/a": "feature"}
+    assert git("rev-parse", "refs/heads/feature", cwd=hub.quirq_root / "o--a.git") == mine
+    with pytest.raises(Exception):
+        _on_github(hub, "o/a", "refs/heads/feature")  # GitHub never saw it
+    assert hub.made == ["o/a"]  # the hub copy was made once, for the one project with new work
+    assert git("remote", "get-url", "origin", cwd="dev/a").endswith("/o/a")
+    assert git("config", "--get", "branch.main.remote", cwd="dev/a") == "origin"  # upstreams as they were
+
+
+def test_update_with_nothing_new_pushes_nothing_anywhere(hub, monkeypatch):
+    workspace.install(hub.client, "space", "dev")
+    monkeypatch.setattr(gitops, "push", lambda dest: pytest.fail("pushed to GitHub"))
+    workspace.update(hub.client, "space", "dev")
+    assert hub.made == [] and list(hub.quirq_root.iterdir()) == []
+
+
+def test_without_the_hub_update_only_pushes_a_branch_with_new_commits(space, monkeypatch):  # noqa: F811
+    """#50: a repo you cannot push to (here: any push fails) is no problem until you commit to it."""
+    workspace.install(space.client, "space", "dev")
+    monkeypatch.setattr(gitops, "push", lambda dest: (_ for _ in ()).throw(XoError(f"./{dest}: 403")))
+    workspace.update(space.client, "space", "dev")
+    Path("dev/a/README").write_text("mine\n")
+    git("commit", "-q", "-am", "mine", cwd="dev/a")
+    with pytest.raises(XoError, match="403"):
+        workspace.update(space.client, "space", "dev")
+
+
+def test_install_elsewhere_takes_a_branch_only_the_hub_has(hub, tmp_path):
+    workspace.install(hub.client, "space", "dev")
+    git("switch", "-q", "-c", "feature", cwd="dev/a")
+    Path("dev/a/README").write_text("agent work\n")
+    git("commit", "-q", "-am", "agent work", cwd="dev/a")
+    mine = git("rev-parse", "HEAD", cwd="dev/a")
+    workspace.update(hub.client, "space", "dev")
+    other = tmp_path / "other"
+    other.mkdir()
+    os.chdir(other)  # another machine, or another agent of yours
+    workspace.install(hub.client, "space", "dev")
+    assert git("rev-parse", "HEAD", cwd="dev/a") == mine
+    assert git("branch", "--show-current", cwd="dev/a") == "feature"
+    assert git("config", "--get", "branch.feature.remote", cwd="dev/a") == "quirq"  # GitHub has no feature
+
+
+def test_install_prefers_the_hubs_branch_and_keeps_githubs_upstream(hub, tmp_path):
+    workspace.install(hub.client, "space", "dev")
+    Path("dev/a/README").write_text("on the hub\n")
+    git("commit", "-q", "-am", "on the hub", cwd="dev/a")
+    mine = git("rev-parse", "HEAD", cwd="dev/a")
+    workspace.update(hub.client, "space", "dev")  # main: ahead of GitHub's, pushed to the hub only
+    assert _on_github(hub, "o/a", "refs/heads/main") != mine
+    other = tmp_path / "other"
+    other.mkdir()
+    os.chdir(other)
+    workspace.install(hub.client, "space", "dev")
+    assert git("rev-parse", "HEAD", cwd="dev/a") == mine
+    assert git("config", "--get", "branch.main.remote", cwd="dev/a") == "origin"
+
+
+def test_sync_rebases_on_the_hubs_branch_then_pushes_there(hub, tmp_path):
+    workspace.install(hub.client, "space", "dev")
+    Path("dev/a/README").write_text("first agent\n")
+    git("commit", "-q", "-am", "first agent", cwd="dev/a")
+    workspace.update(hub.client, "space", "dev")
+    first = Path.cwd()
+    other = tmp_path / "other"
+    other.mkdir()
+    os.chdir(other)
+    workspace.install(hub.client, "space", "dev")
+    Path("dev/a/OTHER").write_text("second agent\n")
+    git("add", "OTHER", cwd="dev/a")
+    git("commit", "-q", "-m", "second agent", cwd="dev/a")
+    workspace.update(hub.client, "space", "dev")
+    os.chdir(first)
+    Path("dev/a/MINE").write_text("first agent again\n")
+    git("add", "MINE", cwd="dev/a")
+    git("commit", "-q", "-m", "first agent again", cwd="dev/a")
+    workspace.sync(hub.client, "space", "dev")
+    log = git("log", "--format=%s", "refs/heads/main", cwd=hub.quirq_root / "o--a.git").splitlines()
+    assert log[:3] == ["first agent again", "second agent", "first agent"]
+    assert git("rev-parse", "HEAD", cwd="dev/a") == git("rev-parse", "refs/heads/main", cwd=hub.quirq_root / "o--a.git")
+
+
+def test_a_project_github_does_not_show_everyone_is_never_sent_to_the_hub(hub, monkeypatch):
+    workspace.install(hub.client, "space", "dev")
+    monkeypatch.setattr(spacerepo, "heads", lambda owner, name: None)  # private: looks missing
+    Path("dev/a/README").write_text("secret\n")
+    git("commit", "-q", "-am", "secret", cwd="dev/a")
+    with pytest.raises(XoError, match="not public on GitHub.*nothing was pushed"):
+        workspace.update(hub.client, "space", "dev")
+    assert hub.made == [] and list(hub.quirq_root.iterdir()) == []
+
+
+def test_a_quirq_remote_pointing_elsewhere_is_refused_never_changed(hub):
+    workspace.install(hub.client, "space", "dev")
+    git("remote", "set-url", "quirq", "https://example.com/elsewhere", cwd="dev/a")
+    with pytest.raises(XoError, match="has a quirq remote that is not"):
+        workspace.update(hub.client, "space", "dev")
+    assert git("remote", "get-url", "quirq", cwd="dev/a") == "https://example.com/elsewhere"
+
+
+def test_a_hub_without_its_client_here_is_an_error_not_a_quiet_github_push(hub, monkeypatch):
+    workspace.install(hub.client, "space", "dev")
+    monkeypatch.setattr(quirq, "installed", lambda: False)
+    with pytest.raises(XoError, match="git-remote-quirq is not installed; install the hub's client"):
+        workspace.update(hub.client, "space", "dev")
+
+
+def test_a_hub_file_others_could_write_is_not_used(config_home):
+    path = quirq.save(quirq.Hub("https://hub.quirq.dev", "alice"))
+    assert quirq.settings() == quirq.Hub("https://hub.quirq.dev", "alice")
+    os.chmod(path, 0o666)
+    assert quirq.settings() is None
+
+
+def test_login_links_the_hub_agent_and_status_and_logout_show_it(login, capsys, config_home, monkeypatch):  # noqa: F811
+    login.route("POST", "/me/hub", body={"success": True, "data": {
+        "server": "https://hub.quirq.dev", "agent": "sam", "token": TOKEN}})
+    linked = []
+    monkeypatch.setattr(quirq, "installed", lambda: True)
+    monkeypatch.setattr(quirq, "link", lambda hub, token: linked.append((hub, token)))
+    code, _, err = run(capsys, "login")
+    assert code == 0 and TOKEN not in err
+    assert linked == [(quirq.Hub("https://hub.quirq.dev", "sam"), TOKEN)]
+    assert "xo: hub: agent sam on https://hub.quirq.dev; a space's xo update and xo sync push there" in err
+    assert json.loads((config_home / "xo" / "hub").read_text()) == {"server": "https://hub.quirq.dev", "agent": "sam"}
+    assert TOKEN not in (config_home / "xo" / "hub").read_text()
+    code, out, _ = run(capsys, "status")
+    assert "hub    https://hub.quirq.dev" in out and "agent sam" in out
+    code, _, err = run(capsys, "logout")
+    assert "xo: hub: deleted" in err and quirq.settings() is None
+
+
+def test_login_without_the_hubs_client_says_how_to_get_it_and_saves_nothing(login, capsys, monkeypatch):  # noqa: F811
+    login.route("POST", "/me/hub", body={"success": True, "data": {
+        "server": "https://hub.quirq.dev", "agent": "sam", "token": TOKEN}})
+    monkeypatch.setattr(quirq, "installed", lambda: False)
+    code, _, err = run(capsys, "login")
+    assert code == 0 and TOKEN not in err
+    assert "xo: hub: skipped: the xo server works with the quirq hub" in err and "install-cli.sh" in err
+    assert quirq.settings() is None
+
+
+def test_the_hubs_client_gets_the_token_on_stdin_and_none_of_xos_keys(monkeypatch):
+    seen = {}
+
+    def fake_run(argv, env, input, **kw):
+        seen.update(argv=argv, env=env, input=input)
+        import subprocess
+        return subprocess.CompletedProcess(argv, 0, "ok\n", "")
+    monkeypatch.setattr(quirq.subprocess, "run", fake_run)
+    monkeypatch.setenv("XO_API_KEY", KEY)
+    monkeypatch.setenv("SPACEHUB_TOKEN", "someone_elses")
+    quirq.link(quirq.Hub("https://hub.quirq.dev", "sam"), TOKEN)
+    assert seen["argv"] == ["spacehub", "auth", "login", "--server", "wss://hub.quirq.dev", "--with-token"]
+    assert seen["input"] == TOKEN + "\n" and TOKEN not in " ".join(seen["argv"])
+    assert "XO_API_KEY" not in seen["env"] and "SPACEHUB_TOKEN" not in seen["env"]
+    assert seen["env"]["SPACEHUB_SERVER"] == "wss://hub.quirq.dev"

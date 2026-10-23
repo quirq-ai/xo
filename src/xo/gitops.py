@@ -1,7 +1,8 @@
 """The git xo runs for projects: the user's own git, with their own login, never a token of xo's.
 
 Every call is `git` with GIT_ALLOW_PROTOCOL=https in its environment, which overrides any protocol
-setting or insteadOf in the user's config (no ssh, file or ext transports), no submodules, and
+setting or insteadOf in the user's config (no ssh, file or ext transports; calls to the quirq hub's
+remote also allow quirq, its git helper, and nothing else), no submodules, and
 `--end-of-options` before anything that came from a name or a ref, so a value can never be read as
 an option. Keys and tokens xo or its services use, and any variable that points git at another
 repository, are left out of git's environment. xo never reads, stores or prints a git credential.
@@ -9,6 +10,7 @@ repository, are left out of git's environment. xo never reads, stores or prints 
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -28,6 +30,7 @@ _ELSEWHERE = {"GIT_DIR", "GIT_WORK_TREE", "GIT_IMPLICIT_WORK_TREE", "GIT_INDEX_F
               "GIT_REPLACE_REF_BASE", "GIT_PREFIX", "GIT_SHALLOW_FILE", "GIT_NAMESPACE", "GIT_CONFIG"}
 # The only transports git may use; it beats every protocol.* setting and insteadOf.
 ALLOWED_PROTOCOLS = "https"
+QUIRQ = "quirq"  # the hub's remote, and its URL scheme (xo.quirq)
 
 
 def environment() -> dict[str, str]:
@@ -38,15 +41,18 @@ def environment() -> dict[str, str]:
 
 
 def run(*args: str, cwd: Path | None = None, check: bool = True, env: dict[str, str] | None = None,
-        input: bytes | None = None, raw: bool = False) -> str | None:
+        input: bytes | None = None, raw: bool = False, hub: bool = False) -> str | None:
     """git's output; with check=False, None when git fails instead of an error. env: variables added
     to git's environment; input: the bytes git reads on stdin (nothing when None; bytes, so no line
     ending is changed on the way, as text mode does on Windows); raw: git's output as it is (paths with
-    -z, any bytes), decoded with surrogateescape rather than the locale."""
+    -z, any bytes), decoded with surrogateescape rather than the locale; hub: the call may use the
+    quirq hub's transport too."""
     binary = raw or input is not None
     stdin = {"input": input} if input is not None else {"stdin": subprocess.DEVNULL}
+    allowed = {"GIT_ALLOW_PROTOCOL": f"{ALLOWED_PROTOCOLS}:{QUIRQ}"} if hub else {}
+    extra = ["-c", f"protocol.{QUIRQ}.allow=always"] if hub else []
     try:
-        done = subprocess.run(["git", *SAFE, *args], cwd=cwd, env={**environment(), **(env or {})},
+        done = subprocess.run(["git", *SAFE, *extra, *args], cwd=cwd, env={**environment(), **(env or {}), **allowed},
                               capture_output=True, text=not binary, timeout=GIT_TIMEOUT, **stdin)
     except FileNotFoundError:
         raise XoError("git is not installed; install it and try again") from None
@@ -148,14 +154,24 @@ def _commit(dest: Path, ref: str) -> str | None:
     return out.strip() if out else None
 
 
-def resolve(dest: Path, ref: str) -> tuple[str, str]:
-    """("branch" | "tag" | "commit", sha) for a ref, after a fetch: a branch on origin first, then a
-    tag, then a commit sha that a branch or tag on origin holds. Anything else is an error."""
+def _remote_branch(dest: Path, ref: str, remotes: tuple[str, ...]) -> tuple[str, str] | None:
+    """(remote, sha) of the first of remotes that has branch ref, after a fetch."""
+    for remote in remotes:
+        sha = _commit(dest, f"refs/remotes/{remote}/{ref}")
+        if sha:
+            return remote, sha
+    return None
+
+
+def resolve(dest: Path, ref: str, remotes: tuple[str, ...] = ("origin",)) -> tuple[str, str]:
+    """("branch" | "tag" | "commit", sha) for a ref, after a fetch: a branch on one of remotes first
+    (the first that has it), then a tag, then a commit sha that a branch on a remote or a tag holds.
+    Anything else is an error."""
     if not names.ref_ok(ref):
         raise XoError(f"{ref!r} is not a ref xo uses: {names.REF_RULE}")
-    sha = _commit(dest, f"refs/remotes/origin/{ref}")
-    if sha:
-        return "branch", sha
+    found = _remote_branch(dest, ref, remotes)
+    if found:
+        return "branch", found[1]
     sha = _commit(dest, f"refs/tags/{ref}")
     if sha:
         return "tag", sha
@@ -174,20 +190,31 @@ def _published(dest: Path, sha: str) -> bool:
     return False
 
 
-def checkout(dest: Path, ref: str) -> None:
-    """Put the checkout at ref: a branch is switched to and fast-forwarded to origin's (refused if
-    the local branch has commits origin lacks), a tag or commit is checked out detached."""
-    kind, sha = resolve(dest, ref)
+def checkout(dest: Path, ref: str, hub: bool = False) -> None:
+    """Put the checkout at ref: a branch is switched to and fast-forwarded to the remote's (refused if
+    the local branch has commits the remote lacks), a tag or commit is checked out detached. With
+    hub, a branch the quirq remote has is taken from there (the space's latest work), and a new
+    local branch still tracks origin's when GitHub has it, so git push and pull stay on GitHub."""
+    remotes = (QUIRQ, "origin") if hub else ("origin",)
+    kind, sha = resolve(dest, ref, remotes)
     if kind != "branch":
         run("switch", "--quiet", "--detach", sha, cwd=dest)
         return
+    remote, _ = _remote_branch(dest, ref, remotes)
     if _commit(dest, f"refs/heads/{ref}"):
         run("switch", "--quiet", "--no-guess", ref, cwd=dest)
-        if run("merge", "--ff-only", "--quiet", f"refs/remotes/origin/{ref}", cwd=dest, check=False) is None:
-            raise XoError(f"./{dest}: your branch {ref} and its remote have both moved on; rebase yours on it and "
-                          "push (git pull --rebase, then git push, in that folder), then try again")
-    else:
+        if run("merge", "--ff-only", "--quiet", f"refs/remotes/{remote}/{ref}", cwd=dest, check=False) is None:
+            how = (f"git rebase {QUIRQ}/{ref}, then xo update space:SPACE" if remote == QUIRQ
+                   else "git pull --rebase, then git push")
+            raise XoError(f"./{dest}: your branch {ref} and its remote have both moved on; rebase yours on it ({how}, "
+                          "in that folder), then try again")
+        return
+    if remote == "origin":
         run("switch", "--quiet", "--create", ref, "--track", f"refs/remotes/origin/{ref}", cwd=dest)
+        return
+    upstream = "origin" if _commit(dest, f"refs/remotes/origin/{ref}") else QUIRQ
+    run("switch", "--quiet", "--create", ref, "--no-track", f"refs/remotes/{QUIRQ}/{ref}", cwd=dest)
+    run("branch", "--quiet", f"--set-upstream-to=refs/remotes/{upstream}/{ref}", ref, cwd=dest)
 
 
 def upstream(dest: Path) -> tuple[str, str, str]:
@@ -210,6 +237,13 @@ def tracking(dest: Path) -> bool:
     """Whether the checkout is on a branch with an upstream, so it can be pulled and pushed."""
     name = branch(dest)
     return name is not None and bool(run("config", "--get", f"branch.{name}.merge", cwd=dest, check=False))
+
+
+def ahead_of_upstream(dest: Path) -> bool:
+    """Whether the checked-out branch has commits its upstream lacks (after a fetch), so a push
+    would send something."""
+    count = run("rev-list", "--count", "@{upstream}..HEAD", cwd=dest, check=False)
+    return count is None or count.strip() != "0"
 
 
 def push(dest: Path) -> None:
@@ -247,3 +281,74 @@ def fast_forward(dest: Path) -> str:
         raise XoError(f"./{dest}: your branch {name} and its upstream have both moved on; run xo sync project:"
                       f"{dest} to rebase yours on it")
     return f"{name} is up to date with its upstream"
+
+
+def set_quirq(dest: Path, url: str) -> None:
+    """Give a checkout the quirq hub's remote at url. One already there must point at url, fetch and
+    push alike: a quirq remote that points anywhere else is refused, never changed."""
+    own_checkout(dest)
+    have = [line for kind in (["--all"], ["--push", "--all"])
+            for line in (run("remote", "get-url", *kind, QUIRQ, cwd=dest, check=False) or "").splitlines()
+            if line.strip()]
+    if not have:
+        run("remote", "add", "--no-tags", QUIRQ, url, cwd=dest)
+    elif any(u.strip() != url for u in have):
+        raise XoError(f"./{dest} has a {QUIRQ} remote that is not {url}; remove it (git remote remove {QUIRQ} in "
+                      "that folder) and try again")
+
+
+def fetch_quirq(dest: Path) -> bool:
+    """Fetch the quirq remote's branches (never its tags); False when the hub has no copy yet."""
+    try:
+        run("fetch", "--quiet", "--no-tags", "--no-recurse-submodules", QUIRQ, cwd=dest, hub=True)
+    except XoError as e:
+        if re.search(r"does not exist|does not appear to be a git repository", getattr(e, "detail", "")):
+            return False
+        raise XoError(f"./{dest}: {e}") from None
+    return True
+
+
+def has(dest: Path, ref: str) -> bool:
+    """Whether ref names a commit in the checkout."""
+    return _commit(dest, ref) is not None
+
+
+def holds(dest: Path, ref: str) -> bool:
+    """Whether HEAD already holds every commit of ref (it is ref, or ref is behind it)."""
+    return run("merge-base", "--is-ancestor", ref, "HEAD", cwd=dest, check=False) is not None
+
+
+def on_remote(dest: Path, remote: str) -> bool:
+    """Whether a branch of remote (as last fetched) already holds HEAD."""
+    out = run("for-each-ref", "--count=1", "--contains", "HEAD", "--format=%(refname)",
+              f"refs/remotes/{remote}/", cwd=dest, check=False)
+    return bool(out and out.strip())
+
+
+def ahead(dest: Path, theirs: str) -> bool:
+    """Whether HEAD has commits ref theirs lacks (or theirs is not there at all)."""
+    tip = _commit(dest, theirs)
+    return tip is None or run("merge-base", "--is-ancestor", "HEAD", tip, cwd=dest, check=False) is None
+
+
+def push_quirq(dest: Path, name: str) -> None:
+    """Push HEAD to branch name on the quirq remote: never forced, so the hub refuses if it is ahead."""
+    try:
+        run("push", "--quiet", "--end-of-options", QUIRQ, f"HEAD:refs/heads/{name}", cwd=dest, hub=True)
+    except XoError as e:
+        ahead_ = any(w in getattr(e, "detail", "") for w in ("[rejected]", "non-fast-forward", "fetch first"))
+        raise XoError(f"./{dest}: {e}" + (" (the hub is ahead: run xo sync)" if ahead_ else "")) from None
+
+
+def rebase_on(dest: Path, theirs: str) -> None:
+    """Rebase the current branch on ref theirs. On a conflict the rebase is undone, so the checkout
+    is as it was, and the error says so."""
+    name = branch(dest)
+    try:
+        run("rebase", "--quiet", "--end-of-options", theirs, cwd=dest)
+    except XoError as e:
+        if run("rebase", "--abort", cwd=dest, check=False) is not None:
+            raise XoError(f"./{dest}: your branch {name} and {theirs.removeprefix('refs/remotes/')} change the same "
+                          "lines, so xo stopped and left it as it was; rebase it by hand (git rebase "
+                          f"{theirs.removeprefix('refs/remotes/')} in that folder)") from None
+        raise XoError(f"./{dest}: {e}") from None

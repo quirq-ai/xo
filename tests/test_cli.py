@@ -1150,7 +1150,8 @@ def test_login_checks_the_key_then_saves_it_private(login, capsys, config_home):
     import stat
     code, out, err = run(capsys, "login")
     assert code == 0 and out == ""
-    assert [r["path"] for r in sent(login)] == [PROBE, "/me"]  # XO takes the key, then whose it is
+    # XO takes the key, then whose it is, then the hub (none on this server: nothing said)
+    assert [r["path"] for r in sent(login)] == [PROBE, "/me", "/me/hub"]
     assert all(r["headers"]["Authorization"] == f"Bearer {KEY}" for r in sent(login))
     assert "xo: me: logged in as sam (user_1); key and URL saved to" in err
     assert f"xo: checking the key with XO through {login.base} ...\n" in err
@@ -1287,7 +1288,7 @@ def test_a_saved_key_others_can_read_is_refused(login, capsys, config_home):
     saved = config_home / "xo" / "credentials"
     os.chmod(saved, 0o644)
     code, _, err = run(capsys, "me")
-    assert code == 1 and len(sent(login)) == 2  # only login's checks went out
+    assert code == 1 and len(sent(login)) == 3  # only login's checks went out
     assert err == (f"xo: {saved} can be read by other users, so xo will not use it; run xo logout, "
                    "ask the XO team for a new key, then xo login\n")
 
@@ -1407,12 +1408,12 @@ def test_the_saved_key_is_never_sent_to_another_url(login, capsys, monkeypatch):
     assert run(capsys, "login")[0] == 0
     monkeypatch.setenv("XO_URL", "http://127.0.0.1:9")
     code, _, err = run(capsys, "me")
-    assert code == 1 and len(sent(login)) == 2
+    assert code == 1 and len(sent(login)) == 3
     assert err == (f"xo: the key xo login saved is only sent to {login.base}, not http://127.0.0.1:9; "
                    "run xo login --url http://127.0.0.1:9 to use this address\n")
     monkeypatch.delenv("XO_URL")
     code, _, err = run(capsys, "--url", "http://localhost:9", "spaces", "--space-id", "s1")
-    assert code == 1 and "only sent to" in err and len(sent(login)) == 2
+    assert code == 1 and "only sent to" in err and len(sent(login)) == 3
 
 
 def test_later_commands_use_the_saved_url(login, capsys, monkeypatch):
@@ -2579,7 +2580,7 @@ def test_browser_login_saves_the_key_the_server_made(browser, capsys, config_hom
     challenge = base64.urlsafe_b64encode(hashlib.sha256(body["verifier"].encode()).digest()).rstrip(b"=").decode()
     assert q["code_challenge"] == challenge and body["verifier"] not in browser.opened[0]
     # The new key is checked with XO and saved like a typed one; it is never shown.
-    assert [r["path"] for r in sent(browser) if r["path"] != "/login/browser"] == [PROBE, "/me"]
+    assert [r["path"] for r in sent(browser) if r["path"] != "/login/browser"] == [PROBE, "/me", "/me/hub"]
     assert all(r["headers"]["Authorization"] == f"Bearer {BROWSER_KEY}" for r in sent(browser)
                if r["path"] != "/login/browser")
     assert json.loads((config_home / "xo" / "credentials").read_text()) == {"url": browser.base, "key": BROWSER_KEY}
