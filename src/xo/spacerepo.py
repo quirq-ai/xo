@@ -17,7 +17,8 @@ folder is already a git repository, xo attaches to it: it adds the space's branc
 index on branch xo-space, never changing your branches, index, staged changes, files or
 .git/info/exclude, and refusing a repository whose branch would clash with one of yours.
 
-Its remote is github.com/OWNER/NAME (OWNER is your gh login unless --owner says otherwise), or, in an
+With --github (or --owner), its remote is github.com/OWNER/NAME (OWNER is your gh login unless
+--owner says otherwise), or, in an
 attached repository, the GitHub repository its origin already is. When GitHub does not have it, xo
 gives the link to make it and waits, then pushes the index and every branch with your own git login.
 xo never reads, stores or prints a token: whether the repository exists is asked anonymously (no
@@ -31,8 +32,8 @@ is asked each run, so a repository deleted and made again starts over. A reposit
 the branch GitHub has of it (xo deletes nothing); one never pushed is dropped. Only the index and the
 branches it lists are pushed.
 
-Once xo login found a quirq hub (xo/quirq.py), the space goes there instead, unless --owner names a
-GitHub owner or the space is on GitHub already: its remote is the agent's hub space NAME
+Without --github, the space goes to the quirq hub xo login found (xo/quirq.py); with no hub, or
+for a space already on GitHub, xo create space stops and says so. On the hub its remote is the agent's hub space NAME
 (quirq://HOST/AGENT/NAME, the `quirq` remote, made on the hub when it is missing; an attached
 repository is pushed by URL and its remotes are left alone), and its index records "hub" in place of
 "github". Anyone can read the hub, so a folder or git repository whose origin is not public on
@@ -955,13 +956,13 @@ def _hub_check(here: Path, chosen: dict[str, Path], attached: bool) -> dict[str,
     typed for these)."""
     if attached and visibility(here)[0] == "private":
         raise XoError(f"{here.resolve()}/.git has an origin that is not a public GitHub repository, and anyone can "
-                      "read the hub, so nothing was made; keep the space on GitHub with --owner OWNER")
+                      "read the hub, so nothing was made; keep the space on GitHub with --github")
     looked = {b: visibility(f) for b, f in chosen.items()}
     private = sorted(b for b, (v, _) in looked.items() if v == "private")
     if private:
         raise XoError("these git repositories have an origin that is not a public GitHub repository, and anyone can "
                       f"read the hub, so nothing was made: {', '.join(private)}; move them out of the folder, or keep "
-                      "the space on GitHub with --owner OWNER")
+                      "the space on GitHub with --github")
     return looked
 
 
@@ -1131,7 +1132,7 @@ def _create(here: Path, name: str, owner: str | None, ask: Callable[[str], bool]
              "Everything else is pushed to "
              + (f"{at}, {'which is already there' if exists else 'which xo makes'}, not to GitHub. Anyone can read "
                 "what is pushed to the hub, so only repositories whose origin is public on GitHub and that hold "
-                "nothing GitHub lacks go there without asking (xo create space --owner OWNER puts the space on "
+                "nothing GitHub lacks go there without asking (xo create space --github puts the space on "
                 "GitHub instead)."
                 if hub else
                 f"the repository github.com/{gh}, which is already there and public. Anyone can read it, and what "
@@ -1165,7 +1166,7 @@ def _create(here: Path, name: str, owner: str | None, ask: Callable[[str], bool]
                 raise XoError(("nothing was pushed or kept" if fresh else "nothing was pushed (./.git holds the "
                                "space, here only)") + ". Push each of those repositories "
                               "to a public GitHub origin (and commit or ignore what is left), keep the space on GitHub "
-                              "with --owner OWNER, or run xo create space at a terminal and type the space's name "
+                              "with --github, or run xo create space at a terminal and type the space's name "
                               "(--yes does not answer this)")
         if not exists:
             quirq.make(hub, name, f"xo: the space {name}, made by xo create space")

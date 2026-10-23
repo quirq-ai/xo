@@ -1673,8 +1673,11 @@ def test_create_space_with_no_kind_refuses_a_bad_name(xs, capsys, github, name):
 def test_create_space_with_no_kind_needs_a_github_owner(xs, capsys, github, monkeypatch):
     monkeypatch.setattr(cli.github, "installed", lambda: False)
     Path("dev").mkdir()
-    code, _, err = run(capsys, "create", "space", "dev", "--yes")
-    assert code == 1 and "run xo login github, or say whose it is with --owner OWNER" in err
+    code, _, err = run(capsys, "create", "space", "dev", "--yes")  # no hub, and GitHub only when asked
+    assert code == 1 and "xo login found none" in err and "--github" in err and not Path("dev/.git").exists()
+    for flag in ("--github", "--gh"):
+        code, _, err = run(capsys, "create", "space", "dev", flag, "--yes")
+        assert code == 1 and "run xo login github, or say whose it is with --owner OWNER" in err
     code, _, err = run(capsys, "create", "space", "dev", "--owner=-bad", "--yes")
     assert code == 1 and "--owner is a GitHub user or organization name" in err
 
@@ -1754,7 +1757,7 @@ def test_create_space_attaches_to_the_folders_own_repository_and_its_github_orig
     git("init", "-q", "--bare", str(github.root / "alice/dev-monorepo"))
     code, _, err = run(capsys, "create", "space", "dev", "--owner", "me", "--yes")
     assert code == 1 and "origin is github.com/alice/dev-monorepo, not one of me's" in err
-    code, out, err = run(capsys, "create", "space", "dev", "--yes")  # no gh login needed: origin says whose
+    code, out, err = run(capsys, "create", "space", "dev", "--gh", "--yes")  # no gh login needed: origin says whose
     assert code == 0 and json.loads(out)["github"] == "alice/dev-monorepo" and json.loads(out)["index"] == "xo-space"
     assert "the space dev goes on github.com/alice/dev-monorepo, ./.git's origin" in err
     assert git(f"--git-dir={github.root / 'alice/dev-monorepo'}", "show", "notes:n.txt") == "n"

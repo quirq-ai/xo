@@ -81,9 +81,10 @@ xo create space my-cc claude-code --volume-size 20 --providers-anthropic-api-key
 xo create space my-codex codex --volume-size 20
 xo create space my-ag antigravity --volume-size 20
 xo create space                                  # no NAME, no KIND: this folder as a space on the quirq hub
-                                                 # (on GitHub before xo login finds a hub), nothing on XO
+                                                 # (xo login must have found one), nothing on XO
 xo create space dev                              # no KIND: the folder ./dev as space dev, the same way
-xo create space dev --owner me                   # on github.com/me/dev, hub or not
+xo create space dev --github                     # on GitHub instead (--gh too), under your gh login
+xo create space dev --owner me                   # on github.com/me/dev (implies --github)
 xo create space NAME openclaw --help             # needs a provider key and a chat-channel token
 xo create space NAME hermes --help
 xo create space NAME xo-cowork --help
@@ -183,8 +184,8 @@ xo sync project:headscale                        # git pull --rebase, then push
     Git LFS pointer, a file git-crypt keeps encrypted, or a bare repository. xo cannot find every
     secret (one in an archive, say), so look through the repositories first. `main` holds a README
     listing the branches, `xo-space.json` with one hash of every branch's files (sha256 over each
-    branch's git tree id), and an `update` script. The repository is `github.com/OWNER/NAME`, OWNER
-    your gh login or `--owner`, or, in a folder that was already a git repository, the GitHub
+    branch's git tree id), and an `update` script. With `--github` (or `--gh`, or `--owner`), the
+    repository is `github.com/OWNER/NAME`, OWNER your gh login or `--owner`, or, in a folder that was already a git repository, the GitHub
     repository its origin is (an origin elsewhere, or with a login in it, is refused; one is added
     when there is none); when it is not there (or is private: xo checks with no login at
     all), xo prints a link to make it, empty, and waits for Enter, then pushes with your own git;
@@ -249,8 +250,10 @@ xo sync project:headscale                        # git pull --rebase, then push
     `--yes` does not answer that, so without a terminal nothing is pushed (and a `./.git` that run
     made is removed). The files xo built are compared, not `git status`, so no index flag or config
     hides one.
-    `--owner OWNER` puts it on GitHub instead, and a space already on GitHub stays there (run with
-    `--owner` again or not). A name with `--` in it is refused on the hub, which keeps those for the
+    The hub is the only place it goes unless you say GitHub: `--github` (or `--gh`) puts it on
+    GitHub instead, under your gh login or `--owner OWNER` (which implies `--github`). With no hub
+    found by `xo login`, or for a space already on GitHub, `xo create space` without `--github`
+    stops before anything is made and says so. A name with `--` in it is refused on the hub, which keeps those for the
     projects' copies (`OWNER--REPO`).
   - Without the hub's client, `xo login` deletes what xo saved about the hub (if anything) and
     says "skipped"; spaces then stay on GitHub alone until you install it and log in again.

@@ -335,14 +335,16 @@ def test_create_space_puts_a_folder_on_the_hub_and_never_on_github(folder_hub, c
     assert _space_hub(folder_hub, "rev-parse", "notes~1") == made["branches"]["notes"]
 
 
-def test_create_space_with_owner_still_puts_the_folder_on_github(folder_hub, capsys, monkeypatch):
+def test_create_space_with_owner_or_github_puts_the_folder_on_github(folder_hub, capsys, monkeypatch):
     git("init", "-q", "--bare", str(folder_hub.github.root / "me/dev"))
     code, out, _ = run(capsys, "create", "space", "dev", "--owner", "me", "--yes")
     assert code == 0 and json.loads(out)["github"] == "me/dev" and folder_hub.made == []
     assert git(f"--git-dir={folder_hub.github.root / 'me/dev'}", "show", "notes:n.txt") == "n"
-    # A space on GitHub stays there when it is made again, hub or not.
+    # A space on GitHub is updated there only when asked: without --github, xo stops and says so.
     monkeypatch.chdir("dev")
-    code, out, _ = run(capsys, "create", "space", "--yes")
+    code, out, err = run(capsys, "create", "space", "--yes")
+    assert code == 1 and "space dev is on github.com/me/dev" in err and "--github" in err and folder_hub.made == []
+    code, out, _ = run(capsys, "create", "space", "--github", "--yes")
     assert code == 0 and json.loads(out)["github"] == "me/dev" and folder_hub.made == []
 
 
