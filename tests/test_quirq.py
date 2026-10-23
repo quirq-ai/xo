@@ -348,6 +348,15 @@ def test_create_space_with_owner_or_github_puts_the_folder_on_github(folder_hub,
     assert code == 0 and json.loads(out)["github"] == "me/dev" and folder_hub.made == []
 
 
+def test_a_hub_space_run_with_github_moves_to_github_only_when_asked(folder_hub, capsys):
+    code, out, _ = run(capsys, "create", "space", "dev", "--yes")
+    assert code == 0 and "hub" in json.loads(out) and folder_hub.made == ["dev"]
+    git("init", "-q", "--bare", str(folder_hub.github.root / "me/dev"))
+    code, out, _ = run(capsys, "create", "space", "dev", "--github", "--owner", "me", "--yes")
+    assert code == 0 and json.loads(out)["github"] == "me/dev" and folder_hub.made == ["dev"]
+    assert git(f"--git-dir={folder_hub.github.root / 'me/dev'}", "show", "notes:n.txt") == "n"
+
+
 def test_a_hub_space_name_with_two_hyphens_is_refused(folder_hub, capsys):
     git("init", "-q", "o--r/notes")
     code, _, err = run(capsys, "create", "space", "o--r", "--yes")

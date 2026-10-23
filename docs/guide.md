@@ -184,9 +184,9 @@ xo sync project:headscale                        # git pull --rebase, then push
     Git LFS pointer, a file git-crypt keeps encrypted, or a bare repository. xo cannot find every
     secret (one in an archive, say), so look through the repositories first. `main` holds a README
     listing the branches, `xo-space.json` with one hash of every branch's files (sha256 over each
-    branch's git tree id), and an `update` script. With `--github` (or `--gh`, or `--owner`), the
-    repository is `github.com/OWNER/NAME`, OWNER your gh login or `--owner`, or, in a folder that was already a git repository, the GitHub
-    repository its origin is (an origin elsewhere, or with a login in it, is refused; one is added
+    branch's git tree id), and an `update` script. With `--github` (or `--gh`, or `--owner`),
+    the repository is `github.com/OWNER/NAME`, OWNER your gh login or `--owner`, or, in a folder
+    that was already a git repository, the GitHub repository its origin is (an origin elsewhere, or with a login in it, is refused; one is added
     when there is none); when it is not there (or is private: xo checks with no login at
     all), xo prints a link to make it, empty, and waits for Enter, then pushes with your own git;
     one GitHub redirects (renamed or moved) is refused. The space goes in your spaces once it is
@@ -218,7 +218,9 @@ xo sync project:headscale                        # git pull --rebase, then push
   (named after your username) and hands the agent's token to the hub's own client (`spacehub`,
   from quirq-ai/space-hub, which brings `git-remote-quirq`; it needs Node 22), which keeps it; xo
   saves only the hub's address and the agent's name, and `xo status` shows them. Without the
-  client, `xo login` says how to install it and spaces stay on GitHub alone. With it, a space's
+  client, `xo login` says how to install it: a space's projects then push to GitHub as before,
+  and `xo create space` stops until it is installed (or put that space on GitHub with `--github`).
+  With it, a space's
   GitHub projects work through the hub, a relay for you and your agents while the work is under
   way; GitHub stays where the work ends up:
   - each checkout gets a second remote, always called `quirq` and always a quirq URL,
@@ -256,7 +258,8 @@ xo sync project:headscale                        # git pull --rebase, then push
     stops before anything is made and says so. A name with `--` in it is refused on the hub, which keeps those for the
     projects' copies (`OWNER--REPO`).
   - Without the hub's client, `xo login` deletes what xo saved about the hub (if anything) and
-    says "skipped"; spaces then stay on GitHub alone until you install it and log in again.
+    says "skipped"; a space's projects then push to GitHub as before, and `xo create space` stops
+    (unless you give `--github`), until you install it and log in again.
   - `project:P` commands stay on GitHub. `xo logout` deletes what xo saved
     about the hub; the hub's client keeps its own login (`spacehub auth logout`).
 - `xo share` puts an invite in the other user's `shared` list; nothing else of theirs is changed

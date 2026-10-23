@@ -689,6 +689,12 @@ def space(kind: str, name: str = "c") -> list[str]:
     return ["create", "space", name, kind]
 
 
+def test_github_is_refused_for_a_space_of_a_kind(core, capsys):
+    code, _, err = run(capsys, "create", "space", "c", "--github", "codex", "--volume-size", "20", "--dry-run")
+    assert code == 1 and "--github is for a folder space" in err
+    assert _refused(capsys, *space("codex"), "--gh", "--volume-size", "20", "--dry-run")
+
+
 def test_the_default_url_is_the_xo_server():
     from xo.client import CORE_PATH, DEFAULT_URL
     assert DEFAULT_URL == "https://xo.quirq.dev" and CORE_PATH == "/api/core/v1"
