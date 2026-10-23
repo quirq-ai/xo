@@ -1,0 +1,246 @@
+"""xo serve with the hub on (XO_HUB_URL and XO_HUB_KEY): what xo keeps for a user lives in the hub's
+record, not in Clerk's private metadata. SYNTHETIC: the hub here is a stand-in shaped like
+space-hub's /-/api/xo/v1/ (cli/src/xo.ts there)."""
+from __future__ import annotations
+
+import json
+import threading
+import urllib.parse
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+import pytest
+
+from xo import server
+from xo.client import XoError
+from tests.test_server import BOB_KEY, USER_KEY, _Core, _Users, _as, clerk, no_floor  # noqa: F401 - fixtures
+
+HUB_KEY = "hub_key_never_printed_" + "x" * 20
+TOKEN = "hub_token_never_printed"
+
+
+class FakeHub:
+    """The hub's records and agents, compare-and-swap like the real one. `race(subject)` runs just
+    before a write lands, to play another writer."""
+
+    def __init__(self, race=None, down: bool = False) -> None:
+        self.records: dict[str, tuple[int, dict]] = {}
+        self.agents: dict[str, dict] = {}
+        self.calls: list[tuple] = []
+        self.race, self.down = race, down
+
+    def _check(self, what, *args):
+        self.calls.append((what, *args))
+        if self.down:
+            raise server.HubError(502, "unreachable")
+
+    def record(self, subject):
+        self._check("record", subject)
+        version, doc = self.records.get(subject, (0, None))
+        return version, json.loads(json.dumps(doc))
+
+    def put(self, subject, version, doc):
+        self._check("put", subject, version)
+        if self.race:
+            self.race, race = None, self.race
+            race(self, subject)
+        if self.records.get(subject, (0, None))[0] != version:
+            raise server.HubConflict()
+        self.records[subject] = (version + 1, json.loads(json.dumps(doc)))
+        return version + 1
+
+    def agent(self, subject, username):
+        self._check("agent", subject, username)
+        if subject not in self.agents:
+            if any(a["agent"] == username for a in self.agents.values()):
+                raise server.HubConflict()
+            self.agents[subject] = {"agent": username, "token": TOKEN}
+        return dict(self.agents[subject])
+
+
+@pytest.fixture
+def hub_env(clerk, monkeypatch):  # noqa: F811
+    monkeypatch.setenv("XO_HUB_URL", "https://hub.quirq.dev")
+    monkeypatch.setenv("XO_HUB_KEY", HUB_KEY)
+    monkeypatch.setattr(server, "SHARE_FLOOR", 0)
+
+
+def _app(users, hub, lines=None):
+    return server.App(server.Config(), clerk=users, core=_Core(), hub=hub,
+                      audit=(lines.append if lines is not None else lambda line: None))
+
+
+def _alice(**private):
+    return _Users({"user_alice": ("alice", {"stripeId": "cus_1", "projects": ["o/a"], **private}),
+                   "user_bob": ("bob", {"stripeId": "cus_9", "projects": ["bobs"]})})
+
+
+def test_the_hub_is_off_unless_both_variables_are_set(clerk, monkeypatch):  # noqa: F811
+    assert server.App(server.Config(), clerk=_alice()).hub is None
+    monkeypatch.setenv("XO_HUB_URL", "https://hub.quirq.dev")
+    with pytest.raises(XoError, match="both"):
+        server.Config()
+    monkeypatch.setenv("XO_HUB_KEY", HUB_KEY)
+    monkeypatch.setenv("XO_HUB_URL", "http://hub.example.com")
+    with pytest.raises(XoError, match="https"):
+        server.Config()
+
+
+def test_a_first_read_copies_xos_keys_out_of_clerk_once_and_leaves_clerk_as_it_was(hub_env):
+    users, hub = _alice(spaces=[{"name": "dev", "rev": 1, "projects": []}]), FakeHub()
+    app = _app(users, hub)
+    assert _as(app, USER_KEY, "/me/projects", method="GET") == (200, {"success": True, "data": {"projects": ["o/a"]}})
+    assert hub.records["user_alice"] == (1, {"projects": ["o/a"], "spaces": [{"name": "dev", "rev": 1, "projects": []}]})
+    assert _as(app, USER_KEY, "/me/spaces", method="GET")[0] == 200
+    assert [c[0] for c in hub.calls] == ["record", "put", "record"]  # copied once
+    assert users.patches == []
+    assert users.users["user_alice"]["private_metadata"]["projects"] == ["o/a"]
+
+
+def test_writes_go_to_the_hub_only(hub_env):
+    users, hub, lines = _alice(), FakeHub(), []
+    status, out = _as(_app(users, hub, lines), USER_KEY, "/me/projects", {"name": "notes"})
+    assert status == 200 and out["data"]["projects"] == ["o/a", "notes"]
+    assert hub.records["user_alice"][1]["projects"] == ["o/a", "notes"]
+    assert users.patches == []
+    assert json.loads(lines[-1])["outcome"] == 200
+
+
+def test_a_racing_write_is_never_lost(hub_env):
+    def other_writer(hub, subject):  # another instance adds a project between our read and our write
+        version, doc = hub.records[subject]
+        hub.records[subject] = (version + 1, {**doc, "projects": doc["projects"] + ["theirs"]})
+
+    users, hub = _alice(), FakeHub()
+    app = _app(users, hub)
+    _as(app, USER_KEY, "/me/projects", method="GET")  # copied: version 1
+    hub.race = other_writer
+    status, out = _as(app, USER_KEY, "/me/projects", {"name": "mine"})
+    assert status == 200
+    assert hub.records["user_alice"][1]["projects"] == ["o/a", "theirs", "mine"]
+
+
+def test_a_share_copies_the_recipient_first_and_writes_only_their_shared(hub_env):
+    users, hub = _alice(), FakeHub()
+    app = _app(users, hub)
+    status, _ = _as(app, USER_KEY, "/me/share", {"item": "project:o/a", "to": "bob"})
+    assert status == 200
+    version, bob = hub.records["user_bob"]
+    assert bob["projects"] == ["bobs"] and len(bob["shared"]) == 1 and "stripeId" not in bob
+    assert users.patches == []
+    status, out = _as(app, BOB_KEY, "/me/shared", method="GET")
+    assert status == 200 and [e["item"] for e in out["data"]["shared"]] == ["project:o/a"]
+
+
+def test_me_shows_xos_keys_from_the_hub_and_the_rest_from_clerk(hub_env):
+    users, hub = _alice(), FakeHub()
+    hub.records["user_alice"] = (4, {"projects": ["from-hub"]})
+    status, out = _as(_app(users, hub), USER_KEY, "/me", method="GET")
+    assert status == 200
+    assert out["data"]["privateMetadata"] == {"stripeId": "cus_1", "projects": ["from-hub"]}
+
+
+def test_the_hub_down_is_a_502_and_says_so_in_the_audit(hub_env):
+    users, lines = _alice(), []
+    status, out = _as(_app(users, FakeHub(down=True), lines), USER_KEY, "/me/projects", {"name": "notes"})
+    assert status == 502 and out["error"] == "The hub did not answer"
+    assert json.loads(lines[-1])["hub"] == "unreachable"
+    assert users.patches == []
+
+
+def test_me_hub_gives_the_users_own_agent_under_their_username(hub_env):
+    users, hub, lines = _Users({"user_alice": ("Alice", {})}), FakeHub(), []
+    status, out = _as(_app(users, hub, lines), USER_KEY, "/me/hub")
+    assert (status, out["data"]) == (200, {"server": "https://hub.quirq.dev", "agent": "alice", "token": TOKEN})
+    assert hub.calls[-1] == ("agent", "user_alice", "alice")
+    assert all(TOKEN not in line for line in lines)
+
+
+def test_me_hub_refuses_a_username_that_cannot_name_an_agent_and_a_taken_name(hub_env):
+    hub = FakeHub()
+    assert _as(_app(_Users({"user_alice": ("al_ice", {})}), hub), USER_KEY, "/me/hub")[0] == 409
+    hub.agents["user_other"] = {"agent": "alice", "token": "t"}
+    status, out = _as(_app(_Users({"user_alice": ("alice", {})}), hub), USER_KEY, "/me/hub")
+    assert status == 409 and "not yours" in out["error"]
+
+
+def test_me_hub_is_a_404_with_the_hub_off(clerk):  # noqa: F811
+    status, _ = _as(server.App(server.Config(), clerk=_alice(), core=_Core(), audit=lambda line: None), USER_KEY, "/me/hub")
+    assert status == 404
+
+
+# ---------------------------------------------------------------- the Hub client itself
+
+
+@pytest.fixture
+def hub_http(monkeypatch):
+    """A stand-in hub over HTTP: every request it got, and what it answers next."""
+    seen: list[dict] = []
+    answers: list[tuple[int, bytes, dict]] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def _serve(self):
+            raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            seen.append({"method": self.command, "path": self.path, "auth": self.headers.get("Authorization"),
+                         "body": json.loads(raw) if raw else None})
+            status, body, extra = answers.pop(0)
+            self.send_response(status)
+            for k, v in extra.items():
+                self.send_header(k, v)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        do_GET = do_PUT = do_POST = _serve
+
+        def log_message(self, *args):
+            pass
+
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
+    monkeypatch.setenv("CLERK_SECRET_KEY", "sk_test_x")
+    monkeypatch.setenv("XO_HUB_URL", f"http://127.0.0.1:{httpd.server_address[1]}")
+    monkeypatch.setenv("XO_HUB_KEY", HUB_KEY)
+    yield server.Hub(server.Config()), seen, answers
+    httpd.shutdown()
+
+
+def _json(status, body, **extra):
+    return status, json.dumps(body).encode(), extra
+
+
+def test_the_hub_client_sends_the_key_and_reads_records(hub_http):
+    hub, seen, answers = hub_http
+    answers += [_json(200, {"version": 0, "doc": None}), _json(200, {"version": 1}), _json(409, {"error": "x"})]
+    assert hub.record("user_alice") == (0, None)
+    assert hub.put("user_alice", 0, {"projects": []}) == 1
+    with pytest.raises(server.HubConflict):
+        hub.put("user_alice", 0, {})
+    assert [(s["method"], s["path"]) for s in seen] == [("GET", "/-/api/xo/v1/records/user_alice"),
+                                                         ("PUT", "/-/api/xo/v1/records/user_alice"),
+                                                         ("PUT", "/-/api/xo/v1/records/user_alice")]
+    assert all(s["auth"] == f"Bearer {HUB_KEY}" for s in seen)
+    assert seen[1]["body"] == {"version": 0, "doc": {"projects": []}}
+
+
+@pytest.mark.parametrize("answer", [_json(200, {"version": 2, "doc": None}), _json(200, {"version": 0, "doc": {}}),
+                                    (200, b"not json", {}), _json(200, [1]), _json(500, {})])
+def test_the_hub_client_refuses_odd_answers(hub_http, answer):
+    hub, _, answers = hub_http
+    answers.append(answer)
+    with pytest.raises(server.HubError):
+        hub.record("user_alice")
+
+
+def test_the_hub_client_never_follows_a_redirect(hub_http):
+    hub, seen, answers = hub_http
+    answers.append((307, b"", {"Location": "https://evil.example/steal"}))
+    with pytest.raises(server.HubError):
+        hub.record("user_alice")
+    assert len(seen) == 1
+
+
+def test_the_hub_client_quotes_the_user_id(hub_http):
+    hub, seen, answers = hub_http
+    answers.append(_json(200, {"version": 0, "doc": None}))
+    hub.record("user_a/../b")
+    assert seen[0]["path"] == "/-/api/xo/v1/records/" + urllib.parse.quote("user_a/../b", safe="")
