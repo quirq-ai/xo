@@ -220,3 +220,37 @@ def test_the_hubs_client_gets_the_token_on_stdin_and_none_of_xos_keys(monkeypatc
     assert seen["input"] == TOKEN + "\n" and TOKEN not in " ".join(seen["argv"])
     assert "XO_API_KEY" not in seen["env"] and "SPACEHUB_TOKEN" not in seen["env"]
     assert seen["env"]["SPACEHUB_SERVER"] == "wss://hub.quirq.dev"
+
+
+def _second_machine(hub, tmp_path, text):  # noqa: F811
+    """Another machine installs dev, commits text to o/a's main and updates: the hub moves on."""
+    first = Path.cwd()
+    other = tmp_path / "other"
+    other.mkdir()
+    os.chdir(other)
+    workspace.install(hub.client, "space", "dev")
+    Path("dev/a/OTHER").write_text(text)
+    git("add", "OTHER", cwd="dev/a")
+    git("commit", "-q", "-m", text, cwd="dev/a")
+    workspace.update(hub.client, "space", "dev")
+    os.chdir(first)
+
+
+def test_sync_never_rewrites_commits_github_already_has(hub, tmp_path):
+    workspace.install(hub.client, "space", "dev")
+    _second_machine(hub, tmp_path, "on the hub")
+    Path("dev/a/README").write_text("pushed to GitHub\n")
+    git("commit", "-q", "-am", "pushed to GitHub", cwd="dev/a")
+    git("push", "-q", "origin", "main", cwd="dev/a")  # the user's own push to GitHub
+    mine = git("rev-parse", "HEAD", cwd="dev/a")
+    with pytest.raises(XoError, match="holds commits GitHub already has, so xo will not rebase them.*git merge quirq/main"):
+        workspace.sync(hub.client, "space", "dev")
+    assert git("rev-parse", "HEAD", cwd="dev/a") == mine
+    git("push", "-q", "origin", "main", cwd="dev/a")  # GitHub still takes the user's pushes
+
+
+def test_sync_only_behind_the_hub_fast_forwards(hub, tmp_path):
+    workspace.install(hub.client, "space", "dev")
+    _second_machine(hub, tmp_path, "on the hub")
+    workspace.sync(hub.client, "space", "dev")
+    assert git("rev-parse", "HEAD", cwd="dev/a") == git("rev-parse", "refs/heads/main", cwd=hub.quirq_root / "o--a.git")

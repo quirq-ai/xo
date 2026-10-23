@@ -227,8 +227,13 @@ xo sync project:headscale                        # git pull --rebase, then push
     GitHub already has and the hub does not is not copied); `sync` rebases on the hub's branch
     first. The ref recorded may be a branch only the hub has. Push to GitHub yourself (`git push`
     in that folder, a pull request) when the work is done.
-  - Anyone can read the hub in this version, so a project GitHub does not show to everyone (xo
+  - Anyone can read the hub in this version: what `update` and `sync` push there, commits not on
+    GitHub yet included, can be read by anyone. So a project GitHub does not show to everyone (xo
     checks with no login at all) is refused before anything is sent.
+  - `sync` never rewrites a commit GitHub already has: when your branch and the hub's have both
+    moved on and yours holds commits on GitHub, it stops and asks you to merge the hub's in by hand.
+  - Without the hub's client, `xo login` deletes what xo saved about the hub (if anything) and
+    says "skipped"; spaces then stay on GitHub alone until you install it and log in again.
   - `project:P` commands and `xo create space` stay on GitHub. `xo logout` deletes what xo saved
     about the hub; the hub's client keeps its own login (`spacehub auth logout`).
 - `xo share` puts an invite in the other user's `shared` list; nothing else of theirs is changed

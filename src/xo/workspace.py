@@ -266,6 +266,7 @@ def _published(root: Path, pairs: list[tuple[str, str]], base: dict[str, str], h
             continue
         gitops.fetch(there)
         if hub is not None and names.is_github(project):
+            gitops.set_quirq(there, hub.url(project))  # never fetch a quirq remote that points elsewhere
             gitops.fetch_quirq(there)
         try:
             gitops.resolve(there, ref, _remotes(hub))
@@ -331,7 +332,15 @@ def _hub_step(root: Path, pairs: list[tuple[str, str]], hub: quirq.Hub, rebase: 
         exists = gitops.fetch_quirq(there)
         theirs = f"refs/remotes/{gitops.QUIRQ}/{name}"
         if rebase and gitops.has(there, theirs) and not gitops.holds(there, theirs):
-            gitops.rebase_on(there, theirs)
+            if not gitops.ahead(there, theirs):
+                gitops.fast_forward_to(there, theirs)  # only behind the hub: nothing of yours moves
+            elif gitops.pushed_since(there, theirs, "origin"):
+                # Rebasing would rewrite commits GitHub already has, and the next git push there fails.
+                raise XoError(f"./{there}: the hub's {name} and yours have both moved on, and yours holds commits "
+                              f"GitHub already has, so xo will not rebase them; merge the hub's in by hand (git merge "
+                              f"{gitops.QUIRQ}/{name} in that folder), then run xo sync space:{root.name} again")
+            else:
+                gitops.rebase_on(there, theirs)
         if not gitops.ahead(there, theirs) or (not gitops.has(there, theirs) and gitops.on_remote(there, "origin")):
             continue  # the hub has it, or it is GitHub's own and nothing on the hub builds on it yet
         owner, repo = project.split("/")

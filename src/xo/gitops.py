@@ -325,6 +325,19 @@ def on_remote(dest: Path, remote: str) -> bool:
     return bool(out and out.strip())
 
 
+def pushed_since(dest: Path, base: str, remote: str) -> bool:
+    """Whether any commit HEAD has and ref base lacks is already on a branch of remote (as last
+    fetched): rewriting those commits would make the next push there fail."""
+    total = run("rev-list", "--count", f"{base}..HEAD", cwd=dest)
+    mine = run("rev-list", "--count", f"{base}..HEAD", "--not", f"--remotes={remote}", cwd=dest)
+    return (total or "").strip() != (mine or "").strip()
+
+
+def fast_forward_to(dest: Path, theirs: str) -> None:
+    """Move the checked-out branch up to ref theirs, which is ahead of it."""
+    run("merge", "--ff-only", "--quiet", "--end-of-options", theirs, cwd=dest)
+
+
 def ahead(dest: Path, theirs: str) -> bool:
     """Whether HEAD has commits ref theirs lacks (or theirs is not there at all)."""
     tip = _commit(dest, theirs)

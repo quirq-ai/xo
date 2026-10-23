@@ -701,8 +701,8 @@ def _login_hub(client: Client) -> str | None:
                 "here, so spaces stay on GitHub alone; " + quirq.INSTALL)
     quirq.link(hub, found["token"])
     path = quirq.save(hub)
-    return (f"agent {hub.agent} on {hub.server}; a space's xo update and xo sync push there, not to GitHub "
-            f"(saved to {path}; the hub's client keeps the token)")
+    return (f"agent {hub.agent} on {hub.server}; a space's xo update and xo sync push there, not to GitHub, and "
+            f"anyone can read what they push (saved to {path}; the hub's client keeps the token)")
 
 
 def _key_works(client: Client) -> bool:
