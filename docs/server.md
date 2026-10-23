@@ -265,8 +265,10 @@ that record instead. Everything else stays as described here, the limits include
 - The hub failing is a 502 ("The hub did not answer"), or a 503 when it refuses `XO_HUB_KEY` (also
   one line on stderr), on every route that reads xo's data, `/me` included: showing Clerk's old
   copy instead would hide the user's later changes. A failed read is audited too (reads are not,
-  otherwise). A write that keeps losing races to other writers gives up with a 503 once it has
-  used `HUB_TIMEOUT` (10 seconds), as writes to Clerk do. Unset, nothing changes: everything
+  otherwise). A write that keeps losing races to other writers starts no new round once it has
+  used `HUB_TIMEOUT` (10 seconds), as writes to Clerk do, and answers 503; a round already under
+  way finishes, and each hub call may take up to `HUB_TIMEOUT` itself, so the slowest such
+  request takes about 30 seconds (40 when the user is copied first and Clerk is slow too). Unset, nothing changes: everything
   stays in Clerk.
 - **Set both or neither.** One without the other makes every request a 503 "xo server
   misconfigured" (on Vercel from the first request, since nothing checks at deploy). Check right
