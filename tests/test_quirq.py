@@ -374,8 +374,8 @@ def test_create_space_needs_the_hubs_client_once_xo_login_found_a_hub(folder_hub
 def test_a_repository_with_no_origin_goes_to_the_hub_only_when_its_name_is_typed(folder_hub, capsys):
     folder_hub.answer = None  # no terminal: --yes does not answer it
     code, _, err = run(capsys, "create", "space", "dev", "--yes")
-    assert code == 1 and "no origin on GitHub" in err and "notes" in err and "--yes does not answer this" in err
-    assert folder_hub.made == [] and not Path("dev/.git").exists()
+    assert code == 1 and "notes (no origin)" in err and "--yes does not answer this" in err
+    assert "nothing was pushed" in err and folder_hub.made == [] and not list(folder_hub.root.iterdir())
     folder_hub.answer = "de"
     code, _, _ = run(capsys, "create", "space", "dev", "--yes")
     assert code == 1 and folder_hub.made == []
@@ -399,20 +399,30 @@ def test_a_repository_public_on_github_goes_to_the_hub_without_typing(folder_hub
     assert _space_hub(folder_hub, "show", "notes:n.txt") == "n"
 
 
-@pytest.mark.parametrize("change", ["untracked", "edited", "commit"])
+@pytest.mark.parametrize("change", ["untracked", "edited", "commit", "assume-unchanged", "skip-worktree",
+                                    "excludes-file"])
 def test_files_github_does_not_have_need_the_name_typed_even_with_a_public_origin(folder_hub, capsys, change):
     _public(folder_hub)
     if change == "untracked":
         Path("dev/notes/private.txt").write_text("mine\n")
     elif change == "edited":
         Path("dev/notes/n.txt").write_text("not pushed\n")
-    else:
+    elif change == "commit":
         Path("dev/notes/n.txt").write_text("committed, not pushed\n")
         git("commit", "-qam", "local", cwd="dev/notes")
+    elif change in ("assume-unchanged", "skip-worktree"):  # git status no longer shows the edit
+        git("update-index", f"--{change}", "n.txt", cwd="dev/notes")
+        Path("dev/notes/n.txt").write_text("SECRET\n")
+        assert git("status", "--porcelain", cwd="dev/notes") == ""
+    else:  # an excludes file only the repository's own config names hides it from git status there
+        Path("dev/hide").write_text("secret.txt\n")
+        git("config", "core.excludesFile", str(Path("dev/hide").absolute()), cwd="dev/notes")
+        Path("dev/notes/secret.txt").write_text("SECRET\n")
+        assert git("status", "--porcelain", cwd="dev/notes") == ""
     folder_hub.answer = None
     code, _, err = run(capsys, "create", "space", "dev", "--yes")
-    assert code == 1 and "notes (changes not on GitHub)" in err and folder_hub.made == []
-    assert not Path("dev/.git").exists()
+    assert code == 1 and "notes (files GitHub does not have)" in err and folder_hub.made == []
+    assert not list(folder_hub.root.iterdir())  # nothing reached the hub
 
 
 def test_an_insteadof_rewrite_does_not_make_a_private_origin_read_as_public(folder_hub, capsys):
