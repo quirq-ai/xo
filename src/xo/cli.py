@@ -698,7 +698,8 @@ def _login_hub(client: Client) -> str | None:
     if not quirq.installed():
         quirq.forget()
         return (f"skipped: the xo server works with the quirq hub at {hub.server}, but the hub's client is not "
-                "here, so spaces stay on GitHub alone; " + quirq.INSTALL)
+                "here, so a space's projects push to GitHub as before, and xo create space stops until it is (or "
+                "put that space on GitHub with --github); " + quirq.INSTALL)
     quirq.link(hub, found["token"])
     path = quirq.save(hub)
     return (f"agent {hub.agent} on {hub.server}; a space's xo update and xo sync push there, not to GitHub, and "
@@ -828,6 +829,9 @@ def _create_space(args: argparse.Namespace) -> int:
     records it in your spaces as NAME. With no KIND, see _create_local_space."""
     if getattr(args, "kind", None) is None:
         return _create_local_space(args)
+    if getattr(args, "github", False):
+        raise XoError(f"--github is for a folder space (xo create space [NAME] --github); a {args.kind} space is "
+                      "made on XO, so leave it out")
     if args.space_name is None:
         raise XoError(f"{args.kind} is a kind of space, not a name: name it first, xo create space NAME {args.kind}")
     if not names.xo_name_ok(args.space_name):
