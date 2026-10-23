@@ -2190,7 +2190,12 @@ class App:
                               "it is not editable here")
         # xo's keys as the server reads them: the hub's, as stored. Read before any write, so a hub
         # that fails leaves Clerk unchanged; a Clerk PATCH here never names them.
-        doc = self._stored(user_id, {**who, **extra})[1] if self.hub else None
+        try:
+            doc = self._stored(user_id, {**who, **extra})[1] if self.hub else None
+        except _Reply as r:
+            if r.status == 404:  # the words this route uses with the hub off
+                raise _Reply(404, "User not found") from None
+            raise
         try:
             u = self.clerk.update_metadata(user_id, changes) if changes else self.clerk.user(user_id)
         except ClerkError as e:

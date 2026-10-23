@@ -5,12 +5,17 @@ the space recorded in your private metadata.
                           its repo name: juanfont/headscale is ./S/headscale, or ./S/juanfont/headscale
                           when another project there has that name); ./S/.xo/state.json remembers
                           the space's rev and refs as installed
-    xo update space:S     push each checkout's branch to its upstream (refused if the remote is
-                          ahead), then record each checkout's branch (or commit) in the space, if the
-                          space is still as installed; refused otherwise: run xo sync
-    xo sync space:S       rebase each checkout's branch on its upstream and push it, take the
-                          space's changes, keep yours, stop on a project both changed, then record
-                          the result
+    xo update space:S     push each checkout's branch that has new commits to its upstream (refused
+                          if the remote is ahead), then record each checkout's branch (or commit) in
+                          the space, if the space is still as installed; refused otherwise: run xo sync
+    xo sync space:S       rebase each checkout's branch on its upstream and push it when it has new
+                          commits, take the space's changes, keep yours, stop on a project both
+                          changed, then record the result
+
+Once xo login has found a quirq hub (xo.quirq), a space's GitHub projects work through it: each
+checkout gets a `quirq` remote, install takes a branch from there when the hub has it, and update
+and sync push to and rebase on the hub's branch instead of the upstream, so nothing reaches GitHub
+until you push there yourself (git push, a pull request). origin and the upstreams stay as they are.
     xo install project:P  ./headscale cloned from GitHub, or fetched and fast-forwarded (P is
                           juanfont/headscale or, when only one of your projects is called that,
                           headscale)
@@ -31,7 +36,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from xo import gitops, names
+from xo import gitops, names, quirq, spacerepo
 from xo.client import Client, XoError
 
 STATE = Path(".xo") / "state.json"
@@ -177,9 +182,10 @@ def _save(root: Path, name: str, rev: int, pairs: list[tuple[str, str]]) -> None
     os.replace(tmp, path)
 
 
-def _place(dest: Path, project: str, ref: str | None, root: Path = Path(".")) -> bool:
-    """Clone or fetch a GitHub project at dest and put it at ref. False for a project with no
-    GitHub remote, which xo cannot fetch: it is left as it is."""
+def _place(dest: Path, project: str, ref: str | None, root: Path = Path("."), hub: quirq.Hub | None = None) -> bool:
+    """Clone or fetch a GitHub project at dest and put it at ref; with hub, its quirq remote too,
+    so ref may be a branch only the hub has. False for a project with no GitHub remote, which xo
+    cannot fetch: it is left as it is."""
     if not names.is_github(project):
         _say(f"{project} has no GitHub remote; left as it is" + ("" if dest.exists() else " (not here)"))
         return False
@@ -197,8 +203,11 @@ def _place(dest: Path, project: str, ref: str | None, root: Path = Path(".")) ->
             raise XoError(f"./{holder} is a git checkout, and {project} goes in ./{dest} inside it; move ./{holder} "
                           "and try again")
         gitops.clone(project, dest)
+    if hub is not None:
+        gitops.set_quirq(dest, hub.url(project))
+        gitops.fetch_quirq(dest)
     if ref is not None:
-        gitops.checkout(dest, ref)
+        gitops.checkout(dest, ref, hub=hub is not None)
     return True
 
 
@@ -213,13 +222,18 @@ def install(client: Client, kind: str, name: str) -> Any:
     space = _space(client, name)
     pairs = _pairs(space.get("projects"), f"space {name}")
     root = Path(name)
+    hub = quirq.ready(quirq.settings())
     for project, ref in pairs:
         there = dest(root, project, [p for p, _ in pairs])
-        if _place(there, project, ref, root):
+        if _place(there, project, ref, root, hub):
             _say(f"./{there}: {ref}")
     rev = _rev(space)
     _save(root, name, rev, pairs)
     return {"space": name, "rev": rev, "projects": [{p: r} for p, r in pairs]}
+
+
+def _remotes(hub: quirq.Hub | None) -> tuple[str, ...]:
+    return (gitops.QUIRQ, "origin") if hub is not None else ("origin",)
 
 
 def _local(root: Path, base: list[tuple[str, str]]) -> list[tuple[str, str]]:
@@ -243,15 +257,19 @@ def _local(root: Path, base: list[tuple[str, str]]) -> list[tuple[str, str]]:
     return out
 
 
-def _published(root: Path, pairs: list[tuple[str, str]], base: dict[str, str]) -> None:
-    """Refuse to record a ref others could not install: it must be on the project's remote."""
+def _published(root: Path, pairs: list[tuple[str, str]], base: dict[str, str], hub: quirq.Hub | None = None) -> None:
+    """Refuse to record a ref others could not install: it must be on the project's remote (or,
+    with hub, on the hub)."""
     for project, ref in pairs:
         there = dest(root, project, [p for p, _ in pairs])
         if base.get(project) == ref or not (there / ".git").exists():
             continue
         gitops.fetch(there)
+        if hub is not None and names.is_github(project):
+            gitops.set_quirq(there, hub.url(project))  # never fetch a quirq remote that points elsewhere
+            gitops.fetch_quirq(there)
         try:
-            gitops.resolve(there, ref)
+            gitops.resolve(there, ref, _remotes(hub))
         except XoError:
             raise XoError(f"./{there} is at {ref}, which its remote does not have; push it first "
                           "(xo update project:" + project + ")") from None
@@ -281,16 +299,59 @@ def _checkouts(root: Path, pairs: list[tuple[str, str]]) -> list[Path]:
 
 
 def _git_step(dests: list[Path], rebase: bool) -> list[Path]:
-    """Each checkout on a branch with an upstream: rebased on it first when rebase, then pushed
-    (never forced, so git refuses when the remote is ahead). Tags and commits are left as they are.
-    The checkouts pushed."""
+    """Each checkout on a branch with an upstream: rebased on it first when rebase, then pushed when
+    it has commits the upstream lacks (never forced, so git refuses when the remote is ahead). A
+    branch with nothing new is not pushed, so a repo you cannot push to is no problem until you
+    commit to it. Tags and commits are left as they are. The checkouts pushed."""
     pushed = []
     for there in dests:
         if gitops.tracking(there):
             if rebase:
                 gitops.pull_rebase(there)
-            gitops.push(there)
-            pushed.append(there)
+            if gitops.ahead_of_upstream(there):
+                gitops.push(there)
+                pushed.append(there)
+    return pushed
+
+
+def _hub_step(root: Path, pairs: list[tuple[str, str]], hub: quirq.Hub, rebase: bool) -> list[Path]:
+    """_git_step with the hub in the upstream's place: each GitHub project's checkout on a branch
+    gets its quirq remote and fetches it, is rebased on the hub's branch first when rebase (and the
+    hub has it), then pushed there when it has commits the hub lacks. Nothing goes to GitHub. A
+    project GitHub does not show to everyone is refused before anything is sent, since anyone can
+    read the hub. A project with no GitHub repo has no copy on the hub: it takes _git_step, as
+    without a hub. The checkouts pushed."""
+    local = [dest(root, p, [q for q, _ in pairs]) for p, _ in pairs if not names.is_github(p)]
+    pushed = _git_step([there for there in local if there.exists()], rebase)  # no hub copy: as before
+    for project, _ in pairs:
+        there = dest(root, project, [p for p, _ in pairs])
+        name = gitops.branch(there) if there.exists() else None
+        if name is None or not names.is_github(project):
+            continue
+        gitops.set_quirq(there, hub.url(project))
+        exists = gitops.fetch_quirq(there)
+        theirs = f"refs/remotes/{gitops.QUIRQ}/{name}"
+        if rebase and gitops.has(there, theirs) and not gitops.holds(there, theirs):
+            if not gitops.ahead(there, theirs):
+                gitops.fast_forward_to(there, theirs)  # only behind the hub: nothing of yours moves
+            elif gitops.pushed_since(there, theirs, "origin"):
+                # Rebasing would rewrite commits GitHub already has, and the next git push there fails.
+                raise XoError(f"./{there}: the hub's {name} and yours have both moved on, and yours holds commits "
+                              f"GitHub already has, so xo will not rebase them; merge the hub's in by hand (git merge "
+                              f"{gitops.QUIRQ}/{name} in that folder), then run xo sync space:{root.name} again")
+            else:
+                gitops.rebase_on(there, theirs)
+        if not gitops.ahead(there, theirs) or (not gitops.has(there, theirs) and gitops.on_remote(there, "origin")):
+            continue  # the hub has it, or it is GitHub's own and nothing on the hub builds on it yet
+        owner, repo = project.split("/")
+        if spacerepo.heads(owner, repo) is None:
+            raise XoError(f"./{there}: {project} is not public on GitHub, and anyone can read the hub, so xo will not "
+                          "send it there; nothing was pushed for it")
+        if not exists:
+            quirq.create(hub, project)
+        gitops.push_quirq(there, name)
+        _say(f"./{there}: pushed {name} to the hub ({hub.url(project)})")
+        pushed.append(there)
     return pushed
 
 
@@ -303,12 +364,17 @@ def update(client: Client, kind: str, name: str) -> Any:
     root = Path(name)
     state = _state(root)
     base = _pairs(state.get("projects"), str(root / STATE))
-    _git_step(_checkouts(root, base), rebase=False)
+    hub = quirq.ready(quirq.settings())
+    checkouts = _checkouts(root, base)  # each one checked before anything is pushed
+    if hub is None:
+        _git_step(checkouts, rebase=False)
+    else:
+        _hub_step(root, base, hub, rebase=False)
     pairs = _local(root, base)
     if pairs == base:
         _say(f"space {name}: your checkouts are where the space has them; nothing to record")
         return {"space": name, "rev": state["rev"], "projects": [{p: r} for p, r in base]}
-    _published(root, pairs, dict(base))
+    _published(root, pairs, dict(base), hub)
     space = _record(client, name, state["rev"], pairs, base)
     _save(root, name, _rev(space), _pairs(space.get("projects"), f"space {name}"))
     return space
@@ -324,7 +390,9 @@ def sync(client: Client, kind: str, name: str) -> Any:
     root = Path(name)
     state = _state(root)
     installed = _pairs(state.get("projects"), str(root / STATE))
-    pushed = _git_step(_checkouts(root, installed), rebase=True)
+    hub = quirq.ready(quirq.settings())
+    checkouts = _checkouts(root, installed)
+    pushed = _git_step(checkouts, rebase=True) if hub is None else _hub_step(root, installed, hub, rebase=True)
     base = dict(installed)
     local = dict(_local(root, installed))
     space = _space(client, name)
@@ -356,13 +424,13 @@ def sync(client: Client, kind: str, name: str) -> Any:
         raise XoError("both you and the space changed " + "; ".join(clashes) + "." + left)
     for project, ref in merged:
         if local.get(project) != ref:
-            _place(dest(root, project, [p for p, _ in merged]), project, ref, root)
+            _place(dest(root, project, [p for p, _ in merged]), project, ref, root, hub)
     # The checkouts now hold the space's refs and yours: save the space as read, so that if recording
     # fails below, the next sync still counts your refs as yours and the space's as its own.
     _save(root, name, _rev(space), remote)
     rev = _rev(space)
     if merged != remote:
-        _published(root, merged, dict(remote))
+        _published(root, merged, dict(remote), hub)
         rev = _rev(_record(client, name, rev, merged, remote))
     _save(root, name, rev, merged)
     return {"space": name, "rev": rev, "projects": [{p: r} for p, r in merged]}

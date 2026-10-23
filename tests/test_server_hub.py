@@ -316,3 +316,9 @@ def test_the_hub_client_quotes_the_user_id(hub_http):
     answers.append(_json(200, {"version": 0, "doc": None}))
     hub.record("user_a/../b")
     assert seen[0]["path"] == "/-/api/xo/v1/records/" + urllib.parse.quote("user_a/../b", safe="")
+
+
+def test_admin_metadata_of_an_unknown_user_reads_as_with_the_hub_off(hub_env):
+    from tests.test_server import ADMIN_KEY
+    status, out = _as(_app(_alice(), FakeHub()), ADMIN_KEY, "/user-metadata/user_nobody", method="GET")
+    assert (status, out["error"]) == (404, "User not found")

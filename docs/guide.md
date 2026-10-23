@@ -107,7 +107,8 @@ xo connect old --id THE_ID                       # an entry for an XO space you 
 xo spaces                                        # your spaces, with their projects and refs (also xo list spaces)
 xo list                                          # your projects and your spaces together
 xo install space:dev                             # ./dev/REPO for each project, at its ref
-xo update space:dev                              # push each branch under ./dev, record the refs
+xo update space:dev                              # push each branch with new commits under ./dev (to the
+                                                 # quirq hub once xo login found one), record the refs
 xo sync space:dev                                # rebase and push each branch, merge the refs, record
 xo share space:dev bob                           # invite bob to a copy of dev (its name and projects)
 xo list shared                                   # the invites waiting on you, each with an id
@@ -195,11 +196,13 @@ xo sync project:headscale                        # git pull --rebase, then push
     `.aws` or `.gnupg`, any hidden folder of your home (`~/.config`, `~/.aws`) and `~/Library`, a
     folder inside another git repository (the folder may be one itself), and a repository's own
     `.git` folder.
-  - `update` first pushes each checkout's branch to its upstream (refused if the remote is ahead:
-    run `xo sync`). Then it sends the branch (or, when detached, the commit) each checkout is on,
+  - `update` first pushes each checkout's branch that has commits its upstream lacks (refused if
+    the remote is ahead: run `xo sync`); a branch with nothing new is not pushed, so a repo you
+    cannot push to is no problem until you commit to it. Then it sends the branch (or, when detached, the commit) each checkout is on,
     and is refused when the space changed since: run `xo sync`. A ref its remote does not have is
     refused too, so nobody else's install breaks. With nothing changed it records nothing.
-  - `sync` first rebases each checkout's branch on its upstream and pushes it, then takes the
+  - `sync` first rebases each checkout's branch on its upstream and pushes it when it has new
+    commits, then takes the
     space's changes and keeps yours; if both changed the same project (or the space dropped one you
     changed) it stops and changes nothing. If git cannot rebase a branch cleanly, xo undoes the
     rebase and says so.
@@ -207,6 +210,32 @@ xo sync project:headscale                        # git pull --rebase, then push
     its own is refused. Pushes are never forced, go to the branch's upstream remote (not a
     `pushRemote`), and need a branch (not a detached HEAD). Tags and commits are left where they
     are.
+- **The quirq hub.** When the xo server keeps a quirq hub, `xo login` asks it for your hub agent
+  (named after your username) and hands the agent's token to the hub's own client (`spacehub`,
+  from quirq-ai/space-hub, which brings `git-remote-quirq`; it needs Node 22), which keeps it; xo
+  saves only the hub's address and the agent's name, and `xo status` shows them. Without the
+  client, `xo login` says how to install it and spaces stay on GitHub alone. With it, a space's
+  GitHub projects work through the hub, a relay for you and your agents while the work is under
+  way; GitHub stays where the work ends up:
+  - each checkout gets a second remote, always called `quirq` and always a quirq URL,
+    `quirq://hub.quirq.dev/AGENT/OWNER--REPO`. `origin`, the upstreams and everything GitHub
+    sees stay as they are, so `git push` and pull requests work as before. A `quirq` remote that
+    points anywhere else is refused, never changed.
+  - `install` fetches the hub too and takes a branch from there when the hub has it (the space's
+    latest work); a new local branch still tracks GitHub's when GitHub has it.
+  - `update` pushes each branch with commits the hub lacks to the hub, never to GitHub (a branch
+    GitHub already has and the hub does not is not copied); `sync` rebases on the hub's branch
+    first. The ref recorded may be a branch only the hub has. Push to GitHub yourself (`git push`
+    in that folder, a pull request) when the work is done.
+  - Anyone can read the hub in this version: what `update` and `sync` push there, commits not on
+    GitHub yet included, can be read by anyone. So a project GitHub does not show to everyone (xo
+    checks with no login at all) is refused before anything is sent.
+  - `sync` never rewrites a commit GitHub already has: when your branch and the hub's have both
+    moved on and yours holds commits on GitHub, it stops and asks you to merge the hub's in by hand.
+  - Without the hub's client, `xo login` deletes what xo saved about the hub (if anything) and
+    says "skipped"; spaces then stay on GitHub alone until you install it and log in again.
+  - `project:P` commands and `xo create space` stay on GitHub. `xo logout` deletes what xo saved
+    about the hub; the hub's client keeps its own login (`spacehub auth logout`).
 - `xo share` puts an invite in the other user's `shared` list; nothing else of theirs is changed
   or shown to you. A space's local projects are left out of it.
   - Accepting a space copies its name and projects into your own metadata as a new space at rev 1.

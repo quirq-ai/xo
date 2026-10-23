@@ -30,7 +30,9 @@
                                             a saved key still works. When the xo server has browser
                                             login, you sign in to XO in your browser and the server
                                             sends your key; otherwise, with --key, or with a key piped
-                                            in, it is asked for without showing it. github runs gh auth
+                                            in, it is asked for without showing it. When the xo server
+                                            keeps a quirq hub, your hub agent's token goes to the hub's
+                                            client (spacehub). github runs gh auth
                                             login for github.com, unless gh is already connected.
     xo status                               each service, its address, and whether you are logged in.
     xo projects [add NAME]                  show the projects list in your private metadata, or add
@@ -78,10 +80,13 @@
                                             into ./S/ at its ref. A GitHub project's folder is its repo's
                                             name; call it by that name, or by OWNER/REPO when two of
                                             your projects share it.
-    xo update project:P | space:S           push P's branch (never forced); for a space, record the
-                                            refs checked out under ./S/ (refused if the space moved on).
-    xo sync project:P | space:S             pull --rebase and push P; for a space, take its changes,
-                                            keep yours, then record the result.
+    xo update project:P | space:S           push P's branch (never forced); for a space, push each
+                                            branch with new commits (to the quirq hub once xo login
+                                            found one, not to GitHub), then record the refs checked
+                                            out under ./S/ (refused if the space moved on).
+    xo sync project:P | space:S             pull --rebase and push P; for a space, rebase on the
+                                            upstream (or the hub's branch), take the space's
+                                            changes, keep yours, then record the result.
     (the xo key step:)                      ask for your API key without showing it, check it with
                                             XO through the xo server, and save it with the URL.
     xo logout                               delete the saved key, URL and addresses; asks before
@@ -118,7 +123,8 @@ from pathlib import Path
 from typing import Any, NoReturn
 from urllib.parse import quote
 
-from xo import __version__, commands, github, gitops, names, selfupdate, services, spacerepo, spec, weblogin, workspace
+from xo import (__version__, commands, github, gitops, names, quirq, selfupdate, services, spacerepo, spec, weblogin,
+                workspace)
 from xo.client import (CORE_PATH, DEFAULT_TIMEOUT, KEY_ENV, MAYBE_RECEIVED, MIN_SECRET, Client, Login, XoError,
                        api_key, check_key, credentials_path, forget_login, read_key, redact, save_login, saved_login,
                        xo_url)
@@ -615,6 +621,13 @@ def _login(args: argparse.Namespace) -> int:
             last["me"], last["xo"] = url, platform
         except XoError as e:
             report("me", str(e), "")
+        else:
+            try:
+                line = _login_hub(args.client)
+                if line:
+                    report("hub", None, line)
+            except XoError as e:
+                report("hub", str(e), "")
     if args.service in (None, "github"):
         if not github.installed():
             report("github", None, f"skipped: the GitHub CLI is not installed ({github.INSTALL})")
@@ -665,6 +678,31 @@ def _login_xo(args: argparse.Namespace, url: str, saved: Login | None) -> str:
     where = "only you can read it" if os.name != "nt" else "xo cannot limit who reads it on Windows"
     return (f"logged in as {who}" if who else "logged in; the key works with XO") + (
         f"; {made} and URL saved to {path} ({where}); xo logout deletes them")
+
+
+def _login_hub(client: Client) -> str | None:
+    """The hub step: ask the xo server for your hub agent and hand its token to the hub's client, so
+    a space's update and sync go through the hub (xo.quirq). A server with no hub (404), or one
+    older than the route, leaves spaces on GitHub alone, as before, and nothing is said."""
+    try:
+        data = client.request("POST", "/me/hub").data
+    except XoError as e:
+        if ": HTTP 404" not in str(e):
+            raise
+        quirq.forget()
+        return None
+    found = data.get("data") if isinstance(data, dict) else None
+    if not isinstance(found, dict) or not isinstance(found.get("token"), str) or not found["token"]:
+        raise XoError("the xo server did not answer with a hub agent (is it older than this command?)")
+    hub = quirq.parse(found.get("server"), found.get("agent"))
+    if not quirq.installed():
+        quirq.forget()
+        return (f"skipped: the xo server works with the quirq hub at {hub.server}, but the hub's client is not "
+                "here, so spaces stay on GitHub alone; " + quirq.INSTALL)
+    quirq.link(hub, found["token"])
+    path = quirq.save(hub)
+    return (f"agent {hub.agent} on {hub.server}; a space's xo update and xo sync push there, not to GitHub, and "
+            f"anyone can read what they push (saved to {path}; the hub's client keeps the token)")
 
 
 def _key_works(client: Client) -> bool:
@@ -1282,6 +1320,10 @@ def _logout(args: argparse.Namespace) -> int:
     print(f"xo: me: deleted {path}" if path else f"xo: me: no saved key at {credentials_path()}",
           file=sys.stderr)
     services.forget_addresses()
+    hub = quirq.forget()
+    if hub:
+        print(f"xo: hub: deleted {hub}; spaces use GitHub alone again (the hub's client keeps its own login: "
+              f"{quirq.CLIENT} auth logout)", file=sys.stderr)
     if os.environ.get(KEY_ENV, "").strip():
         print(f"xo: {KEY_ENV} is still set in this terminal; run unset {KEY_ENV} to clear it", file=sys.stderr)
     failed = 0
@@ -1320,6 +1362,10 @@ def _status(args: argparse.Namespace) -> int:
                 else "the GitHub CLI is not installed")
     rows = [("me", url, state), ("xo", platform, "uses the same key, through the xo server (me)"),
             ("github", f"https://{github.HOST}", gh_state)]
+    hub = quirq.settings()
+    if hub is not None:
+        rows.append(("hub", hub.server, f"agent {hub.agent}; spaces push here" + (
+            "" if quirq.installed() else f", but {quirq.HELPER} is not installed")))
     for name, where, what in rows:
         print(spec.clean(f"{name:<6} {where:<34} {what}"))
     return 0
