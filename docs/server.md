@@ -253,8 +253,42 @@ that record instead. Everything else stays as described here, the limits include
   the user's Clerk username in lowercase (a name the hub refuses is a 409). The server sends the
   hub only the username Clerk has for the key's own user. The answer's `token` is what that
   user's xo pushes to the hub with; it is never logged.
+- **Agent names are first come.** A hub agent name stays with the account that took it, so a
+  username someone gave up and another account then took is a 409 ("belongs to another account")
+  for the new owner, who must pick another username. Names the hub keeps for itself are a 409 that
+  says so. Only this server makes agents (the hub then refuses its own sign-ups), and only from
+  usernames Clerk gave, so nobody can take a name that no Clerk account had first.
+- **`/user-metadata`** (admin keys) shows `projects`, `spaces` and `shared` from the hub, as
+  stored, and refuses (422, nothing written) a PATCH naming any of them in `privateMetadata`, even
+  when `$XO_EDITABLE_PRIVATE_KEYS` lists them: Clerk's copy is no longer read, so a change there
+  would be lost without a word. Its other keys are read and written in Clerk as before.
 - The hub failing is a 502 ("The hub did not answer"), or a 503 when it refuses `XO_HUB_KEY` (also
-  one line on stderr). Unset, nothing changes: everything stays in Clerk.
+  one line on stderr), on every route that reads xo's data, `/me` included: showing Clerk's old
+  copy instead would hide the user's later changes. A failed read is audited too (reads are not,
+  otherwise). A write that keeps losing races to other writers gives up with a 503 once it has
+  used `HUB_TIMEOUT` (10 seconds), as writes to Clerk do. Unset, nothing changes: everything
+  stays in Clerk.
+- **Set both or neither.** One without the other makes every request a 503 "xo server
+  misconfigured" (on Vercel from the first request, since nothing checks at deploy). Check right
+  after turning it on: [deploy-vercel.md](deploy-vercel.md), section 7.
+
+### Cutover and rollback
+
+- **Cutover is per user, on first use.** Nothing is copied in bulk. Each user's record is made from
+  their Clerk private metadata the first time any request needs it (their own, a share to them, or
+  an admin read). From then on Clerk's copy of the three keys is never read or written again by a
+  server with the hub on.
+- **Every instance must agree.** A server with the hub off, still running beside one with it on
+  (an older deployment, a preview with the variables, a local `xo serve`), reads and writes Clerk's
+  copy, which the hub-on servers no longer read: its writes are invisible to them, and theirs to it.
+  Turn the hub on for production in one deploy, and do not run hub-off servers against the same
+  Clerk instance afterwards.
+- **Turning it off loses the hub's writes from users' view.** With both variables deleted, every
+  route reads Clerk again, which holds each user's data as it was when they were copied: projects,
+  spaces and invites added on the hub disappear from xo (they are still in the hub's record, but
+  this server does not copy them back). Turn it off only to undo a cutover that just failed, before
+  people have used it; afterwards, copy the records back to Clerk first (no tool does this yet).
+- Turning it on again after that picks up each user's hub record as it was, not Clerk's newer copy.
 
 ## Projects
 

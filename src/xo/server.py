@@ -434,7 +434,22 @@ class HubError(Exception):
 
 
 class HubConflict(Exception):
-    """The record changed since it was read: read it again."""
+    """The hub refused a write that clashes: the record changed since it was read (read it again),
+    or an agent name it cannot give. `reason` is the hub's own one-line error, cut short."""
+
+    def __init__(self, reason: str = "") -> None:
+        super().__init__(reason or "conflict")
+        self.reason = reason
+
+
+def _hub_error(e: urllib.error.HTTPError) -> str:
+    """The `error` of a hub refusal's JSON body, one line of at most 200 characters ("" if none)."""
+    try:
+        out = json.loads(e.read(MAX_HUB_ANSWER + 1)[:MAX_HUB_ANSWER])
+    except (ValueError, RecursionError, OSError, http.client.HTTPException):
+        return ""
+    error = out.get("error") if isinstance(out, dict) else None
+    return " ".join(error.split())[:200] if isinstance(error, str) else ""
 
 
 class Hub:
@@ -458,7 +473,7 @@ class Hub:
                 raw = resp.read(MAX_HUB_ANSWER + 1)
         except urllib.error.HTTPError as e:
             if e.code == 409:
-                raise HubConflict() from None
+                raise HubConflict(_hub_error(e)) from None
             raise HubError(e.code, "redirect" if 300 <= e.code < 400 else e.code) from None
         except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException, ValueError):
             raise HubError(502, "unreachable") from None
@@ -805,6 +820,11 @@ def _clerk_failure(e: ClerkError) -> _Reply:
     return _Reply(502, "Clerk did not answer", e.seen)
 
 
+def _reading(key: dict, route: str) -> dict:
+    """The audit fields of a read, used only when the hub fails it: reads are not audited otherwise."""
+    return {"method": "GET", "route": route, "keyId": key.get("id"), "caller": key.get("subject")}
+
+
 def _hub_failure(e: HubError) -> _Reply:
     """The hub failed: our key (one loud line, never the key), or the hub down."""
     if e.status in (401, 403):
@@ -1073,8 +1093,14 @@ class App:
                                          "or inner hyphens; change it first")
         try:
             made = self._hub(lambda: self.hub.agent(key["subject"], agent), who)
-        except HubConflict:
-            raise self._refuse(who, 409, f"The hub already has an agent called {agent} that is not yours") from None
+        except HubConflict as e:
+            if "reserved" in e.reason:
+                raise self._refuse(who, 409, f"The hub keeps the name {agent} for itself; change your username "
+                                             "to get a hub agent") from None
+            # Agent names are first come across the hub, and one stays with the account that took it:
+            # a username given up and then taken by someone else stays the first account's agent.
+            raise self._refuse(who, 409, f"The hub's agent {agent} belongs to another account (one that had "
+                                         "this username before); change your username to get a hub agent") from None
         self.audit(**who, outcome=200)  # never the token
         return {"server": self.cfg.hub_url, "agent": made["agent"], "token": made["token"]}
 
@@ -1224,7 +1250,7 @@ class App:
                 # The key's own user only (the subject Clerk verified, never an id from the request).
                 # Admin rights come from the key's claim and $XO_ADMIN_KEY_IDS, not from metadata.
                 "publicMetadata": _mask_secrets(u.get("public_metadata") or {}),
-                "privateMetadata": self._masked_private(self._private_shown(subject, u))}
+                "privateMetadata": self._masked_private(self._private_shown(subject, u, _reading(key, "/me")))}
         with self._lock:
             if len(self._me_cache) >= ME_CACHE_PRUNE_AT:  # entries hold metadata: drop the expired ones
                 self._me_cache = {s: e for s, e in self._me_cache.items() if now - e[0] < ME_CACHE_SECONDS}
@@ -1233,17 +1259,19 @@ class App:
 
     def _projects(self, key: dict) -> dict:
         """The `projects` list in the key's own private metadata ([] when there is none)."""
-        _, private = self._stored(key["subject"])
+        _, private = self._stored(key["subject"], _reading(key, "/me/projects"))
         projects = private.get("projects") if isinstance(private, dict) else None
         return {"projects": _mask_secrets([] if projects is None else projects)}
 
-    def _user(self, subject: str) -> dict:
+    def _user(self, subject: str, who: dict | None = None) -> dict:
+        """The user's Clerk record; a failure is audited (when `who` is given) and becomes the reply."""
         try:
             return self.clerk.user(subject)
         except ClerkError as e:
-            if e.status == 404:
-                raise _Reply(404, "Account not found") from None
-            raise _clerk_failure(e) from None
+            reply = _Reply(404, "Account not found") if e.status == 404 else _clerk_failure(e)
+            if who:
+                self.audit(**who, outcome=reply.status, clerk=e.seen)
+            raise reply from None
 
     def _hub(self, call, who: dict | None):
         """A hub call; a failure is audited (when `who` is given) and becomes the caller's reply."""
@@ -1268,19 +1296,21 @@ class App:
         version, doc = self._hub(lambda: self.hub.record(subject), who)
         if version:
             return version, doc
-        private = (user or self._user(subject)).get("private_metadata")
+        private = (user or self._user(subject, who)).get("private_metadata")
         copied = {k: private[k] for k in XO_KEYS if k in private} if isinstance(private, dict) else {}
         try:
             return self._hub(lambda: self.hub.put(subject, 0, copied), who), copied
         except HubConflict:  # another request copied it first: that copy stands
             return self._hub(lambda: self.hub.record(subject), who)
 
-    def _private_shown(self, subject: str, user: dict) -> Any:
-        """The private metadata /me shows: with the hub on, xo's keys come from the hub."""
+    def _private_shown(self, subject: str, user: dict, who: dict | None = None) -> Any:
+        """The private metadata /me shows: with the hub on, xo's keys come from the hub. A hub that
+        fails fails the request (502), audited when `who` is given: showing Clerk's old copy instead
+        would show lists the user's later changes are missing from."""
         private = user.get("private_metadata")
         if not self.hub:
             return private
-        _, doc = self._stored(subject, user=user)
+        _, doc = self._stored(subject, who, user=user)
         rest = {k: v for k, v in private.items() if k not in XO_KEYS} if isinstance(private, dict) else {}
         return {**rest, **(doc or {})}
 
@@ -1363,12 +1393,15 @@ class App:
         conflict the record is read again and `step` decides again. The first and last records read,
         and the keys written."""
         wrote, first, outcome, value, private = False, None, None, {}, {}
+        started = time.monotonic()
         for attempt in range(PROJECT_TRIES + 1):
             version, private = self._stored(subject, who)
             private = {} if private is None else private
             first = private if first is None else first
             outcome, value = step(private, wrote)
-            if outcome == "done" or attempt == PROJECT_TRIES:
+            # As with Clerk: no retry write once a slow hub has used HUB_TIMEOUT, so the request ends
+            # inside the client's and the platform's deadlines, with the 503 below.
+            if outcome == "done" or attempt == PROJECT_TRIES or (attempt and time.monotonic() - started > HUB_TIMEOUT):
                 break
             if set(value) != {"shared"} and _size({**private, **value}) > PRIVATE_BUDGET:
                 raise self._refuse(who, 422, f"That would take your xo data past {PRIVATE_BUDGET // 1024}KB; "
@@ -1569,7 +1602,7 @@ class App:
 
     def _spaces(self, key: dict) -> dict:
         """The `spaces` list in the key's own private metadata ([] when there is none)."""
-        _, private = self._stored(key["subject"])
+        _, private = self._stored(key["subject"], _reading(key, "/me/spaces"))
         spaces = private.get("spaces") if isinstance(private, dict) else None
         return {"spaces": _shown_spaces([] if spaces is None else spaces)}
 
@@ -2149,6 +2182,15 @@ class App:
         changes = self._changes(body, who) if method == "PATCH" else None
         changed = {name: sorted(value) for name, value in changes.items()} if changes else None
         extra = {"changed": changed} if changed else {}
+        in_hub = sorted(k for k in (changes or {}).get("privateMetadata", {}) if k in XO_KEYS) if self.hub else []
+        if in_hub:
+            # Clerk's copy of these is no longer read, so a change there would be lost without a word.
+            self.audit(**who, outcome="refused", bucket="privateMetadata", keys=in_hub)
+            raise _Reply(422, f"privateMetadata.{in_hub[0]} is kept in the hub on this server, not in Clerk; "
+                              "it is not editable here")
+        # xo's keys as the server reads them: the hub's, as stored. Read before any write, so a hub
+        # that fails leaves Clerk unchanged; a Clerk PATCH here never names them.
+        doc = self._stored(user_id, {**who, **extra})[1] if self.hub else None
         try:
             u = self.clerk.update_metadata(user_id, changes) if changes else self.clerk.user(user_id)
         except ClerkError as e:
@@ -2156,7 +2198,11 @@ class App:
             # The outcome is what the caller got; `clerk` is what Clerk (or our own budget) said.
             self.audit(**who, outcome=reply.status, clerk=e.seen, **extra)
             raise reply from None
-        data = {"publicMetadata": u.get("public_metadata") or {}, "privateMetadata": u.get("private_metadata") or {}}
+        private = u.get("private_metadata") or {}
+        if self.hub:
+            private = {**{k: v for k, v in private.items() if k not in XO_KEYS}, **(doc or {})} \
+                if isinstance(private, dict) else (doc or {})
+        data = {"publicMetadata": u.get("public_metadata") or {}, "privateMetadata": private}
         self.audit(**who, outcome=200, **extra)  # after the reply is built
         return data
 
