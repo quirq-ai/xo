@@ -247,6 +247,36 @@ browser login for the same account hands back the newest of those while it has a
 left (when Clerk will read its secret back), and never a key made any other way; otherwise it makes
 a new one. Revoke a key in the Clerk Dashboard.
 
+## 7. The hub (off until you turn it on)
+
+With `XO_HUB_URL` and `XO_HUB_KEY` set, the server keeps xo's data (`projects`, `spaces`, `shared`)
+on the quirq hub instead of in Clerk ([server.md](server.md), "The hub"). Both are unset today, and
+nothing changes until you set them.
+
+1. Deploy the hub (quirq-ai/space-hub) at `https://hub.quirq.dev` with `SPACEHUB_XO_KEY` set to a
+   random value of 32 characters or more, and check that `https://hub.quirq.dev` answers.
+2. In **Settings → Environment Variables**, add **both** for Production in one save:
+   `XO_HUB_URL` = `https://hub.quirq.dev` and `XO_HUB_KEY` = the same value as the hub's
+   `SPACEHUB_XO_KEY`. One without the other makes every request a 503 "xo server misconfigured";
+   Vercel does not check this when it deploys, only the first request does.
+3. Redeploy (**Deployments**, the latest production deployment, **Redeploy**), and once it is
+   **Ready** check it at once:
+
+   ```sh
+   curl -s https://xo.quirq.dev/healthz && xo me && xo projects
+   ```
+
+   `/healthz` must say `ok` (a 503 "misconfigured" means one variable is missing or `XO_HUB_URL`
+   is not https; **Logs** say which), and `xo me` and `xo projects` must show your projects as
+   before (a 503 "misconfigured" from them means the hub refused `XO_HUB_KEY`; a 502 "The hub did
+   not answer" means it is down or the URL is wrong). If any of these fails, delete both variables
+   and redeploy: that puts everything back on Clerk as it was.
+
+**Turning it off later is not a clean undo.** Whatever users changed while the hub was on lives
+only in the hub; with both variables deleted, the server reads Clerk's copy again, as it was when
+each user was first copied. Read the details under "Cutover and rollback" in server.md before you
+turn the hub off once people have used it.
+
 ## What is and is not protected on Vercel
 
 | Protected | How |

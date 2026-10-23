@@ -51,6 +51,8 @@ class FakeHub:
     def agent(self, subject, username):
         self._check("agent", subject, username)
         if subject not in self.agents:
+            if username == "admin":
+                raise server.HubConflict('agent name "admin" is reserved')
             if any(a["agent"] == username for a in self.agents.values()):
                 raise server.HubConflict()
             self.agents[subject] = {"agent": username, "token": TOKEN}
@@ -160,7 +162,77 @@ def test_me_hub_refuses_a_username_that_cannot_name_an_agent_and_a_taken_name(hu
     assert _as(_app(_Users({"user_alice": ("al_ice", {})}), hub), USER_KEY, "/me/hub")[0] == 409
     hub.agents["user_other"] = {"agent": "alice", "token": "t"}
     status, out = _as(_app(_Users({"user_alice": ("alice", {})}), hub), USER_KEY, "/me/hub")
-    assert status == 409 and "not yours" in out["error"]
+    assert status == 409 and "belongs to another account" in out["error"]
+    status, out = _as(_app(_Users({"user_alice": ("admin", {})}), hub), USER_KEY, "/me/hub")
+    assert status == 409 and "keeps the name admin for itself" in out["error"]
+
+
+def test_the_hub_client_passes_on_the_reason_of_a_409(hub_http):
+    hub, _, answers = hub_http
+    answers.append(_json(409, {"error": 'agent name "admin" is\nreserved'}))
+    with pytest.raises(server.HubConflict) as e:
+        hub.agent("user_alice", "admin")
+    assert e.value.reason == 'agent name "admin" is reserved'
+    answers.append((409, b"not json", {}))
+    with pytest.raises(server.HubConflict) as e:
+        hub.agent("user_alice", "admin")
+    assert e.value.reason == ""
+
+
+def test_me_with_the_hub_down_is_a_502_and_audited(hub_env):
+    lines = []
+    status, out = _as(_app(_alice(), FakeHub(down=True), lines), USER_KEY, "/me", method="GET")
+    assert status == 502 and out["error"] == "The hub did not answer"
+    line = json.loads(lines[-1])
+    assert (line["route"], line["method"], line["outcome"], line["hub"]) == ("/me", "GET", 502, "unreachable")
+
+
+def test_a_write_racing_a_slow_hub_stops_retrying_once_it_has_used_the_timeout(hub_env, monkeypatch):
+    clock = iter(range(0, 1000, 6))  # every reading of the clock is 6 seconds on
+    monkeypatch.setattr(server.time, "monotonic", lambda: next(clock))
+
+    class AlwaysRaced(FakeHub):
+        def put(self, subject, version, doc):
+            self.race = lambda hub, s: hub.records.__setitem__(s, (hub.records[s][0] + 1, hub.records[s][1]))
+            return super().put(subject, version, doc)
+
+    users, hub = _alice(), AlwaysRaced()
+    hub.records["user_alice"] = (1, {"projects": ["o/a"]})
+    status, _ = _as(_app(users, hub), USER_KEY, "/me/projects", {"name": "mine"})
+    assert status == 503
+    assert [c[0] for c in hub.calls].count("put") == 2  # not PROJECT_TRIES + 1
+
+
+def test_admin_metadata_shows_xos_keys_from_the_hub(hub_env):
+    from tests.test_server import ADMIN_KEY
+    users, hub = _Users({"user_alice": ("alice", {"stripeId": "cus_1", "projects": ["old"]})}), FakeHub()
+    hub.records["user_alice"] = (3, {"projects": ["from-hub"], "spaces": []})
+    status, out = _as(_app(users, hub), ADMIN_KEY, "/user-metadata/user_alice", method="GET")
+    assert status == 200
+    assert out["data"]["privateMetadata"] == {"stripeId": "cus_1", "projects": ["from-hub"], "spaces": []}
+
+
+def test_admin_metadata_refuses_to_edit_xos_keys_in_clerk_with_the_hub_on(hub_env, monkeypatch):
+    from tests.test_server import ADMIN_KEY
+    monkeypatch.setenv("XO_EDITABLE_PRIVATE_KEYS", "stripeId,projects")
+    users, hub, lines = _alice(), FakeHub(), []
+    status, out = _as(_app(users, hub, lines), ADMIN_KEY, "/user-metadata/user_alice",
+                      {"privateMetadata": {"projects": ["x"]}}, method="PATCH")
+    assert status == 422 and "kept in the hub" in out["error"]
+    assert users.patches == [] and hub.calls == []
+    assert json.loads(lines[-1])["keys"] == ["projects"]
+    status, out = _as(_app(users, hub), ADMIN_KEY, "/user-metadata/user_alice",
+                      {"privateMetadata": {"stripeId": "cus_2"}}, method="PATCH")
+    assert status == 200 and out["data"]["privateMetadata"]["stripeId"] == "cus_2"
+
+
+def test_admin_metadata_with_the_hub_down_leaves_clerk_unchanged(hub_env):
+    from tests.test_server import ADMIN_KEY
+    users, lines = _alice(), []
+    status, _ = _as(_app(users, FakeHub(down=True), lines), ADMIN_KEY, "/user-metadata/user_alice",
+                    {"privateMetadata": {"stripeId": "cus_2"}}, method="PATCH")
+    assert status == 502 and users.patches == []
+    assert json.loads(lines[-1])["route"] == "/user-metadata"
 
 
 def test_me_hub_is_a_404_with_the_hub_off(clerk):  # noqa: F811
