@@ -41,6 +41,9 @@ verifies it with Clerk and answers:
                                     shared project into the space it names, their projects into
                                     its projects, and the invite off
     POST  /me/shared/reject         any user key: {"id"}: the invite off; the sender can share again
+    POST  /me/hub                   any user key, only with the hub on: the key's own hub agent, made
+                                    on first use and named after its username: {"server", "agent",
+                                    "token"} (the token pushes to the hub; never logged)
     GET   /user-metadata/{userId}   admin keys only: public and private metadata
     PATCH /user-metadata/{userId}   admin keys only: deep-merge changes into allow-listed keys
     POST  /api/core/v1/{create}     passed on to XO's core API as sent, key included, and its
@@ -75,6 +78,12 @@ Configuration (environment only, so the secret never lands in shell history or t
     XO_OAUTH_CLIENT_ID        the client id of the Clerk OAuth application xo login uses (public)
     XO_CLERK_FRONTEND_URL     that Clerk instance's Frontend API URL (public); browser login is on
                               only when both are set, and a bad value turns it off, not the server
+    XO_HUB_URL                the quirq hub (https://hub.quirq.dev): with XO_HUB_KEY, what xo keeps
+                              for a user (projects, spaces, shared) lives there, not in Clerk's
+                              private metadata, and Clerk only says who the user is. A user's
+                              first request copies those keys out of Clerk once (Clerk keeps its
+                              copy). Unset: everything stays in Clerk, as before
+    XO_HUB_KEY                the hub's SPACEHUB_XO_KEY; never printed or logged
 
 It listens on 127.0.0.1 by default: put it behind an HTTPS proxy before giving it any other host.
 On Vercel, the repo's root app.py serves the same routes through `wsgi_app()` (docs/deploy-vercel.md).
@@ -102,6 +111,15 @@ from xo import __version__, names, services, status_page
 from xo.client import LOCAL_HOSTS, XoError, redact
 
 SECRET_ENV = "CLERK_SECRET_KEY"
+HUB_URL_ENV = "XO_HUB_URL"
+HUB_KEY_ENV = "XO_HUB_KEY"
+HUB_TIMEOUT = 10.0
+HUB_API = "/-/api/xo/v1"
+MAX_HUB_ANSWER = 1024 * 1024
+# The private metadata keys that are xo's own: with the hub on, these live there instead.
+XO_KEYS = ("projects", "spaces", "shared")
+# The hub's agent names (space-hub's USERNAME rule).
+HUB_AGENT = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?")
 CLERK_URL_ENV = "CLERK_API_URL"
 DEFAULT_CLERK_URL = "https://api.clerk.com"
 CLERK_TIMEOUT = 10.0
@@ -166,7 +184,7 @@ DEGRADED_SECONDS = 300
 DEGRADED_KEPT = 1000  # times remembered of each kind; enough to count five minutes of real traffic
 _CLERK_ROUTES = ("/login/browser", "/me", "/me/projects", "/me/projects/connect", "/me/spaces", "/me/spaces/connect", "/me/spaces/{name}",
                  "/me/spaces/{name}/projects", "/me/share", "/me/shared", "/me/shared/accept", "/me/shared/reject",
-                 "/user-metadata/{userId}")
+                 "/me/hub", "/user-metadata/{userId}")
 # Browser login (`xo login`): Clerk's sign-in sends the browser back to the CLI on one of these
 # loopback addresses, each registered as a redirect URL of the Clerk OAuth application.
 LOGIN_PORTS = (8976, 8977, 8978)
@@ -251,6 +269,11 @@ class Config:
         self.core_per_second = _int_env("XO_CORE_PER_SECOND", 10)
         self.max_connections = _int_env("XO_SERVE_MAX_CONNECTIONS", 64)
         self.oauth_client_id, self.frontend_url = _browser_login()
+        hub_url = os.environ.get(HUB_URL_ENV, "").strip()
+        self.hub_key = os.environ.get(HUB_KEY_ENV, "").strip() or None
+        if bool(hub_url) != bool(self.hub_key):
+            raise XoError(f"set both {HUB_URL_ENV} and {HUB_KEY_ENV} to keep xo's data in the hub, or neither")
+        self.hub_url = _upstream(HUB_URL_ENV, hub_url).rstrip("/") if hub_url else None
 
 
 def _browser_login() -> tuple[str | None, str | None]:
@@ -401,6 +424,74 @@ class Clerk:
         return self._call("POST", "/api_keys", {
             "name": name, "subject": user_id, "description": LOGIN_KEY_NOTE,
             "seconds_until_expiration": LOGIN_KEY_DAYS * 86400})
+
+
+class HubError(Exception):
+    def __init__(self, status: int, seen: int | str) -> None:
+        super().__init__(f"the hub answered {status}")
+        self.status = status
+        self.seen = seen  # for the audit line, like ClerkError.seen
+
+
+class HubConflict(Exception):
+    """The record changed since it was read: read it again."""
+
+
+class Hub:
+    """The quirq hub's xo API (space-hub /-/api/xo/v1/): with `Clerk` and `ClerkFrontend`, the only
+    server code that talks to the network. Only XO_HUB_KEY is sent, only to XO_HUB_URL, and a
+    redirect is never followed."""
+
+    def __init__(self, cfg: Config) -> None:
+        self._url = cfg.hub_url
+        self._key = cfg.hub_key
+        self._opener = urllib.request.build_opener(_NoRedirect)
+
+    def _call(self, method: str, path: str, body: Any = None) -> dict:
+        data = json.dumps(body).encode() if body is not None else None
+        req = urllib.request.Request(f"{self._url}{HUB_API}/{path}", data=data, method=method, headers={
+            "Accept": "application/json", "User-Agent": f"xo-server/{__version__}",
+            **({"Content-Type": "application/json"} if data is not None else {})})
+        req.add_unredirected_header("Authorization", f"Bearer {self._key}")
+        try:
+            with self._opener.open(req, timeout=HUB_TIMEOUT) as resp:
+                raw = resp.read(MAX_HUB_ANSWER + 1)
+        except urllib.error.HTTPError as e:
+            if e.code == 409:
+                raise HubConflict() from None
+            raise HubError(e.code, "redirect" if 300 <= e.code < 400 else e.code) from None
+        except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException, ValueError):
+            raise HubError(502, "unreachable") from None
+        try:
+            out = json.loads(raw) if len(raw) <= MAX_HUB_ANSWER else None
+        except (ValueError, RecursionError):
+            out = None
+        if not isinstance(out, dict):
+            raise HubError(502, "not JSON")
+        return out
+
+    def record(self, subject: str) -> tuple[int, dict | None]:
+        """The user's record and its version (0 and None: there is none yet)."""
+        out = self._call("GET", "records/" + urllib.parse.quote(subject, safe=""))
+        version, doc = out.get("version"), out.get("doc")
+        if not isinstance(version, int) or version < 0 or not (doc is None or isinstance(doc, dict)) \
+                or (version == 0) != (doc is None):
+            raise HubError(502, "bad record")
+        return version, doc
+
+    def put(self, subject: str, version: int, doc: dict) -> int:
+        """Write the record only if it is still at `version`; the new version. HubConflict otherwise."""
+        out = self._call("PUT", "records/" + urllib.parse.quote(subject, safe=""), {"version": version, "doc": doc})
+        if out.get("version") != version + 1:
+            raise HubError(502, "bad answer")
+        return version + 1
+
+    def agent(self, subject: str, username: str) -> dict:
+        """The user's hub agent, made on first call: {"agent", "token"}."""
+        out = self._call("POST", "agents/" + urllib.parse.quote(subject, safe=""), {"username": username})
+        if not isinstance(out.get("agent"), str) or not isinstance(out.get("token"), str) or not out["token"]:
+            raise HubError(502, "bad answer")
+        return {"agent": out["agent"], "token": out["token"]}
 
 
 class ClerkFrontend:
@@ -714,6 +805,15 @@ def _clerk_failure(e: ClerkError) -> _Reply:
     return _Reply(502, "Clerk did not answer", e.seen)
 
 
+def _hub_failure(e: HubError) -> _Reply:
+    """The hub failed: our key (one loud line, never the key), or the hub down."""
+    if e.status in (401, 403):
+        print(f"xo serve: the hub refused this server's {HUB_KEY_ENV} ({e.status}); check that it matches the "
+              "hub's SPACEHUB_XO_KEY", file=sys.stderr, flush=True)
+        return _Reply(503, MISCONFIGURED, f"hub {e.seen}")
+    return _Reply(502, "The hub did not answer", f"hub {e.seen}")
+
+
 def _project_failure(e: ClerkError, what: str = "projects") -> _Reply:
     """/me/projects and /me/spaces: Clerk allows a user 10 metadata writes per 10 seconds. Past that
     the caller is told to slow down (429), which is about them, not a 503 that marks the whole server
@@ -763,9 +863,11 @@ class App:
     """Routing, auth, limits and audit, apart from the HTTP plumbing so tests can drive it."""
 
     def __init__(self, cfg: Config, clerk: Clerk | None = None, audit=None, clock=time.monotonic,
-                 core: Core | None = None, frontend: ClerkFrontend | None = None) -> None:
+                 core: Core | None = None, frontend: ClerkFrontend | None = None, hub: Hub | None = None) -> None:
         self.cfg = cfg
         self.clerk = clerk or Clerk(cfg, clock)
+        # Where xo keeps its users' data: the hub when it is configured, else Clerk's private metadata.
+        self.hub = hub or (Hub(cfg) if cfg.hub_url else None)
         self.core = core or Core(cfg)
         self.frontend = frontend or ClerkFrontend(cfg, clock)
         self.audit_out = audit or (lambda line: print(line, file=sys.stderr, flush=True))
@@ -944,6 +1046,10 @@ class App:
             if method != "POST":
                 raise _Reply(405, "Method not allowed")
             return self._answer_invite(path.rsplit("/", 1)[1], headers, body)
+        if path == "/me/hub":
+            if method != "POST":
+                raise _Reply(405, "Method not allowed")
+            return self._hub_agent(headers)
         if path.startswith(CORE_PREFIX + "/"):
             return self._forward(method, path[len(CORE_PREFIX):], headers, body)
         if path.startswith("/user-metadata/"):
@@ -953,6 +1059,24 @@ class App:
                 raise _Reply(405, "Method not allowed")
             return self._metadata(method, urllib.parse.unquote(path[len("/user-metadata/"):]), headers, body)
         raise _Reply(404, "Not found")
+
+    def _hub_agent(self, headers: dict[str, str]) -> dict:
+        """The key's own hub agent, made on first use and named after its Clerk username (the only
+        name this server ever sends the hub), with the token its xo pushes with."""
+        key, _, who = self._caller(headers, "me", "/me/hub")
+        if not self.hub:
+            raise self._refuse(who, 404, "This xo server keeps no hub")
+        name = self._user(key["subject"]).get("username")
+        agent = name.lower() if isinstance(name, str) else ""
+        if not HUB_AGENT.fullmatch(agent):
+            raise self._refuse(who, 409, "Your username cannot name a hub agent: it needs 1 to 39 letters, digits "
+                                         "or inner hyphens; change it first")
+        try:
+            made = self._hub(lambda: self.hub.agent(key["subject"], agent), who)
+        except HubConflict:
+            raise self._refuse(who, 409, f"The hub already has an agent called {agent} that is not yours") from None
+        self.audit(**who, outcome=200)  # never the token
+        return {"server": self.cfg.hub_url, "agent": made["agent"], "token": made["token"]}
 
     def _browser(self) -> dict | None:
         """What the CLI needs to start a browser login: Clerk's sign-in address and the public client id."""
@@ -1100,7 +1224,7 @@ class App:
                 # The key's own user only (the subject Clerk verified, never an id from the request).
                 # Admin rights come from the key's claim and $XO_ADMIN_KEY_IDS, not from metadata.
                 "publicMetadata": _mask_secrets(u.get("public_metadata") or {}),
-                "privateMetadata": self._masked_private(u.get("private_metadata"))}
+                "privateMetadata": self._masked_private(self._private_shown(subject, u))}
         with self._lock:
             if len(self._me_cache) >= ME_CACHE_PRUNE_AT:  # entries hold metadata: drop the expired ones
                 self._me_cache = {s: e for s, e in self._me_cache.items() if now - e[0] < ME_CACHE_SECONDS}
@@ -1109,8 +1233,7 @@ class App:
 
     def _projects(self, key: dict) -> dict:
         """The `projects` list in the key's own private metadata ([] when there is none)."""
-        u = self._user(key["subject"])
-        private = u.get("private_metadata")
+        _, private = self._stored(key["subject"])
         projects = private.get("projects") if isinstance(private, dict) else None
         return {"projects": _mask_secrets([] if projects is None else projects)}
 
@@ -1121,6 +1244,45 @@ class App:
             if e.status == 404:
                 raise _Reply(404, "Account not found") from None
             raise _clerk_failure(e) from None
+
+    def _hub(self, call, who: dict | None):
+        """A hub call; a failure is audited (when `who` is given) and becomes the caller's reply."""
+        try:
+            return call()
+        except HubError as e:
+            reply = _hub_failure(e)
+            if who:
+                self.audit(**who, outcome=reply.status, hub=e.seen)
+            raise reply from None
+
+    def _stored(self, subject: str, who: dict | None = None, user: dict | None = None) -> tuple[int | None, Any]:
+        """What xo keeps for the user (`projects`, `spaces`, `shared`), and the hub record's version.
+
+        Hub off: the user's Clerk private metadata as it is (version None). Hub on: the hub's record.
+        A user with no record yet gets one holding the xo keys of their Clerk private metadata, written
+        only if nobody wrote one meanwhile; Clerk keeps its copy, since xo deletes nothing, and so
+        a share to someone not yet copied copies them first. `user` is the user's Clerk record when
+        the caller already has it."""
+        if not self.hub:
+            return None, (user or self._user(subject)).get("private_metadata")
+        version, doc = self._hub(lambda: self.hub.record(subject), who)
+        if version:
+            return version, doc
+        private = (user or self._user(subject)).get("private_metadata")
+        copied = {k: private[k] for k in XO_KEYS if k in private} if isinstance(private, dict) else {}
+        try:
+            return self._hub(lambda: self.hub.put(subject, 0, copied), who), copied
+        except HubConflict:  # another request copied it first: that copy stands
+            return self._hub(lambda: self.hub.record(subject), who)
+
+    def _private_shown(self, subject: str, user: dict) -> Any:
+        """The private metadata /me shows: with the hub on, xo's keys come from the hub."""
+        private = user.get("private_metadata")
+        if not self.hub:
+            return private
+        _, doc = self._stored(subject, user=user)
+        rest = {k: v for k, v in private.items() if k not in XO_KEYS} if isinstance(private, dict) else {}
+        return {**rest, **(doc or {})}
 
     def _caller(self, headers: dict[str, str], group: str, route: str, method: str = "POST") -> tuple[dict, str, dict]:
         """The verified key, its token and the audit fields of a request that changes metadata;
@@ -1179,43 +1341,10 @@ class App:
         with self._lock:
             lock = self._project_locks.setdefault(subject, threading.Lock())
         with lock:
-            wrote, first, outcome, value = False, None, None, {}
-            started = time.monotonic()
-            for attempt in range(PROJECT_TRIES + 1):
-                if wrote:
-                    time.sleep(PROJECT_SETTLE)  # let a write racing this one land before reading again
-                try:
-                    u = self.clerk.user(subject)
-                except ClerkError as e:
-                    reply = _Reply(404, "Account not found") if e.status == 404 else _project_failure(e, what)
-                    self.audit(**who, outcome=reply.status, clerk=e.seen)
-                    raise reply from None
-                private = u.get("private_metadata")
-                private = {} if private is None else private
-                if not isinstance(private, dict):
-                    raise self._refuse(who, 409, "Your private metadata is not an object; nothing was changed")
-                first = private if first is None else first
-                outcome, value = step(private, wrote)
-                if outcome == "done":
-                    break
-                # No retry write once a slow Clerk has used CLERK_TIMEOUT: the request would outlive the
-                # client's and the platform's deadlines. The caller gets the 503 below, never a false 200.
-                if attempt == PROJECT_TRIES or (wrote and time.monotonic() - started > CLERK_TIMEOUT):
-                    break
-                if set(value) != {"shared"} and _size({**private, **value}) > PRIVATE_BUDGET:
-                    raise self._refuse(who, 422, f"That would take your private metadata past {PRIVATE_BUDGET // 1024}KB "
-                                                 "(Clerk keeps 8KB, and XO needs the rest); nothing was changed"
-                                                 + _invites_note(private))
-                try:
-                    # A merge naming only these keys: Clerk leaves every other key as it is.
-                    self.clerk.update_metadata(subject, {"privateMetadata": value})
-                except ClerkError as e:
-                    reply = _project_failure(e, what) if e.status == 429 else self._clerk_reply(e)
-                    self.audit(**who, outcome=reply.status, clerk=e.seen)
-                    raise reply from None
-                wrote = True
-            if outcome != "done":
-                raise self._refuse(who, 503, busy() if callable(busy) else busy)
+            if self.hub:
+                first, private, value = self._change_in_hub(subject, who, step, busy)
+            else:
+                first, private, value = self._change_in_clerk(subject, who, step, what, busy)
         with self._lock:
             self._me_cache.pop(subject, None)
         if settled:
@@ -1227,6 +1356,73 @@ class App:
         counts = [len(v) for v in value.values() if isinstance(v, list)]
         self.audit(**who, outcome=200, count=counts[0] if len(counts) == 1 else counts, **extra)  # never names or values
         return value
+
+    def _change_in_hub(self, subject: str, who: dict, step, busy) -> tuple[dict, dict, dict]:
+        """_change_keys against the hub's record: read it, let `step` decide, and write the record
+        only if it is still the one read (compare-and-swap), so a racing write is never lost: on a
+        conflict the record is read again and `step` decides again. The first and last records read,
+        and the keys written."""
+        wrote, first, outcome, value, private = False, None, None, {}, {}
+        for attempt in range(PROJECT_TRIES + 1):
+            version, private = self._stored(subject, who)
+            private = {} if private is None else private
+            first = private if first is None else first
+            outcome, value = step(private, wrote)
+            if outcome == "done" or attempt == PROJECT_TRIES:
+                break
+            if set(value) != {"shared"} and _size({**private, **value}) > PRIVATE_BUDGET:
+                raise self._refuse(who, 422, f"That would take your xo data past {PRIVATE_BUDGET // 1024}KB; "
+                                             "nothing was changed" + _invites_note(private))
+            try:
+                self._hub(lambda: self.hub.put(subject, version, {**private, **value}), who)
+                wrote = True
+            except HubConflict:
+                continue  # someone else wrote first: read it again
+        if outcome != "done":
+            raise self._refuse(who, 503, busy() if callable(busy) else busy)
+        return first, private, value
+
+    def _change_in_clerk(self, subject: str, who: dict, step, what: str, busy) -> tuple[dict, dict, dict]:
+        """_change_keys against Clerk's private metadata, which has no compare-and-swap: after each
+        write the metadata is read again (after PROJECT_SETTLE) and `step` decides."""
+        wrote, first, outcome, value = False, None, None, {}
+        started = time.monotonic()
+        for attempt in range(PROJECT_TRIES + 1):
+            if wrote:
+                time.sleep(PROJECT_SETTLE)  # let a write racing this one land before reading again
+            try:
+                u = self.clerk.user(subject)
+            except ClerkError as e:
+                reply = _Reply(404, "Account not found") if e.status == 404 else _project_failure(e, what)
+                self.audit(**who, outcome=reply.status, clerk=e.seen)
+                raise reply from None
+            private = u.get("private_metadata")
+            private = {} if private is None else private
+            if not isinstance(private, dict):
+                raise self._refuse(who, 409, "Your private metadata is not an object; nothing was changed")
+            first = private if first is None else first
+            outcome, value = step(private, wrote)
+            if outcome == "done":
+                break
+            # No retry write once a slow Clerk has used CLERK_TIMEOUT: the request would outlive the
+            # client's and the platform's deadlines. The caller gets the 503 below, never a false 200.
+            if attempt == PROJECT_TRIES or (wrote and time.monotonic() - started > CLERK_TIMEOUT):
+                break
+            if set(value) != {"shared"} and _size({**private, **value}) > PRIVATE_BUDGET:
+                raise self._refuse(who, 422, f"That would take your private metadata past {PRIVATE_BUDGET // 1024}KB "
+                                             "(Clerk keeps 8KB, and XO needs the rest); nothing was changed"
+                                             + _invites_note(private))
+            try:
+                # A merge naming only these keys: Clerk leaves every other key as it is.
+                self.clerk.update_metadata(subject, {"privateMetadata": value})
+            except ClerkError as e:
+                reply = _project_failure(e, what) if e.status == 429 else self._clerk_reply(e)
+                self.audit(**who, outcome=reply.status, clerk=e.seen)
+                raise reply from None
+            wrote = True
+        if outcome != "done":
+            raise self._refuse(who, 503, busy() if callable(busy) else busy)
+        return first, private, value
 
     def _add_project(self, headers: dict[str, str], body: bytes | None) -> dict:
         """Add one name to the key's own private metadata `projects`. The client sends only the
@@ -1373,8 +1569,7 @@ class App:
 
     def _spaces(self, key: dict) -> dict:
         """The `spaces` list in the key's own private metadata ([] when there is none)."""
-        u = self._user(key["subject"])
-        private = u.get("private_metadata")
+        _, private = self._stored(key["subject"])
         spaces = private.get("spaces") if isinstance(private, dict) else None
         return {"spaces": _shown_spaces([] if spaces is None else spaces)}
 
@@ -1445,7 +1640,7 @@ class App:
             raise self._refuse(who, 422, "body must be a JSON object: the create's own body")
         # Every refusal recording could make is checked before XO creates anything (and again when
         # recording), so a refusal never leaves a space on XO that xo has no record of.
-        private = self._user(key["subject"]).get("private_metadata")
+        _, private = self._stored(key["subject"], who)
         private = {} if private is None else private
         if not isinstance(private, dict):
             raise self._refuse(who, 409, "Your private metadata is not an object; nothing was created")
@@ -1641,7 +1836,8 @@ class App:
         if not isinstance(sender, str) or not USERNAME.fullmatch(sender):
             raise self._refuse(who, 409, "Your account has no username, so nobody could tell who the invite is "
                                          "from; set one first")
-        private = me.get("private_metadata") if isinstance(me.get("private_metadata"), dict) else {}
+        _, private = self._stored(key["subject"], who, user=me)
+        private = private if isinstance(private, dict) else {}
         invite: dict = {"from": key["subject"], "fromName": sender, "item": item}
         left_out = 0
         if kind == "space":
@@ -1733,7 +1929,7 @@ class App:
     def _invites_of(self, subject: str, who: dict | None = None) -> tuple[dict, list]:
         """The user's private metadata and their invites; refused if `shared` is not a list of
         entries xo wrote."""
-        private = self._user(subject).get("private_metadata")
+        _, private = self._stored(subject, who)
         private = private if isinstance(private, dict) else {}
         invites = private.get("shared", [])
         if not isinstance(invites, list) or any(not (_invite_ok(e) or _old_mark(e)) for e in invites):
@@ -2013,7 +2209,7 @@ def _route_name(path: str) -> str | None:
     if path in ("/", "/status"):
         return None
     if path in ("/healthz", "/login", "/login/browser", "/me", "/me/projects", "/me/projects/connect", "/me/spaces", "/me/spaces/connect",
-                "/config", "/me/share", "/me/shared", "/me/shared/accept", "/me/shared/reject"):
+                "/config", "/me/share", "/me/shared", "/me/shared/accept", "/me/shared/reject", "/me/hub"):
         return path
     if path.startswith("/me/spaces/") and path.endswith("/projects") and path.count("/") == 4:
         return "/me/spaces/{name}/projects"

@@ -36,6 +36,7 @@ xo create space ────┘                      └── /api/core/v1/... 
 | POST | `/me/spaces/connect` | any user key | `{"name", "id"?}`: a new space entry with no projects; with an id, only for an XO space the caller's key can read |
 | POST | `/me/spaces/{name}/projects` | any user key | `{"project", "ref"}`: sets one project's ref in that space |
 | PUT | `/me/spaces/{name}` | any user key | `{"rev", "projects", "base"}`: replaces the space's projects and refs if it is still at `rev` holding `base`, else 409 |
+| POST | `/me/hub` | any user key | with the hub on: the key's own hub agent, made on first use and named after its username: `{"server", "agent", "token"}`; see "The hub" below. 404 with the hub off |
 | GET | `/user-metadata/{userId}` | admin keys | `publicMetadata`, `privateMetadata` |
 | PATCH | `/user-metadata/{userId}` | admin keys | both buckets after a deep merge; `null` removes a key |
 | POST | `/api/core/v1/{create}` | an `ak_` key | XO's answer: `claude-code`, `codex`, `antigravity`, `hermes`, `openclaw`, `xo-cowork`, `nebius-openclaw` |
@@ -184,6 +185,8 @@ Environment only, so the secret never lands in shell history or the process list
 | `XO_CORE_API_URL` | no | where `/api/core/v1` goes; default the `xo` address in `src/xo/services.json` (`https://dev.xo.builders`) plus `/api/core/v1`; https only. `/config` reports it as `xo.url` |
 | `XO_OAUTH_CLIENT_ID` | for browser login | the client id of the Clerk OAuth application `xo login` signs in with (public, not a secret) |
 | `XO_CLERK_FRONTEND_URL` | for browser login | that Clerk instance's Frontend API URL, https only. Browser login is on only when both are set; a missing or bad one turns it off with a line on stderr, never the server |
+| `XO_HUB_URL` | for the hub | the quirq hub, `https://hub.quirq.dev`, https only. With `XO_HUB_KEY`, xo's data lives there; see "The hub" below. One without the other stops the server |
+| `XO_HUB_KEY` | for the hub | the hub's `SPACEHUB_XO_KEY`; never printed or logged |
 
 ```sh
 xo serve --host 127.0.0.1 --port 8787
@@ -230,6 +233,28 @@ the command line. Never bake it into the image (`ARG` or `ENV`) or a file in it.
 The production server runs on Vercel at `https://xo.quirq.dev`: see
 [deploy-vercel.md](deploy-vercel.md). There, Vercel is the HTTPS proxy, and the limits in this
 process apply per function instance, so the per-address limit is a Vercel Firewall rule.
+
+## The hub
+
+With `XO_HUB_URL` and `XO_HUB_KEY` set, Clerk only says who a user is. What xo keeps for them, the
+private metadata keys `projects`, `spaces` and `shared`, lives in their record on the quirq hub
+(quirq-ai/space-hub's `/-/api/xo/v1/records/<user id>`), and every route above reads and writes
+that record instead. Everything else stays as described here, the limits included.
+
+- **The first request copies.** A user with no record yet gets one holding those three keys from
+  their Clerk private metadata, written only if no other request wrote one first. Clerk keeps its
+  copy (xo deletes nothing), and so a share to someone not copied yet copies them first.
+- **Compare-and-swap.** A write names the version it read, and the hub refuses it if the record
+  moved since; the server then reads again and decides again, so a racing write is never lost
+  (Clerk has no such check, so with the hub off the server writes, waits and reads back).
+- **`/me`** shows the record's keys in place of Clerk's, and the rest of Clerk's private metadata
+  as before.
+- **`POST /me/hub`** answers the user's hub agent, which the hub makes on first use, named after
+  the user's Clerk username in lowercase (a name the hub refuses is a 409). The server sends the
+  hub only the username Clerk has for the key's own user. The answer's `token` is what that
+  user's xo pushes to the hub with; it is never logged.
+- The hub failing is a 502 ("The hub did not answer"), or a 503 when it refuses `XO_HUB_KEY` (also
+  one line on stderr). Unset, nothing changes: everything stays in Clerk.
 
 ## Projects
 
