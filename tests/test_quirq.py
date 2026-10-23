@@ -382,12 +382,45 @@ def test_a_repository_with_no_origin_goes_to_the_hub_only_when_its_name_is_typed
     assert folder_hub.asked == ["Type dev to send them to the hub anyway"] * 2
 
 
-def test_a_repository_public_on_github_goes_to_the_hub_without_typing(folder_hub, capsys):
+def _public(folder_hub):
+    """dev/notes committed and pushed to a public o/pub on the stand-in GitHub."""
     git("init", "-q", "--bare", str(folder_hub.github.root / "o/pub"))
     git("remote", "add", "origin", f"{gitops.GITHUB}/o/pub", cwd="dev/notes")
+    git("add", ".", cwd="dev/notes")
+    git("commit", "-qm", "n", cwd="dev/notes")
+    git("-c", "protocol.file.allow=always", "push", "-q", "origin", "HEAD:refs/heads/main", cwd="dev/notes")
+    git("fetch", "-q", "origin", cwd="dev/notes")
+
+
+def test_a_repository_public_on_github_goes_to_the_hub_without_typing(folder_hub, capsys):
+    _public(folder_hub)
     code, out, _ = run(capsys, "create", "space", "dev", "--yes")
     assert code == 0 and json.loads(out)["pushed"] is True and folder_hub.asked == []
     assert _space_hub(folder_hub, "show", "notes:n.txt") == "n"
+
+
+@pytest.mark.parametrize("change", ["untracked", "edited", "commit"])
+def test_files_github_does_not_have_need_the_name_typed_even_with_a_public_origin(folder_hub, capsys, change):
+    _public(folder_hub)
+    if change == "untracked":
+        Path("dev/notes/private.txt").write_text("mine\n")
+    elif change == "edited":
+        Path("dev/notes/n.txt").write_text("not pushed\n")
+    else:
+        Path("dev/notes/n.txt").write_text("committed, not pushed\n")
+        git("commit", "-qam", "local", cwd="dev/notes")
+    folder_hub.answer = None
+    code, _, err = run(capsys, "create", "space", "dev", "--yes")
+    assert code == 1 and "notes (changes not on GitHub)" in err and folder_hub.made == []
+    assert not Path("dev/.git").exists()
+
+
+def test_an_insteadof_rewrite_does_not_make_a_private_origin_read_as_public(folder_hub, capsys):
+    git("init", "-q", "--bare", str(folder_hub.github.root / "o/pub"))
+    git("remote", "add", "origin", "https://gitlab.example/o/secret", cwd="dev/notes")
+    git("config", f"url.{gitops.GITHUB}/o/pub.insteadOf", "https://gitlab.example/o/secret", cwd="dev/notes")
+    code, _, err = run(capsys, "create", "space", "dev", "--yes")
+    assert code == 1 and "not a public GitHub repository" in err and folder_hub.made == []
 
 
 @pytest.mark.parametrize("origin", ["o/private", "https://gitlab.example/o/r"])

@@ -241,9 +241,11 @@ xo sync project:headscale                        # git pull --rebase, then push
     and no link to follow: the `.git` xo makes gets a `quirq` remote (when the folder was a git
     repository already, xo pushes by URL and leaves its remotes alone). Anyone can read what is
     pushed there, so before anything is made xo refuses a folder, or a git repository in it, whose
-    `origin` is not a GitHub repository anyone can read (asked with no login). A repository with no
-    `origin` goes there only when you type the space's name at the terminal; `--yes` does not answer
-    that, so without a terminal it stops.
+    `origin` is not a GitHub repository anyone can read (asked with no login, from the URL as
+    written). A branch holds a repository's files as they are now, so a repository with no
+    `origin`, or with changes, untracked files or commits GitHub does not have, goes there only when
+    you type the space's name at the terminal; `--yes` does not answer that, so without a terminal
+    it stops.
     `--owner OWNER` puts it on GitHub instead, and a space already on GitHub stays there (run with
     `--owner` again or not). A name with `--` in it is refused on the hub, which keeps those for the
     projects' copies (`OWNER--REPO`).
