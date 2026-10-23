@@ -244,11 +244,11 @@ xo sync project:headscale                        # git pull --rebase, then push
     `origin` is not a GitHub repository anyone can read (asked with no login, from the URL as
     written). A branch holds a repository's files as they are now, so after xo builds the branches
     (in `./.git` only), a repository with no `origin`, or whose branch holds any file that is not in
-    its HEAD commit, or whose HEAD is on no `origin/*` branch, goes there only when you type the
-    space's name at the terminal; `--yes` does not answer that, so without a terminal nothing is
-    pushed. The files xo built are compared, not `git status`, so no index flag or config hides
-    one. `origin/*` is as your last fetch left it: a commit GitHub has since deleted or force-pushed
-    over still counts as GitHub's, so fetch first if that may have happened.
+    its HEAD commit, or whose HEAD is in none of the branches GitHub has now (asked with no login,
+    not your `origin/*` refs), goes there only when you type the space's name at the terminal;
+    `--yes` does not answer that, so without a terminal nothing is pushed (and a `./.git` that run
+    made is removed). The files xo built are compared, not `git status`, so no index flag or config
+    hides one.
     `--owner OWNER` puts it on GitHub instead, and a space already on GitHub stays there (run with
     `--owner` again or not). A name with `--` in it is refused on the hub, which keeps those for the
     projects' copies (`OWNER--REPO`).

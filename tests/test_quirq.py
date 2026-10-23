@@ -375,7 +375,8 @@ def test_a_repository_with_no_origin_goes_to_the_hub_only_when_its_name_is_typed
     folder_hub.answer = None  # no terminal: --yes does not answer it
     code, _, err = run(capsys, "create", "space", "dev", "--yes")
     assert code == 1 and "notes (no origin)" in err and "--yes does not answer this" in err
-    assert "nothing was pushed" in err and folder_hub.made == [] and not list(folder_hub.root.iterdir())
+    assert "nothing was pushed or kept" in err and folder_hub.made == [] and not list(folder_hub.root.iterdir())
+    assert not Path("dev/.git").exists() and Path("dev/notes/n.txt").read_text() == "n\n"  # as it was
     folder_hub.answer = "de"
     code, _, _ = run(capsys, "create", "space", "dev", "--yes")
     assert code == 1 and folder_hub.made == []
@@ -423,6 +424,17 @@ def test_files_github_does_not_have_need_the_name_typed_even_with_a_public_origi
     code, _, err = run(capsys, "create", "space", "dev", "--yes")
     assert code == 1 and "notes (files GitHub does not have)" in err and folder_hub.made == []
     assert not list(folder_hub.root.iterdir())  # nothing reached the hub
+
+
+def test_a_stale_or_forged_origin_ref_does_not_count_as_github_having_a_commit(folder_hub, capsys):
+    _public(folder_hub)
+    Path("dev/notes/secret.txt").write_text("SECRET\n")
+    git("add", "secret.txt", cwd="dev/notes")
+    git("commit", "-qm", "never pushed", cwd="dev/notes")
+    git("update-ref", "refs/remotes/origin/old-private", "HEAD", cwd="dev/notes")
+    folder_hub.answer = None
+    code, _, err = run(capsys, "create", "space", "dev", "--yes")
+    assert code == 1 and "notes (files GitHub does not have)" in err and not list(folder_hub.root.iterdir())
 
 
 def test_an_insteadof_rewrite_does_not_make_a_private_origin_read_as_public(folder_hub, capsys):

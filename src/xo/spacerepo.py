@@ -37,7 +37,7 @@ GitHub owner or the space is on GitHub already: its remote is the agent's hub sp
 repository is pushed by URL and its remotes are left alone), and its index records "hub" in place of
 "github". Anyone can read the hub, so a folder or git repository whose origin is not public on
 GitHub is refused before anything is made, and one with no origin, or whose built branch holds a
-file its HEAD lacks (or whose HEAD is on no origin branch), needs the space's name typed at a
+file its HEAD lacks (or whose HEAD is in no branch GitHub has now), needs the space's name typed at a
 terminal before the push (never answered by --yes). Everything else is the same; the tips of the hub's branches are
 kept under refs/remotes/quirq/ (refs/xo-space/hub/ in an attached repository), and origin is never
 used or touched.
@@ -924,39 +924,40 @@ def push_hub(here: Path, hub: quirq.Hub, name: str, refs: dict[str, str]) -> Non
         raise
 
 
-def visibility(folder: Path) -> str:
+def visibility(folder: Path) -> tuple[str, dict[str, str]]:
     """Whether the git repository at folder is one anyone can read on GitHub: "public" (every origin
     URL is one github.com repository that answers with no login), "none" (no origin) or "private"
     (anything else: a private or missing repository, another host, more than one repository). URLs are
-    never shown, since they can hold a login."""
+    never shown, since they can hold a login. With "public", the branches GitHub has now ({name: sha})."""
     # The URLs as written (not remote get-url, which applies url.*.insteadOf and could make a private
     # origin read as a public one).
     found_urls = [u.strip() for key in ("remote.origin.url", "remote.origin.pushurl")
                   for u in (gitops.run("config", "--get-all", key, cwd=folder.absolute(), check=False)
                             or "").splitlines() if u.strip()]
     if not found_urls:
-        return "none"
+        return "none", {}
     matched = [_github_url(u) for u in found_urls]
     found = {(m.group(1).casefold(), m.group(2).casefold()) for m in matched if m}
     if not all(matched) or len(found) != 1:
-        return "private"
+        return "private", {}
     owner, repo = found.pop()
     try:
-        return "public" if heads(owner, repo) is not None else "private"
+        now = heads(owner, repo)
     except XoError:  # GitHub sends it on elsewhere: not the repository its origin names
-        return "private"
+        return "private", {}
+    return ("public", now) if now is not None else ("private", {})
 
 
-def _hub_check(here: Path, chosen: dict[str, Path], attached: bool) -> dict[str, str]:
+def _hub_check(here: Path, chosen: dict[str, Path], attached: bool) -> dict[str, tuple[str, dict[str, str]]]:
     """Before anything is made for the hub, which anyone can read: refuse a folder, or a git repository in
     it, whose origin is not public on GitHub. The repositories with no origin at all, which xo cannot
     check, and those whose files hold what GitHub does not have (_create asks for the space's name to be
     typed for these)."""
-    if attached and visibility(here) == "private":
+    if attached and visibility(here)[0] == "private":
         raise XoError(f"{here.resolve()}/.git has an origin that is not a public GitHub repository, and anyone can "
                       "read the hub, so nothing was made; keep the space on GitHub with --owner OWNER")
     looked = {b: visibility(f) for b, f in chosen.items()}
-    private = sorted(b for b, v in looked.items() if v == "private")
+    private = sorted(b for b, (v, _) in looked.items() if v == "private")
     if private:
         raise XoError("these git repositories have an origin that is not a public GitHub repository, and anyone can "
                       f"read the hub, so nothing was made: {', '.join(private)}; move them out of the folder, or keep "
@@ -976,10 +977,10 @@ def _files(out: str | None) -> set[tuple[str, str]] | None:
     return found
 
 
-def _beyond_github(space: Space, branch: str, commit: str, folder: Path) -> bool:
-    """Whether the branch xo built (commit) holds anything the repository's HEAD does not, or HEAD is on
-    no branch of origin as last fetched (refs/remotes/origin/ here: a branch GitHub deleted or rewrote
-    since the last fetch still counts). The tree xo built is compared, not git status, so no index flag
+def _beyond_github(space: Space, commit: str, folder: Path, github: dict[str, str]) -> bool:
+    """Whether the branch xo built (commit) holds anything the repository's HEAD does not, or HEAD is in
+    none of the branches GitHub has now (github, just asked with no login; never the refs here, which
+    can be stale or set by hand). The tree xo built is compared, not git status, so no index flag
     (assume-unchanged, skip-worktree) or repository config can hide a file from this check. Anything git
     cannot answer counts as beyond."""
     built = _files(space.git("ls-tree", "-r", "-z", "--full-tree", commit, check=False, raw=True))
@@ -987,9 +988,8 @@ def _beyond_github(space: Space, branch: str, commit: str, folder: Path) -> bool
                              raw=True))
     if built is None or head is None or not built <= head:
         return True
-    on = gitops.run("for-each-ref", "--contains", "HEAD", "--format=%(refname)", "refs/remotes/origin/",
-                    cwd=folder.absolute(), check=False)
-    return not (on or "").strip()
+    return not any(gitops.run("merge-base", "--is-ancestor", "HEAD", sha, cwd=folder.absolute(), check=False)
+                   is not None for sha in set(github.values()))  # a sha not here fails: not counted
 
 
 def _github_url(url: str) -> re.Match | None:
@@ -1090,6 +1090,7 @@ def _create(here: Path, name: str, owner: str | None, ask: Callable[[str], bool]
             repo: str | None, new: bool, hub: quirq.Hub | None = None,
             typed: Callable[[str], str | None] | None = None) -> dict:
     refuse_here(here)
+    fresh = not (here / ".git").exists() and not here.joinpath(".git").is_symlink()  # this run makes ./.git
     if hub is not None and "--" in name:
         raise XoError(f"{name} has -- in it, and the hub keeps names with -- for copies of GitHub projects "
                       "(OWNER--REPO); pick a name without it")
@@ -1152,14 +1153,17 @@ def _create(here: Path, name: str, owner: str | None, ask: Callable[[str], bool]
     if hub is not None:
         space = Space(here)
         unseen = sorted(f"{b} (no origin)" if v == "none" else f"{b} (files GitHub does not have)"
-                        for b, v in looked.items()
-                        if v == "none" or _beyond_github(space, b, made["branches"][b], chosen[b]))
+                        for b, (v, github) in looked.items()
+                        if v == "none" or _beyond_github(space, made["branches"][b], chosen[b], github))
         if unseen:
             _say("These git repositories hold files xo cannot tell are meant to be public (no origin on GitHub, or "
                  "files that are not in a commit GitHub has, and a branch holds the files as they are now): "
                  f"{', '.join(unseen)}. On the hub anyone can read them.")
             if typed is None or typed(f"Type {name} to send them to the hub anyway") != name:
-                raise XoError("nothing was pushed (./.git holds the space, here only). Push each of those repositories "
+                if fresh:
+                    shutil.rmtree(here / ".git", ignore_errors=True)  # the one this run made: nothing is left
+                raise XoError(("nothing was pushed or kept" if fresh else "nothing was pushed (./.git holds the "
+                               "space, here only)") + ". Push each of those repositories "
                               "to a public GitHub origin (and commit or ignore what is left), keep the space on GitHub "
                               "with --owner OWNER, or run xo create space at a terminal and type the space's name "
                               "(--yes does not answer this)")
