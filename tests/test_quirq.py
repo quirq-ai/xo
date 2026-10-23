@@ -13,7 +13,7 @@ import pytest
 from conftest import KEY, git
 from test_cli import core, login, run, xs  # noqa: F401 - fixtures
 from test_workspace import _stored, space  # noqa: F401 - fixtures
-from xo import gitops, quirq, spacerepo, workspace
+from xo import cli, gitops, quirq, spacerepo, workspace
 from xo.client import XoError
 
 TOKEN = "hub_token_never_printed"
@@ -294,6 +294,13 @@ def folder_hub(xs, github, tmp_path, monkeypatch):  # noqa: F811
         git("init", "-q", "--bare", str(root / f"{space}.git"))
     monkeypatch.setattr(quirq, "make", make)
     quirq.save(quirq.Hub("https://hub.quirq.dev", "alice"))
+    asked: list[str] = []
+
+    def typed(question):
+        asked.append(question)
+        return xs.answer
+    monkeypatch.setattr(cli, "_typed", typed)
+    xs.answer, xs.asked = "dev", asked  # dev/notes has no origin: its name is typed
     xs.route("POST", "/me/spaces/connect", body={"success": True, "data": {"space": {
         "name": "dev", "kind": None, "id": None, "rev": 1, "projects": []}}})
     git("init", "-q", "dev/notes")
@@ -362,3 +369,56 @@ def test_create_space_needs_the_hubs_client_once_xo_login_found_a_hub(folder_hub
     monkeypatch.setattr(quirq, "installed", lambda: False)
     code, _, err = run(capsys, "create", "space", "dev", "--yes")
     assert code == 1 and "git-remote-quirq is not installed" in err and not Path("dev/.git").exists()
+
+
+def test_a_repository_with_no_origin_goes_to_the_hub_only_when_its_name_is_typed(folder_hub, capsys):
+    folder_hub.answer = None  # no terminal: --yes does not answer it
+    code, _, err = run(capsys, "create", "space", "dev", "--yes")
+    assert code == 1 and "no origin on GitHub" in err and "notes" in err and "--yes does not answer this" in err
+    assert folder_hub.made == [] and not Path("dev/.git").exists()
+    folder_hub.answer = "de"
+    code, _, _ = run(capsys, "create", "space", "dev", "--yes")
+    assert code == 1 and folder_hub.made == []
+    assert folder_hub.asked == ["Type dev to send them to the hub anyway"] * 2
+
+
+def test_a_repository_public_on_github_goes_to_the_hub_without_typing(folder_hub, capsys):
+    git("init", "-q", "--bare", str(folder_hub.github.root / "o/pub"))
+    git("remote", "add", "origin", f"{gitops.GITHUB}/o/pub", cwd="dev/notes")
+    code, out, _ = run(capsys, "create", "space", "dev", "--yes")
+    assert code == 0 and json.loads(out)["pushed"] is True and folder_hub.asked == []
+    assert _space_hub(folder_hub, "show", "notes:n.txt") == "n"
+
+
+@pytest.mark.parametrize("origin", ["o/private", "https://gitlab.example/o/r"])
+def test_a_repository_whose_origin_is_not_public_on_github_is_never_sent_to_the_hub(folder_hub, capsys, origin):
+    url = origin if "://" in origin else f"{gitops.GITHUB}/{origin}"  # o/private: GitHub does not answer
+    git("remote", "add", "origin", url, cwd="dev/notes")
+    code, _, err = run(capsys, "create", "space", "dev", "--yes")
+    assert code == 1 and "not a public GitHub repository" in err and "notes" in err and url not in err
+    assert folder_hub.made == [] and folder_hub.asked == [] and not Path("dev/.git").exists()
+
+
+def test_a_folder_whose_own_origin_is_private_is_never_sent_to_the_hub(folder_hub, capsys):
+    git("init", "-q", "-b", "work", "dev")
+    git("remote", "add", "origin", f"{gitops.GITHUB}/o/private", cwd="dev")
+    code, _, err = run(capsys, "create", "space", "dev", "--yes")
+    assert code == 1 and "dev/.git has an origin that is not a public GitHub repository" in err
+    assert folder_hub.made == [] and "xo-space" not in git("branch", "--list", cwd="dev")
+
+
+def test_an_attached_folder_goes_to_the_hub_by_url_with_its_remotes_untouched(folder_hub, capsys):
+    git("init", "-q", "-b", "work", "dev")
+    code, out, _ = run(capsys, "create", "space", "dev", "--yes")
+    assert code == 0 and json.loads(out)["index"] == "xo-space"
+    assert git("remote", cwd="dev") == ""  # no quirq remote added to your repository
+    assert _space_hub(folder_hub, "show", "notes:n.txt") == "n"
+
+
+def test_a_quirq_remote_that_points_elsewhere_is_refused(folder_hub, capsys, monkeypatch):
+    assert run(capsys, "create", "space", "dev", "--yes")[0] == 0
+    git("remote", "set-url", "quirq", "file:///elsewhere.git", cwd="dev")
+    Path("dev/notes/n.txt").write_text("n two\n")
+    monkeypatch.chdir("dev")
+    code, _, err = run(capsys, "create", "space", "--yes")
+    assert code == 1 and "has a quirq remote that is not" in err and "git remote remove quirq" in err

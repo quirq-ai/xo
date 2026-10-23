@@ -238,8 +238,12 @@ xo sync project:headscale                        # git pull --rebase, then push
     to merge the hub's in by hand.
   - `xo create space` puts a folder space on the hub too, as your agent's space NAME
     (`quirq://hub.quirq.dev/AGENT/NAME`), made there when it is missing, with no GitHub repository
-    and no link to follow: the folder's `.git` gets a `quirq` remote (pushed by URL when the folder
-    was a git repository already, whose `origin` stays yours). Anyone can read what is pushed there.
+    and no link to follow: the `.git` xo makes gets a `quirq` remote (when the folder was a git
+    repository already, xo pushes by URL and leaves its remotes alone). Anyone can read what is
+    pushed there, so before anything is made xo refuses a folder, or a git repository in it, whose
+    `origin` is not a GitHub repository anyone can read (asked with no login). A repository with no
+    `origin` goes there only when you type the space's name at the terminal; `--yes` does not answer
+    that, so without a terminal it stops.
     `--owner OWNER` puts it on GitHub instead, and a space already on GitHub stays there (run with
     `--owner` again or not). A name with `--` in it is refused on the hub, which keeps those for the
     projects' copies (`OWNER--REPO`).

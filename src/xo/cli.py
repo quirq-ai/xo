@@ -896,7 +896,8 @@ def _create_local_space(args: argparse.Namespace) -> int:
                           "whose it is with --owner OWNER")
     elif not names.github_owner_ok(owner):
         raise XoError("--owner is a GitHub user or organization name")
-    made = spacerepo.create(here, name, owner, ask=lambda q: args.yes or _ask(q), wait=_wait, repo=repo, hub=hub)
+    made = spacerepo.create(here, name, owner, ask=lambda q: args.yes or _ask(q), wait=_wait, repo=repo, hub=hub,
+                            typed=_typed)
     if made.get("pushed"):  # only a space that is pushed goes in your spaces (xo has no delete)
         try:
             client = _client(args, server=True)
@@ -1389,6 +1390,17 @@ def _ask(question: str) -> bool:
         return sys.stdin.readline().strip().lower() in ("y", "yes")
     except (EOFError, KeyboardInterrupt):
         return False
+
+
+def _typed(question: str) -> str | None:
+    """What someone at a terminal types (--yes never answers it); without a terminal, None."""
+    if not (sys.stdin.isatty() and sys.stderr.isatty()):
+        return None
+    print(f"xo: {question}: ", end="", file=sys.stderr, flush=True)
+    try:
+        return sys.stdin.readline().strip()
+    except (EOFError, KeyboardInterrupt):
+        return None
 
 
 def _seconds(text: str) -> float:
