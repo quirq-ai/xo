@@ -844,8 +844,8 @@ def _create_space(args: argparse.Namespace) -> int:
 
 def _create_local_space(args: argparse.Namespace) -> int:
     """`xo create space [NAME]`: a folder becomes a space, a git repository with one branch per git
-    repository in it, pushed to the quirq hub once xo login found one, else (or with --owner, or when the
-    space is on GitHub already) to GitHub (see xo/spacerepo.py). With no NAME it is this folder, named
+    repository in it, pushed to the quirq hub xo login found, and to GitHub only with --github (or
+    --owner); with no hub, or for a space already on GitHub, it stops and says so (see xo/spacerepo.py). With no NAME it is this folder, named
     after itself (or the name its space already has); with NAME it is ./NAME. A .git already there is
     attached to. It asks first, showing every repository; then the space is recorded in your spaces too."""
     if args.space_name is None:
@@ -873,8 +873,14 @@ def _create_local_space(args: argparse.Namespace) -> int:
                           "space with no NAME to update it")
         # Otherwise spacerepo.create makes ./NAME, and takes it away again if you say no or anything stops.
     hub, was = quirq.settings(), spacerepo.published(here)
-    if args.owner is not None or "github" in was:
-        hub = None  # --owner says GitHub, and a space on GitHub already stays there
+    if args.github or args.owner is not None:
+        hub = None  # --github (or --owner) says GitHub; nothing else ever does
+    elif "github" in was:
+        raise XoError(f"space {name} is on github.com/{was['github']}, and xo create space puts a space on the quirq "
+                      "hub unless you say GitHub: run it with --github to update it there")
+    elif hub is None:
+        raise XoError("xo create space puts the space on the quirq hub, and xo login found none: "
+                      + quirq.INSTALL + " (or put the space on GitHub with --github)")
     quirq.ready(hub)
     origin = None if hub else spacerepo.attached_origin(here)
     owner, repo = args.owner, None
@@ -1610,15 +1616,17 @@ def main(argv: list[str] | None = None) -> int:
                     help="the project's https://github.com/OWNER/REPO, when NAME is also given (NAME must be REPO "
                          "or OWNER/REPO)")
     mp.set_defaults(run=_create_project)
-    ms = mksub.add_parser("space", parents=[common], usage="xo create space [-h] [NAME] [--owner OWNER] [--yes] | NAME KIND [flags]",
+    ms = mksub.add_parser("space", parents=[common], usage="xo create space [-h] [NAME] [--github] [--owner OWNER] [--yes] | NAME KIND [flags]",
                           help="create a space and record it in your spaces: on XO with xo create space NAME KIND, "
-                               "or a folder, one branch per git repo in it on the quirq hub (on GitHub before xo login finds a hub, "
-                               "or with --owner), with xo create space [NAME]")
+                               "or a folder, one branch per git repo in it on the quirq hub (on GitHub only with --github), "
+                               "with xo create space [NAME]")
     ms.add_argument("space_name", metavar="NAME", nargs="?",
                     help=names.XO_NAME_RULE + "; with no KIND, " + names.SPACE_RULE + ", and the folder ./NAME is "
                          "the space (with no NAME, this folder is, named after itself)")
+    ms.add_argument("--github", "--gh", action="store_true",
+                    help="with no KIND: put the space on GitHub, not the quirq hub (under your gh login, or --owner)")
     ms.add_argument("--owner", help="with no KIND: put the space on GitHub, not the quirq hub, under this GitHub user or "
-                                    "organization (with no hub, the default is your gh login)")
+                                    "organization (implies --github)")
     ms.add_argument("--yes", action="store_true", help="with no KIND: make the space and push it (public) without "
                                                          "asking")
     ms.set_defaults(run=_create_space)
