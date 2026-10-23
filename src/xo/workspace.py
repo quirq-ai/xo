@@ -317,7 +317,8 @@ def _git_step(dests: list[Path], rebase: bool) -> list[Path]:
 def _hub_step(root: Path, pairs: list[tuple[str, str]], hub: quirq.Hub, rebase: bool) -> list[Path]:
     """_git_step with the hub in the upstream's place: each GitHub project's checkout on a branch
     gets its quirq remote and fetches it, is rebased on the hub's branch first when rebase (and the
-    hub has it), then pushed there when it has commits the hub lacks. Nothing goes to GitHub. A
+    hub has it; never when a commit it would rewrite is on origin's branches, fetched just before:
+    other remotes are not asked), then pushed there when it has commits the hub lacks. Nothing goes to GitHub. A
     project GitHub does not show to everyone is refused before anything is sent, since anyone can
     read the hub. A project with no GitHub repo has no copy on the hub: it takes _git_step, as
     without a hub. The checkouts pushed."""
@@ -334,12 +335,13 @@ def _hub_step(root: Path, pairs: list[tuple[str, str]], hub: quirq.Hub, rebase: 
         if rebase and gitops.has(there, theirs) and not gitops.holds(there, theirs):
             if not gitops.ahead(there, theirs):
                 gitops.fast_forward_to(there, theirs)  # only behind the hub: nothing of yours moves
-            elif gitops.pushed_since(there, theirs, "origin"):
-                # Rebasing would rewrite commits GitHub already has, and the next git push there fails.
-                raise XoError(f"./{there}: the hub's {name} and yours have both moved on, and yours holds commits "
-                              f"GitHub already has, so xo will not rebase them; merge the hub's in by hand (git merge "
-                              f"{gitops.QUIRQ}/{name} in that folder), then run xo sync space:{root.name} again")
             else:
+                gitops.fetch(there)  # so a push to GitHub made outside xo counts too (only origin is asked)
+                if gitops.pushed_since(there, theirs, "origin"):
+                    # Rebasing would rewrite commits GitHub already has, and the next git push there fails.
+                    raise XoError(f"./{there}: the hub's {name} and yours have both moved on, and yours holds "
+                                  f"commits GitHub already has, so xo will not rebase them; merge the hub's in by hand (git "
+                                  f"merge {gitops.QUIRQ}/{name} in that folder), then run xo sync space:{root.name} again")
                 gitops.rebase_on(there, theirs)
         if not gitops.ahead(there, theirs) or (not gitops.has(there, theirs) and gitops.on_remote(there, "origin")):
             continue  # the hub has it, or it is GitHub's own and nothing on the hub builds on it yet

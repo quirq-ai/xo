@@ -13,7 +13,7 @@ import pytest
 from conftest import KEY, git
 from test_cli import core, login, run, xs  # noqa: F401 - fixtures
 from test_workspace import _stored, space  # noqa: F401 - fixtures
-from xo import gitops, quirq, spacerepo, workspace
+from xo import cli, gitops, quirq, spacerepo, workspace
 from xo.client import XoError
 
 TOKEN = "hub_token_never_printed"
@@ -249,8 +249,231 @@ def test_sync_never_rewrites_commits_github_already_has(hub, tmp_path):
     git("push", "-q", "origin", "main", cwd="dev/a")  # GitHub still takes the user's pushes
 
 
+def test_sync_sees_a_push_to_github_made_outside_origin(hub, tmp_path):
+    workspace.install(hub.client, "space", "dev")
+    _second_machine(hub, tmp_path, "on the hub")
+    Path("dev/a/README").write_text("pushed by URL\n")
+    git("commit", "-q", "-am", "pushed by URL", cwd="dev/a")
+    url = git("remote", "get-url", "origin", cwd="dev/a")
+    git("push", "-q", url, "HEAD:refs/heads/main", cwd="dev/a")  # origin/main here does not move
+    mine = git("rev-parse", "HEAD", cwd="dev/a")
+    with pytest.raises(XoError, match="holds commits GitHub already has"):
+        workspace.sync(hub.client, "space", "dev")
+    assert git("rev-parse", "HEAD", cwd="dev/a") == mine
+
+
+def test_sync_rebases_diverged_work_that_github_does_not_have(hub, tmp_path):
+    workspace.install(hub.client, "space", "dev")
+    _second_machine(hub, tmp_path, "on the hub")
+    Path("dev/a/README").write_text("mine, only here\n")
+    git("commit", "-q", "-am", "mine, only here", cwd="dev/a")
+    workspace.sync(hub.client, "space", "dev")
+    log = git("log", "--format=%s", "refs/heads/main", cwd=hub.quirq_root / "o--a.git").splitlines()
+    assert log[:2] == ["mine, only here", "on the hub"]
+    assert git("rev-parse", "HEAD", cwd="dev/a") == git("rev-parse", "refs/heads/main", cwd=hub.quirq_root / "o--a.git")
+
+
 def test_sync_only_behind_the_hub_fast_forwards(hub, tmp_path):
     workspace.install(hub.client, "space", "dev")
     _second_machine(hub, tmp_path, "on the hub")
     workspace.sync(hub.client, "space", "dev")
     assert git("rev-parse", "HEAD", cwd="dev/a") == git("rev-parse", "refs/heads/main", cwd=hub.quirq_root / "o--a.git")
+
+
+@pytest.fixture
+def folder_hub(xs, github, tmp_path, monkeypatch):  # noqa: F811
+    """xo login found the hub as agent alice; its spaces (xo create space) are bare repos."""
+    root = tmp_path / "quirqspaces"
+    root.mkdir()
+    made: list[str] = []
+    monkeypatch.setattr(quirq, "installed", lambda: True)
+    monkeypatch.setattr(quirq.Hub, "space_url", lambda self, space: f"file://{root}/{space}.git")
+
+    def make(hub, space, description):
+        made.append(space)
+        git("init", "-q", "--bare", str(root / f"{space}.git"))
+    monkeypatch.setattr(quirq, "make", make)
+    quirq.save(quirq.Hub("https://hub.quirq.dev", "alice"))
+    asked: list[str] = []
+
+    def typed(question):
+        asked.append(question)
+        return xs.answer
+    monkeypatch.setattr(cli, "_typed", typed)
+    xs.answer, xs.asked = "dev", asked  # dev/notes has no origin: its name is typed
+    xs.route("POST", "/me/spaces/connect", body={"success": True, "data": {"space": {
+        "name": "dev", "kind": None, "id": None, "rev": 1, "projects": []}}})
+    git("init", "-q", "dev/notes")
+    Path("dev/notes/n.txt").write_text("n\n")
+    xs.made, xs.root, xs.github = made, root, github
+    return xs
+
+
+def _space_hub(h, *args):
+    return git(f"--git-dir={h.root / 'dev.git'}", *args)
+
+
+def test_create_space_puts_a_folder_on_the_hub_and_never_on_github(folder_hub, capsys, monkeypatch):
+    code, out, err = run(capsys, "create", "space", "dev", "--yes")
+    made = json.loads(out)
+    assert code == 0 and made["pushed"] is True and made["hub"].endswith("/dev.git") and "github" not in made
+    assert "a space on the quirq hub's space alice/dev" in err and "Anyone can read what is pushed to the hub" in err
+    assert folder_hub.made == ["dev"]
+    assert _space_hub(folder_hub, "show", "notes:n.txt") == "n"
+    record = json.loads(_space_hub(folder_hub, "show", f"main:{spacerepo.FILE}"))
+    assert record["hub"] == made["hub"] and "github" not in record
+    assert "--owner" not in _space_hub(folder_hub, "show", "main:update")
+    assert git("remote", cwd="dev").split() == ["quirq"]  # no origin: GitHub never saw it
+    assert not (folder_hub.github.root / "me").exists()  # nothing on the stand-in GitHub
+    assert [(r["method"], r["path"]) for r in folder_hub.requests] == [("POST", "/me/spaces/connect")]
+
+    Path("dev/notes/n.txt").write_text("n two\n")
+    monkeypatch.chdir("dev")
+    code, out, _ = run(capsys, "create", "space", "--yes")
+    assert code == 0 and folder_hub.made == ["dev"]  # made once; the second run goes on top, never forced
+    assert _space_hub(folder_hub, "show", "notes:n.txt") == "n two"
+    assert _space_hub(folder_hub, "rev-parse", "notes~1") == made["branches"]["notes"]
+
+
+def test_create_space_with_owner_still_puts_the_folder_on_github(folder_hub, capsys, monkeypatch):
+    git("init", "-q", "--bare", str(folder_hub.github.root / "me/dev"))
+    code, out, _ = run(capsys, "create", "space", "dev", "--owner", "me", "--yes")
+    assert code == 0 and json.loads(out)["github"] == "me/dev" and folder_hub.made == []
+    assert git(f"--git-dir={folder_hub.github.root / 'me/dev'}", "show", "notes:n.txt") == "n"
+    # A space on GitHub stays there when it is made again, hub or not.
+    monkeypatch.chdir("dev")
+    code, out, _ = run(capsys, "create", "space", "--yes")
+    assert code == 0 and json.loads(out)["github"] == "me/dev" and folder_hub.made == []
+
+
+def test_a_hub_space_name_with_two_hyphens_is_refused(folder_hub, capsys):
+    git("init", "-q", "o--r/notes")
+    code, _, err = run(capsys, "create", "space", "o--r", "--yes")
+    assert code == 1 and "copies of GitHub projects" in err and folder_hub.made == []
+
+
+def test_a_hub_space_with_commits_from_elsewhere_is_not_pushed_over(folder_hub, capsys, tmp_path):
+    git("init", "-q", "--bare", str(folder_hub.root / "dev.git"))
+    other = tmp_path / "other"
+    git("init", "-q", "-b", "main", str(other))
+    (other / "x").write_text("x\n")
+    git("add", ".", cwd=str(other))
+    git("commit", "-qm", "x", cwd=str(other))
+    git("push", "-q", str(folder_hub.root / "dev.git"), "main", cwd=str(other))
+    code, _, err = run(capsys, "create", "space", "dev", "--yes")
+    assert code == 1 and "has commits xo did not make here" in err and folder_hub.made == []
+    assert _space_hub(folder_hub, "for-each-ref", "--format=%(refname:short)").split() == ["main"]
+
+
+def test_create_space_needs_the_hubs_client_once_xo_login_found_a_hub(folder_hub, capsys, monkeypatch):
+    monkeypatch.setattr(quirq, "installed", lambda: False)
+    code, _, err = run(capsys, "create", "space", "dev", "--yes")
+    assert code == 1 and "git-remote-quirq is not installed" in err and not Path("dev/.git").exists()
+
+
+def test_a_repository_with_no_origin_goes_to_the_hub_only_when_its_name_is_typed(folder_hub, capsys):
+    folder_hub.answer = None  # no terminal: --yes does not answer it
+    code, _, err = run(capsys, "create", "space", "dev", "--yes")
+    assert code == 1 and "notes (no origin)" in err and "--yes does not answer this" in err
+    assert "nothing was pushed or kept" in err and folder_hub.made == [] and not list(folder_hub.root.iterdir())
+    assert not Path("dev/.git").exists() and Path("dev/notes/n.txt").read_text() == "n\n"  # as it was
+    folder_hub.answer = "de"
+    code, _, _ = run(capsys, "create", "space", "dev", "--yes")
+    assert code == 1 and folder_hub.made == []
+    assert folder_hub.asked == ["Type dev to send them to the hub anyway"] * 2
+
+
+def _public(folder_hub):
+    """dev/notes committed and pushed to a public o/pub on the stand-in GitHub."""
+    git("init", "-q", "--bare", str(folder_hub.github.root / "o/pub"))
+    git("remote", "add", "origin", f"{gitops.GITHUB}/o/pub", cwd="dev/notes")
+    git("add", ".", cwd="dev/notes")
+    git("commit", "-qm", "n", cwd="dev/notes")
+    git("-c", "protocol.file.allow=always", "push", "-q", "origin", "HEAD:refs/heads/main", cwd="dev/notes")
+    git("fetch", "-q", "origin", cwd="dev/notes")
+
+
+def test_a_repository_public_on_github_goes_to_the_hub_without_typing(folder_hub, capsys):
+    _public(folder_hub)
+    code, out, _ = run(capsys, "create", "space", "dev", "--yes")
+    assert code == 0 and json.loads(out)["pushed"] is True and folder_hub.asked == []
+    assert _space_hub(folder_hub, "show", "notes:n.txt") == "n"
+
+
+@pytest.mark.parametrize("change", ["untracked", "edited", "commit", "assume-unchanged", "skip-worktree",
+                                    "excludes-file"])
+def test_files_github_does_not_have_need_the_name_typed_even_with_a_public_origin(folder_hub, capsys, change):
+    _public(folder_hub)
+    if change == "untracked":
+        Path("dev/notes/private.txt").write_text("mine\n")
+    elif change == "edited":
+        Path("dev/notes/n.txt").write_text("not pushed\n")
+    elif change == "commit":
+        Path("dev/notes/n.txt").write_text("committed, not pushed\n")
+        git("commit", "-qam", "local", cwd="dev/notes")
+    elif change in ("assume-unchanged", "skip-worktree"):  # git status no longer shows the edit
+        git("update-index", f"--{change}", "n.txt", cwd="dev/notes")
+        Path("dev/notes/n.txt").write_text("SECRET\n")
+        assert git("status", "--porcelain", cwd="dev/notes") == ""
+    else:  # an excludes file only the repository's own config names hides it from git status there
+        Path("dev/hide").write_text("secret.txt\n")
+        git("config", "core.excludesFile", str(Path("dev/hide").absolute()), cwd="dev/notes")
+        Path("dev/notes/secret.txt").write_text("SECRET\n")
+        assert git("status", "--porcelain", cwd="dev/notes") == ""
+    folder_hub.answer = None
+    code, _, err = run(capsys, "create", "space", "dev", "--yes")
+    assert code == 1 and "notes (files GitHub does not have)" in err and folder_hub.made == []
+    assert not list(folder_hub.root.iterdir())  # nothing reached the hub
+
+
+def test_a_stale_or_forged_origin_ref_does_not_count_as_github_having_a_commit(folder_hub, capsys):
+    _public(folder_hub)
+    Path("dev/notes/secret.txt").write_text("SECRET\n")
+    git("add", "secret.txt", cwd="dev/notes")
+    git("commit", "-qm", "never pushed", cwd="dev/notes")
+    git("update-ref", "refs/remotes/origin/old-private", "HEAD", cwd="dev/notes")
+    folder_hub.answer = None
+    code, _, err = run(capsys, "create", "space", "dev", "--yes")
+    assert code == 1 and "notes (files GitHub does not have)" in err and not list(folder_hub.root.iterdir())
+
+
+def test_an_insteadof_rewrite_does_not_make_a_private_origin_read_as_public(folder_hub, capsys):
+    git("init", "-q", "--bare", str(folder_hub.github.root / "o/pub"))
+    git("remote", "add", "origin", "https://gitlab.example/o/secret", cwd="dev/notes")
+    git("config", f"url.{gitops.GITHUB}/o/pub.insteadOf", "https://gitlab.example/o/secret", cwd="dev/notes")
+    code, _, err = run(capsys, "create", "space", "dev", "--yes")
+    assert code == 1 and "not a public GitHub repository" in err and folder_hub.made == []
+
+
+@pytest.mark.parametrize("origin", ["o/private", "https://gitlab.example/o/r"])
+def test_a_repository_whose_origin_is_not_public_on_github_is_never_sent_to_the_hub(folder_hub, capsys, origin):
+    url = origin if "://" in origin else f"{gitops.GITHUB}/{origin}"  # o/private: GitHub does not answer
+    git("remote", "add", "origin", url, cwd="dev/notes")
+    code, _, err = run(capsys, "create", "space", "dev", "--yes")
+    assert code == 1 and "not a public GitHub repository" in err and "notes" in err and url not in err
+    assert folder_hub.made == [] and folder_hub.asked == [] and not Path("dev/.git").exists()
+
+
+def test_a_folder_whose_own_origin_is_private_is_never_sent_to_the_hub(folder_hub, capsys):
+    git("init", "-q", "-b", "work", "dev")
+    git("remote", "add", "origin", f"{gitops.GITHUB}/o/private", cwd="dev")
+    code, _, err = run(capsys, "create", "space", "dev", "--yes")
+    assert code == 1 and "dev/.git has an origin that is not a public GitHub repository" in err
+    assert folder_hub.made == [] and "xo-space" not in git("branch", "--list", cwd="dev")
+
+
+def test_an_attached_folder_goes_to_the_hub_by_url_with_its_remotes_untouched(folder_hub, capsys):
+    git("init", "-q", "-b", "work", "dev")
+    code, out, _ = run(capsys, "create", "space", "dev", "--yes")
+    assert code == 0 and json.loads(out)["index"] == "xo-space"
+    assert git("remote", cwd="dev") == ""  # no quirq remote added to your repository
+    assert _space_hub(folder_hub, "show", "notes:n.txt") == "n"
+
+
+def test_a_quirq_remote_that_points_elsewhere_is_refused(folder_hub, capsys, monkeypatch):
+    assert run(capsys, "create", "space", "dev", "--yes")[0] == 0
+    git("remote", "set-url", "quirq", "file:///elsewhere.git", cwd="dev")
+    Path("dev/notes/n.txt").write_text("n two\n")
+    monkeypatch.chdir("dev")
+    code, _, err = run(capsys, "create", "space", "--yes")
+    assert code == 1 and "has a quirq remote that is not" in err and "git remote remove quirq" in err
