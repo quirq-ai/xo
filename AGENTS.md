@@ -7,7 +7,7 @@ Read `README.md` first.
   (`vercel-python`) is an extra check on the Python Vercel runs.
 - `src/xo/client.py` is the only CLI code that talks to the network, and `Clerk`,
   `ClerkFrontend` and `Hub` in `src/xo/server.py` the only server code. Keep it that way. (git,
-  gh and the quirq hub's client `spacehub`, run by `gitops`, `github` and `quirq`, reach the
+  gh and the quirq hub's client `spacehub`, run by `gitops`, `github`, `quirq` and `attach`, reach the
   network themselves.)
 - The server runs on Vercel (`xo.quirq.dev`) through the root `app.py` (Python pinned in
   `.python-version`); keep it a thin wrapper of `xo.server.wsgi_app()`, and keep

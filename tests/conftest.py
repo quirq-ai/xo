@@ -63,15 +63,17 @@ def no_real_gh():
     MonkeyPatch, so a test's monkeypatch.undo() cannot remove it."""
     import subprocess
     import types
-    from xo import github
+    from xo import attach, github
 
     def run(*args, **kwargs):
         raise FileNotFoundError("gh")
+    stub = types.SimpleNamespace(run=run, DEVNULL=subprocess.DEVNULL, TimeoutExpired=subprocess.TimeoutExpired,
+                                 CompletedProcess=subprocess.CompletedProcess)
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(github, "installed", lambda: False)
-        mp.setattr(github, "subprocess", types.SimpleNamespace(
-            run=run, DEVNULL=subprocess.DEVNULL, TimeoutExpired=subprocess.TimeoutExpired,
-            CompletedProcess=subprocess.CompletedProcess))
+        mp.setattr(github, "subprocess", stub)
+        # xo gh / xo sh run their tools through attach: no real gh or spacehub either.
+        mp.setattr(attach, "subprocess", stub)
         for name in ("GH_TOKEN", "GITHUB_TOKEN", "GH_HOST"):
             mp.delenv(name, raising=False)
         yield

@@ -123,7 +123,7 @@ from pathlib import Path
 from typing import Any, NoReturn
 from urllib.parse import quote
 
-from xo import (__version__, commands, github, gitops, names, quirq, selfupdate, services, spacerepo, spec, weblogin,
+from xo import (__version__, attach, commands, github, gitops, names, quirq, selfupdate, services, spacerepo, spec, weblogin,
                 workspace)
 from xo.client import (CORE_PATH, DEFAULT_TIMEOUT, KEY_ENV, MAYBE_RECEIVED, MIN_SECRET, Client, Login, XoError,
                        api_key, check_key, credentials_path, forget_login, read_key, redact, save_login, saved_login,
@@ -1543,6 +1543,16 @@ def main(argv: list[str] | None = None) -> int:
     if _command_word(argv) == "user-metadata":
         print("xo: xo user-metadata is gone; xo me shows your own profile and metadata", file=sys.stderr)
         return 1
+    if _command_word(argv) in attach.TOOLS:  # xo gh / xo sh: the rest goes to that tool as it is
+        word = _command_word(argv)
+        if argv[0] != word:
+            print(f"xo: put {word} first: xo {word} ARGS (xo's own options do not apply to it)", file=sys.stderr)
+            return 2
+        try:
+            return attach.run(word, argv[1:])
+        except XoError as e:
+            print(f"xo: {spec.clean(str(e))}", file=sys.stderr)
+            return 1
     _Parser.argv = argv
     _Parser.flags = set()
     common = _common()
@@ -1575,6 +1585,9 @@ def main(argv: list[str] | None = None) -> int:
     _add_send(a)
     a.add_argument("--yes", action="store_true", help="needed to send a DELETE")
     a.set_defaults(run=_api)
+
+    for word, tool in attach.TOOLS.items():  # listed for --help; main runs them before parsing
+        sub.add_parser(word, help=tool.about, add_help=False)
 
     keyless = _common(key=False)
     li = sub.add_parser("login", parents=[keyless],
