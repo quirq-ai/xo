@@ -61,17 +61,17 @@ class Hub:
         return "wss://" + self.host
 
     def url(self, project: str) -> str:
-        """The quirq URL of project's copy on this hub: a space of the agent's own, OWNER--REPO."""
+        """The quirq URL of project's copy on this hub: the project OWNER--REPO in the agent's own space."""
         return self.space_url(name(project))
 
     def space_url(self, space: str) -> str:
-        """The quirq URL of the agent's hub space called space (a folder space of xo create space)."""
+        """The quirq URL of the hub project AGENT/space (a folder space of xo create space)."""
         return f"{SCHEME}://{self.host}/{self.agent}/{space}"
 
 
 def name(project: str) -> str:
-    """The hub space a GitHub project's copy lives in: OWNER--REPO (a GitHub owner never holds two
-    hyphens in a row, so no two projects share one)."""
+    """The hub project, in the agent's space, a GitHub project's copy lives in: OWNER--REPO (a GitHub
+    owner never holds two hyphens in a row, so no two projects share one)."""
     if not (names.project_ok(project) and names.is_github(project)):
         raise XoError(f"{project} has no GitHub repo, so it has no copy on the hub")
     owner, repo = project.split("/")
@@ -184,14 +184,20 @@ def link(hub: Hub, token: str) -> None:
 
 
 def create(hub: Hub, project: str) -> None:
-    """Make the agent's space for project on the hub; one that is already there is left as it is."""
+    """Make the hub copy of project, AGENT/OWNER--REPO; one that is already there is left as it is."""
     make(hub, name(project), f"xo: a copy of github.com/{project}")
 
 
 def make(hub: Hub, space: str, description: str) -> None:
-    """Make the agent's hub space called space; one that is already there is left as it is."""
+    """Make the project AGENT/space on the hub, in the agent's own space, where space_url points;
+    one that is already there is left as it is. Always `project create AGENT/NAME`: since space-hub's
+    builders, spaces and projects (#5), `space create NAME` makes an org called NAME instead."""
     try:
-        _client(hub, "space", "create", space, "-d", description)
+        _client(hub, "project", "create", f"{hub.agent}/{space}", "-d", description)
     except XoError as e:
-        if "already exists" not in getattr(e, "detail", ""):
+        detail = getattr(e, "detail", "")
+        if 'unknown command "project"' in detail:
+            raise XoError(f"{CLIENT} here is older than the hub (it has no project command); update it: "
+                          "git pull in your space-hub folder, then scripts/install-cli.sh") from None
+        if "already exists" not in detail:
             raise
