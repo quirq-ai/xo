@@ -222,6 +222,57 @@ def test_the_hubs_client_gets_the_token_on_stdin_and_none_of_xos_keys(monkeypatc
     assert seen["env"]["SPACEHUB_SERVER"] == "wss://hub.quirq.dev"
 
 
+# What the hub's client prints, from quirq-ai/space-hub main 2c7bdf5: cli/src/cli.ts projectCreate and the
+# dispatcher's last line, module/src/index.ts createProjectIn ("spacehub: " + the reducer's message).
+EXISTS = 'spacehub: project "alice/{name}" already exists\n'
+NO_PROJECT_COMMAND = 'spacehub: unknown command "project"; see spacehub help\n'
+
+
+def _client_answers(monkeypatch, code: int, stderr: str) -> list[list[str]]:
+    seen: list[list[str]] = []
+
+    def fake_run(argv, env, input, **kw):
+        import subprocess
+        seen.append(argv)
+        return subprocess.CompletedProcess(argv, code, "", stderr)
+    monkeypatch.setattr(quirq.subprocess, "run", fake_run)
+    return seen
+
+
+@pytest.mark.parametrize("make", [
+    lambda hub: quirq.make(hub, "dev", "xo: the space dev, made by xo create space"),
+    lambda hub: quirq.create(hub, "juanfont/headscale"),
+])
+def test_hub_copies_are_projects_in_the_agents_space_never_orgs(monkeypatch, make):
+    """`spacehub space create NAME` makes an org since space-hub #5; xo's copies are AGENT/NAME projects,
+    where Hub.space_url and Hub.url point."""
+    seen = _client_answers(monkeypatch, 0, "")
+    hub = quirq.Hub("https://hub.quirq.dev", "alice")
+    make(hub)
+    [argv] = seen
+    assert argv[:3] == ["spacehub", "project", "create"] and argv[4] == "-d"
+    assert argv[3] in ("alice/dev", "alice/juanfont--headscale")
+    assert hub.space_url(argv[3].split("/")[1]) == f"quirq://hub.quirq.dev/{argv[3]}"
+    assert "space" not in argv[:2]
+
+
+def test_a_hub_copy_already_there_is_left_as_it_is(monkeypatch):
+    _client_answers(monkeypatch, 1, EXISTS.format(name="dev"))
+    quirq.make(quirq.Hub("https://hub.quirq.dev", "alice"), "dev", "d")
+
+
+def test_any_other_refusal_stops_with_the_hubs_reason(monkeypatch):
+    _client_answers(monkeypatch, 1, 'spacehub: permission denied: only owners and members of "alice" create projects in it\n')
+    with pytest.raises(XoError, match="permission denied"):
+        quirq.make(quirq.Hub("https://hub.quirq.dev", "alice"), "dev", "d")
+
+
+def test_a_client_older_than_projects_says_to_update_it(monkeypatch):
+    _client_answers(monkeypatch, 1, NO_PROJECT_COMMAND)
+    with pytest.raises(XoError, match="older than the hub.*scripts/install-cli.sh"):
+        quirq.make(quirq.Hub("https://hub.quirq.dev", "alice"), "dev", "d")
+
+
 def _second_machine(hub, tmp_path, text):  # noqa: F811
     """Another machine installs dev, commits text to o/a's main and updates: the hub moves on."""
     first = Path.cwd()

@@ -33,7 +33,7 @@ the branch GitHub has of it (xo deletes nothing); one never pushed is dropped. O
 branches it lists are pushed.
 
 Without --github, the space goes to the quirq hub xo login found (xo/quirq.py); with no hub, or
-for a space already on GitHub, xo create space stops and says so. On the hub its remote is the agent's hub space NAME
+for a space already on GitHub, xo create space stops and says so. On the hub its remote is the hub project AGENT/NAME
 (quirq://HOST/AGENT/NAME, the `quirq` remote, made on the hub when it is missing; an attached
 repository is pushed by URL and its remotes are left alone), and its index records "hub" in place of
 "github". Anyone can read the hub, so a folder or git repository whose origin is not public on
@@ -884,7 +884,7 @@ def heads(owner: str, name: str) -> dict[str, str] | None:
 
 
 def hub_heads(here: Path, hub: quirq.Hub, name: str) -> dict[str, str] | None:
-    """The branches the agent's hub space NAME has ({name: sha}), or None when there is no such space."""
+    """The branches the hub project AGENT/NAME has ({name: sha}), or None when there is no such space."""
     try:
         out = gitops.run("ls-remote", "--heads", "--end-of-options", hub.space_url(name), cwd=here.absolute(), hub=True)
     except XoError as e:
@@ -900,7 +900,7 @@ def hub_heads(here: Path, hub: quirq.Hub, name: str) -> dict[str, str] | None:
 
 
 def push_hub(here: Path, hub: quirq.Hub, name: str, refs: dict[str, str]) -> None:
-    """push for a space on the hub: the index and the space's branches to the agent's hub space NAME,
+    """push for a space on the hub: the index and the space's branches to the hub project AGENT/NAME,
     never forced. In a repository xo made, its remote is quirq (added when there is none; one that
     points elsewhere is refused). An attached one is pushed by URL, and its remotes are not touched."""
     space = Space(here)
@@ -1061,7 +1061,7 @@ def create(here: Path, name: str, owner: str | None, ask: Callable[[str], bool],
            typed: Callable[[str], str | None] | None = None) -> dict:
     """The whole command after the name checks: refuse, show, ask, build, then push. repo: the GitHub
     repository's name, when an attached repository's origin names one (attached_origin). hub: the space
-    goes to the agent's hub space NAME instead of GitHub (owner and repo are not used then; see
+    goes to the hub project AGENT/NAME instead of GitHub (owner and repo are not used then; see
     _hub_check, and typed: what someone at a terminal types when asked, never answered by --yes). A
     folder that is not there yet is made first (an empty space: its index lists no branches until git
     repositories are put in it), and taken away again, still empty, if anything stops before the space
