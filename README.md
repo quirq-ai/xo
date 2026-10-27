@@ -39,6 +39,9 @@ xo create space dev --github                     # the folder ./dev, on GitHub i
 xo create project notes                          # an empty repository at ./notes
 xo create project https://github.com/juanfont/headscale  # called headscale, cloned into ./headscale
 xo spaces --space-id 6f1c2c1e-...   # connection URLs for a space you own
+
+xo gh pr list                    # GitHub's gh, with these arguments
+xo sh project list               # the quirq hub's client spacehub (sh for short), on the hub xo login found
 ```
 
 | Command | Request | Body |
@@ -67,6 +70,7 @@ xo spaces --space-id 6f1c2c1e-...   # connection URLs for a space you own
 | `xo install space:S` / `project:P` | `GET /me/spaces`, then your own git: each project cloned or fetched into `./S/REPO` at its ref / P cloned, or fetched and fast-forwarded | none |
 | `xo update space:S` / `project:P` | `git push` of each branch under `./S`, then `PUT /me/spaces/S` with the refs checked out (refused if the space changed) / `git push` of P's branch | none |
 | `xo sync space:S` / `project:P` | `git pull --rebase` and push of each branch, then merges the space's changes with yours and `PUT`s them / `git pull --rebase` and push | none |
+| `xo gh ARGS` / `xo sh ARGS` | none from xo: runs `gh ARGS`, or `spacehub ARGS` with `SPACEHUB_SERVER` set to the hub `xo login` found (no hub: it says to run `xo login`), in this terminal, and exits with its code. Neither gets `XO_API_KEY` or other services' tokens; gh never gets `GH_HOST`. `sh` is a word inside xo only: the hub's client is installed as `spacehub`, never as `sh` (the system shell). Put it first: `xo gh ...`, not `xo --json gh ...`. Another CLI is one entry in `src/xo/attach.py` | none |
 
 A GitHub project is called by its repo's name in every command (`project:headscale`); when another
 of your projects has that name, call it by its `OWNER/REPO` (its folder is then `./OWNER/REPO`). A
