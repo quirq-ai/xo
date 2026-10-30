@@ -914,8 +914,7 @@ def push_hub(here: Path, hub: quirq.Hub, name: str, refs: dict[str, str]) -> Non
                           f"remote remove {quirq.REMOTE} there), then run again. Nothing was pushed")
     to = url if space.attached else quirq.REMOTE  # by URL in yours: your remote-tracking refs stay yours
     try:
-        space.git("push", "--atomic", "--porcelain", "--no-follow-tags", "--no-recurse-submodules", to,
-                  *(f"{c}:refs/heads/{b}" for b, c in refs.items()), config=("-c", "push.gpgSign=false"), hub=True)
+        _push(space, to, refs, ("-c", "push.gpgSign=false"), hub=True)
     except XoError as e:
         why = getattr(e, "detail", "") or ""
         if "Updates were rejected" in why or "non-fast-forward" in why or "fetch first" in why:
@@ -1030,6 +1029,42 @@ def attached_origin(here: Path) -> tuple[str, str] | None:
     return owner, repo
 
 
+def _push(space: Space, to: str, refs: dict[str, str], config: tuple, hub: bool = False) -> None:
+    """git push of refs ({branch: commit}) to `to`, never forced. In an attached repository, which is
+    pushed by URL, your remote-tracking refs are as they were afterwards: from git 2.56, a push to a URL
+    that is also one of your remotes' moves that remote's refs, as a push to the remote itself does, so
+    whatever the push moved under refs/remotes/ is put back."""
+    before = _tracking(space) if space.attached else None
+    try:
+        space.git("push", "--atomic", "--porcelain", "--no-follow-tags", "--no-recurse-submodules", to,
+                  *(f"{c}:refs/heads/{b}" for b, c in refs.items()), config=config, hub=hub)
+    finally:
+        if before is not None:
+            _put_back(space, before)
+
+
+def _tracking(space: Space) -> dict[str, str]:
+    """The remote-tracking refs here, {ref: commit}; a symbolic one (origin/HEAD) follows its target, so
+    it is left out."""
+    found = {}
+    for line in (space.git("for-each-ref", "--format=%(refname) %(objectname) %(symref)", "refs/remotes/") or "").splitlines():
+        ref, sha, symref = (line.split(" ") + ["", ""])[:3]
+        if ref and not symref:
+            found[ref] = sha
+    return found
+
+
+def _put_back(space: Space, before: dict[str, str]) -> None:
+    """Remote-tracking refs back to `before`, in one transaction, each only if it is still where the push
+    left it (a fetch that moved one since stands)."""
+    after = _tracking(space)
+    moves = ([f"update {ref} {before[ref]} {sha}" for ref, sha in after.items() if ref in before and sha != before[ref]]
+             + [f"delete {ref} {sha}" for ref, sha in after.items() if ref not in before]
+             + [f"create {ref} {sha}" for ref, sha in before.items() if ref not in after])
+    if moves:
+        space.git("update-ref", "--stdin", input=("\n".join(moves) + "\n").encode())
+
+
 def push(here: Path, owner: str, name: str, refs: dict[str, str]) -> None:
     """The index and the space's branches ({branch: commit}, the exact commits build made and checked, not
     whatever the branches point at by now) to github.com/OWNER/NAME with your own git login, never forced,
@@ -1044,9 +1079,7 @@ def push(here: Path, owner: str, name: str, refs: dict[str, str]) -> None:
     elif not space.attached:
         space.git("remote", "set-url", "origin", url)
     try:
-        space.git("push", "--atomic", "--porcelain", "--no-follow-tags", "--no-recurse-submodules", to,
-                  *(f"{c}:refs/heads/{b}" for b, c in refs.items()),
-                  config=("-c", "http.followRedirects=false", "-c", "push.gpgSign=false"))
+        _push(space, to, refs, ("-c", "http.followRedirects=false", "-c", "push.gpgSign=false"))
     except XoError as e:
         why = getattr(e, "detail", "") or ""
         if "Updates were rejected" in why or "non-fast-forward" in why:

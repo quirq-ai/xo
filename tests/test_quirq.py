@@ -532,6 +532,18 @@ def test_an_attached_folder_goes_to_the_hub_by_url_with_its_remotes_untouched(fo
     assert _space_hub(folder_hub, "show", "notes:n.txt") == "n"
 
 
+def test_your_remote_for_the_hubs_space_keeps_its_tracking_refs(folder_hub, capsys):
+    # From git 2.56, a push to a URL that is also a remote's moves that remote's refs, as a push to it does.
+    git("init", "-q", "-b", "work", "dev")
+    git("commit", "-q", "--allow-empty", "-m", "mine", cwd="dev")
+    git("remote", "add", "mine", f"file://{folder_hub.root}/dev.git", cwd="dev")
+    head = git("rev-parse", "HEAD", cwd="dev")
+    git("update-ref", "refs/remotes/mine/work", head, cwd="dev")
+    code, _, _ = run(capsys, "create", "space", "dev", "--yes")
+    assert code == 0 and _space_hub(folder_hub, "show", "notes:n.txt") == "n"
+    assert git("for-each-ref", "--format=%(refname) %(objectname)", "refs/remotes/", cwd="dev") == f"refs/remotes/mine/work {head}"
+
+
 def test_a_quirq_remote_that_points_elsewhere_is_refused(folder_hub, capsys, monkeypatch):
     assert run(capsys, "create", "space", "dev", "--yes")[0] == 0
     git("remote", "set-url", "quirq", "file:///elsewhere.git", cwd="dev")
