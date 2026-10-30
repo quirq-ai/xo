@@ -416,6 +416,37 @@ def test_your_remote_tracking_branches_are_left_alone(here):
     assert git("rev-parse", "refs/remotes/origin/alpha") == mine == git("rev-parse", "refs/remotes/origin/xo-space")
 
 
+def test_your_remote_tracking_branches_are_left_alone_when_your_origin_is_the_space(here):
+    # From git 2.56, a push to a URL that is also a remote's moves that remote's refs, as a push to it does.
+    _yours()
+    git("remote", "add", "origin", f"{spacerepo.gitops.GITHUB}/me/myspace")  # the stand-in GitHub's address
+    mine = git("rev-parse", "main")
+    git("update-ref", "refs/remotes/origin/alpha", mine)
+    _make()
+    assert git("rev-parse", "refs/remotes/origin/alpha") == mine
+    assert git("for-each-ref", "--format=%(refname)", "refs/remotes/") == "refs/remotes/origin/alpha"
+    assert _hub(here, "rev-parse", "alpha") != mine  # the space did go to GitHub
+
+
+def test_moved_remote_tracking_refs_are_put_back_and_new_ones_taken_away(here):
+    _yours()
+    mine = git("rev-parse", "main")
+    git("commit", "-qm", "two")
+    two = git("rev-parse", "main")
+    git("update-ref", "refs/remotes/origin/a", mine)
+    git("update-ref", "refs/remotes/origin/gone", mine)
+    git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/a")
+    space = spacerepo.Space(Path("."))
+    before = spacerepo._tracking(space)
+    assert before == {"refs/remotes/origin/a": mine, "refs/remotes/origin/gone": mine}
+    git("update-ref", "refs/remotes/origin/a", two)  # what git 2.56's push does
+    git("update-ref", "refs/remotes/origin/new", two)
+    git("update-ref", "-d", "refs/remotes/origin/gone")
+    spacerepo._put_back(space, before)
+    assert spacerepo._tracking(space) == before
+    assert git("symbolic-ref", "refs/remotes/origin/HEAD") == "refs/remotes/origin/a"
+
+
 def test_a_worktree_or_submodule_folder_is_refused(here, tmp_path):
     other = tmp_path / "other"
     git("init", "-q", "-b", "main", str(other))
