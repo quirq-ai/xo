@@ -16,6 +16,10 @@ verifies it with Clerk and answers:
                                     signed-in user's API key: one browser login made before (no claims
                                     or scopes, a week or more left), else a new one; never stored or
                                     logged
+    POST  /login/hub                the hub's key, only with hub sign-in on: {"code", "verifier",
+                                    "redirect"} from a Clerk sign-in the hub's website started: the
+                                    server swaps the code, makes the user's hub agent as /me/hub does,
+                                    and answers {"subject", "agent"}; no API key is made
     GET   /me                       any user key: the key's own account, with its primary email and
                                     its public and private metadata (secret-looking values masked)
     GET   /me/projects              any user key: the `projects` list in its own private metadata
@@ -84,6 +88,10 @@ Configuration (environment only, so the secret never lands in shell history or t
                               first request copies those keys out of Clerk once (Clerk keeps its
                               copy). Unset: everything stays in Clerk, as before
     XO_HUB_KEY                the hub's SPACEHUB_XO_KEY; never printed or logged
+    XO_HUB_LOGIN_REDIRECT     the hub's sign-in callback, XO_HUB_URL + /-/login/xo/callback, once it
+                              is a redirect URL of the Clerk OAuth application: then GET /login
+                              offers it and POST /login/hub is on (it needs browser login and the
+                              hub too). A bad value turns hub sign-in off, never the server
 
 It listens on 127.0.0.1 by default: put it behind an HTTPS proxy before giving it any other host.
 On Vercel, the repo's root app.py serves the same routes through `wsgi_app()` (docs/deploy-vercel.md).
@@ -92,6 +100,7 @@ from __future__ import annotations
 
 import collections
 import hashlib
+import hmac
 import http
 import http.client
 import json
@@ -113,6 +122,8 @@ from xo.client import LOCAL_HOSTS, XoError, redact
 SECRET_ENV = "CLERK_SECRET_KEY"
 HUB_URL_ENV = "XO_HUB_URL"
 HUB_KEY_ENV = "XO_HUB_KEY"
+HUB_LOGIN_ENV = "XO_HUB_LOGIN_REDIRECT"
+HUB_CALLBACK = "/-/login/xo/callback"  # where the hub's website takes a sign-in back (space-hub web.ts)
 HUB_TIMEOUT = 10.0
 HUB_API = "/-/api/xo/v1"
 MAX_HUB_ANSWER = 1024 * 1024
@@ -182,7 +193,7 @@ ACTIVITY_KEPT = 100  # recent requests the status page lists, per process
 # amount of other traffic hides one, and each heals by itself once it is older than that.
 DEGRADED_SECONDS = 300
 DEGRADED_KEPT = 1000  # times remembered of each kind; enough to count five minutes of real traffic
-_CLERK_ROUTES = ("/login/browser", "/me", "/me/projects", "/me/projects/connect", "/me/spaces", "/me/spaces/connect", "/me/spaces/{name}",
+_CLERK_ROUTES = ("/login/browser", "/login/hub", "/me", "/me/projects", "/me/projects/connect", "/me/spaces", "/me/spaces/connect", "/me/spaces/{name}",
                  "/me/spaces/{name}/projects", "/me/share", "/me/shared", "/me/shared/accept", "/me/shared/reject",
                  "/me/hub", "/user-metadata/{userId}")
 # Browser login (`xo login`): Clerk's sign-in sends the browser back to the CLI on one of these
@@ -274,6 +285,7 @@ class Config:
         if bool(hub_url) != bool(self.hub_key):
             raise XoError(f"set both {HUB_URL_ENV} and {HUB_KEY_ENV} to keep xo's data in the hub, or neither")
         self.hub_url = _upstream(HUB_URL_ENV, hub_url).rstrip("/") if hub_url else None
+        self.hub_login = _hub_login(self.hub_url, self.oauth_client_id)
 
 
 def _browser_login() -> tuple[str | None, str | None]:
@@ -304,6 +316,27 @@ def _browser_login() -> tuple[str | None, str | None]:
         print(f"xo serve: browser login is off: {why}", file=sys.stderr, flush=True)
         return None, None
     return client_id, frontend
+
+
+def _hub_login(hub_url: str | None, client_id: str | None) -> str | None:
+    """The hub's sign-in callback when hub sign-in is on, else None. It is on only with the hub and
+    browser login on and the callback registered in Clerk, which only whoever runs the server knows:
+    so it is a setting, and it must be the hub's own callback. Like browser login, a bad value turns
+    it off and says why on stderr; it never stops the server."""
+    redirect = os.environ.get(HUB_LOGIN_ENV, "").strip()
+    if not redirect:
+        return None
+    why = None
+    if not hub_url:
+        why = f"the hub is off ({HUB_URL_ENV} is not set)"
+    elif not client_id:
+        why = "browser login is off"
+    elif redirect != hub_url + HUB_CALLBACK:
+        why = f"{HUB_LOGIN_ENV} must be {hub_url}{HUB_CALLBACK}"
+    if why:
+        print(f"xo serve: hub sign-in is off: {why}", file=sys.stderr, flush=True)
+        return None
+    return redirect
 
 
 class ClerkError(Exception):
@@ -1015,11 +1048,15 @@ class App:
         if path == "/login":
             if method not in ("GET", "HEAD"):
                 raise _Reply(405, "Method not allowed")
-            return {"browser": self._browser()}
+            return {"browser": self._browser(), **({"hub": {"redirect": self.cfg.hub_login}} if self.cfg.hub_login else {})}
         if path == "/login/browser":
             if method != "POST":
                 raise _Reply(405, "Method not allowed")
             return self._browser_login(body)
+        if path == "/login/hub":
+            if method != "POST":
+                raise _Reply(405, "Method not allowed")
+            return self._hub_login(headers, body)
         if path == "/me":
             if method != "GET":
                 raise _Reply(405, "Method not allowed")
@@ -1086,13 +1123,19 @@ class App:
         key, _, who = self._caller(headers, "me", "/me/hub")
         if not self.hub:
             raise self._refuse(who, 404, "This xo server keeps no hub")
-        name = self._user(key["subject"]).get("username")
+        made = self._agent_for(key["subject"], self._user(key["subject"]).get("username"), who)
+        self.audit(**who, outcome=200)  # never the token
+        return {"server": self.cfg.hub_url, "agent": made["agent"], "token": made["token"]}
+
+    def _agent_for(self, subject: str, name: Any, who: dict) -> dict:
+        """The user's hub agent, made on first use and named after their username `name` (the only
+        name this server ever sends the hub): {"agent", "token"}. A refusal is audited."""
         agent = name.lower() if isinstance(name, str) else ""
         if not HUB_AGENT.fullmatch(agent):
             raise self._refuse(who, 409, "Your username cannot name a hub agent: it needs 1 to 39 letters, digits "
                                          "or inner hyphens; change it first")
         try:
-            made = self._hub(lambda: self.hub.agent(key["subject"], agent), who)
+            made = self._hub(lambda: self.hub.agent(subject, agent), who)
         except HubConflict as e:
             if "reserved" in e.reason:
                 raise self._refuse(who, 409, f"The hub keeps the name {agent} for itself; change your username "
@@ -1101,8 +1144,7 @@ class App:
             # a username given up and then taken by someone else stays the first account's agent.
             raise self._refuse(who, 409, f"The hub's agent {agent} belongs to another account (one that had "
                                          "this username before); change your username to get a hub agent") from None
-        self.audit(**who, outcome=200)  # never the token
-        return {"server": self.cfg.hub_url, "agent": made["agent"], "token": made["token"]}
+        return made
 
     def _browser(self) -> dict | None:
         """What the CLI needs to start a browser login: Clerk's sign-in address and the public client id."""
@@ -1133,26 +1175,7 @@ class App:
         if not (isinstance(name, str) and LOGIN_NAME.fullmatch(name)):
             raise _Reply(400, "name must be 3 to 40 letters, digits, spaces and . _ -, starting with a letter or "
                               "digit and not ending in a space")
-        try:
-            user_id = self.frontend.user_id(code, verifier, redirect)
-        except ClerkError as e:
-            if e is BUSY or e.status == 429:
-                reply = _Reply(429, "Too many logins at once; try again in a few seconds", e.seen)
-            elif e.code in ("invalid_client", "unauthorized_client"):
-                # Not the user's fault: the OAuth application is not this instance's, or not public.
-                print(f"xo serve: Clerk refused the OAuth application in {CLIENT_ID_ENV} ({e.status}, {e.code}); "
-                      "check that it belongs to this Clerk instance and that Public is on", file=sys.stderr,
-                      flush=True)
-                reply = _Reply(502, "Browser login is not set up right on this server; log in with an API key "
-                                    "(xo login --key)", e.seen)
-            elif e.status in (400, 401):  # invalid_grant: expired, used, or not this verifier
-                reply = _Reply(401, "The sign-in did not work (it expired or was already used); run xo login again",
-                               e.seen)
-            else:
-                reply = _Reply(502, "Clerk's sign-in did not answer", e.seen)
-            self.audit(method="POST", route="/login/browser", keyId=None, caller=None, target=None,
-                       outcome=reply.status, clerk=e.seen, oauthError=e.code or None)
-            raise reply from None
+        user_id = self._signed_in(code, verifier, redirect, "/login/browser")
         try:
             keys = self.clerk.user_keys(user_id)
             old = self._old_key(user_id, keys)
@@ -1195,6 +1218,65 @@ class App:
         self.audit(method="POST", route="/login/browser", keyId=key_id if isinstance(key_id, str) else None,
                    caller=None, target=user_id, outcome=200, reused=False)
         return {"key": secret, "days": LOGIN_KEY_DAYS, "reused": False}
+
+    def _signed_in(self, code: str, verifier: str, redirect: str, route: str) -> str:
+        """The Clerk user id of whoever signed in and was given this code; a refusal is audited and
+        becomes the reply, worded for the CLI (/login/browser) or for the hub's website (/login/hub)."""
+        cli = route == "/login/browser"
+        try:
+            return self.frontend.user_id(code, verifier, redirect)
+        except ClerkError as e:
+            if e is BUSY or e.status == 429:
+                reply = _Reply(429, "Too many logins at once; try again in a few seconds", e.seen)
+            elif e.code in ("invalid_client", "unauthorized_client"):
+                # Not the user's fault: the OAuth application is not this instance's, or not public.
+                print(f"xo serve: Clerk refused the OAuth application in {CLIENT_ID_ENV} ({e.status}, {e.code}); "
+                      "check that it belongs to this Clerk instance and that Public is on", file=sys.stderr,
+                      flush=True)
+                reply = _Reply(502, "Browser login is not set up right on this server; log in with an API key "
+                                    "(xo login --key)" if cli else "Sign-in with xo is not set up right; sign in "
+                                    "from the terminal for now", e.seen)
+            elif e.status in (400, 401):  # invalid_grant: expired, used, or not this verifier
+                reply = _Reply(401, "The sign-in did not work (it expired or was already used); "
+                                    + ("run xo login again" if cli else "sign in again"), e.seen)
+            else:
+                reply = _Reply(502, "Clerk's sign-in did not answer", e.seen)
+            self.audit(method="POST", route=route, keyId=None, caller=None, target=None,
+                       outcome=reply.status, clerk=e.seen, oauthError=e.code or None)
+            raise reply from None
+
+    def _hub_login(self, headers: dict[str, str], body: bytes | None) -> dict:
+        """Sign someone in to the hub's website. The hub sent its visitor to Clerk's sign-in with its
+        own verifier and redirect, and gives the code here, with its key; only the hub may ask. The
+        code is swapped as browser login's is, and the answer is the user's hub agent, made on first
+        use as /me/hub makes it, and their user id: never an API key, and never the agent's token,
+        which the hub already keeps."""
+        who = {"method": "POST", "route": "/login/hub", "keyId": None, "caller": None}
+        if not self.cfg.hub_login:
+            raise _Reply(404, "This xo server signs nobody in to a hub")
+        auth = headers.get("authorization", "")
+        sent = auth[7:].strip() if auth[:7].lower() == "bearer " else ""
+        if not hmac.compare_digest(hashlib.sha256(sent.encode()).digest(),
+                                   hashlib.sha256(self.cfg.hub_key.encode()).digest()):
+            raise self._refuse(who, 401, "Missing or wrong hub key")
+        try:
+            data = json.loads(body or b"")
+        except (ValueError, RecursionError):
+            raise self._refuse(who, 422, "Body is not JSON") from None
+        if not isinstance(data, dict) or set(data) != {"code", "verifier", "redirect"}:
+            raise self._refuse(who, 422, 'Body must be {"code", "verifier", "redirect"} and nothing else')
+        code, verifier, redirect = data["code"], data["verifier"], data["redirect"]
+        if not (isinstance(code, str) and LOGIN_CODE.fullmatch(code)):
+            raise self._refuse(who, 400, "code must be the code Clerk's sign-in gave")
+        if not (isinstance(verifier, str) and LOGIN_VERIFIER.fullmatch(verifier)):
+            raise self._refuse(who, 400, "verifier must be 43 to 128 letters, digits and . _ ~ -")
+        if redirect != self.cfg.hub_login:
+            raise self._refuse(who, 400, f"redirect must be {self.cfg.hub_login}")
+        user_id = self._signed_in(code, verifier, redirect, "/login/hub")
+        who["target"] = user_id
+        made = self._agent_for(user_id, self._user(user_id, who).get("username"), who)
+        self.audit(**who, outcome=200)  # never the token
+        return {"subject": user_id, "agent": made["agent"]}
 
     def _old_key(self, user_id: str, keys: list) -> tuple[str, str, int | None] | None:
         """A key browser login already made this user, as (id, secret, whole days left), so it makes
@@ -2259,7 +2341,7 @@ def _route_name(path: str) -> str | None:
     path = urllib.parse.urlsplit(path).path.rstrip("/") or "/"
     if path in ("/", "/status"):
         return None
-    if path in ("/healthz", "/login", "/login/browser", "/me", "/me/projects", "/me/projects/connect", "/me/spaces", "/me/spaces/connect",
+    if path in ("/healthz", "/login", "/login/browser", "/login/hub", "/me", "/me/projects", "/me/projects/connect", "/me/spaces", "/me/spaces/connect",
                 "/config", "/me/share", "/me/shared", "/me/shared/accept", "/me/shared/reject", "/me/hub"):
         return path
     if path.startswith("/me/spaces/") and path.endswith("/projects") and path.count("/") == 4:

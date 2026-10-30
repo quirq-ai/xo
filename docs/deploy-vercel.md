@@ -277,6 +277,25 @@ only in the hub; with both variables deleted, the server reads Clerk's copy agai
 each user was first copied. Read the details under "Cutover and rollback" in server.md before you
 turn the hub off once people have used it.
 
+## 8. Sign in to the hub's website with xo (off until you turn it on)
+
+With the hub (section 7) and browser login on, the hub's website can sign people in with the
+same Clerk sign-in ([server.md](server.md), "Signing in to the hub's website").
+
+1. Open <https://dashboard.clerk.com/~/oauth-applications>, select the application from section 6
+   (`xo CLI`, its Client ID is `XO_OAUTH_CLIENT_ID`), and in **Redirect URIs** add
+   `https://hub.quirq.dev/-/login/xo/callback` exactly as written, next to the three loopback ones;
+   then **Save** if the page has one. Leave the loopback ones: `xo login` needs them. The consent
+   screen names the application, so visitors see "xo CLI"; renaming it (to `xo`, say) changes
+   nothing else.
+2. In **Settings → Environment Variables**, for Production, add
+   `XO_HUB_LOGIN_REDIRECT` = `https://hub.quirq.dev/-/login/xo/callback`, then redeploy.
+3. `curl -s https://xo.quirq.dev/login` now shows `"hub": {"redirect": ...}`, and the hub's sign-in
+   page shows "Sign in with xo" within five minutes. If `hub` is missing, **Logs** have a line
+   starting `xo serve: hub sign-in is off:` that says why.
+
+To turn it off, delete the variable and redeploy: the button goes away and the route answers 404.
+
 ## What is and is not protected on Vercel
 
 | Protected | How |
