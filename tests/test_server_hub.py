@@ -4,6 +4,7 @@ space-hub's /-/api/xo/v1/ (cli/src/xo.ts there)."""
 from __future__ import annotations
 
 import json
+import os
 import threading
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -322,3 +323,109 @@ def test_admin_metadata_of_an_unknown_user_reads_as_with_the_hub_off(hub_env):
     from tests.test_server import ADMIN_KEY
     status, out = _as(_app(_alice(), FakeHub()), ADMIN_KEY, "/user-metadata/user_nobody", method="GET")
     assert (status, out["error"]) == (404, "User not found")
+
+
+# ---------------------------------------------------------------- signing in to the hub's website
+
+HUB_REDIRECT = "https://hub.quirq.dev/-/login/xo/callback"
+
+
+@pytest.fixture
+def hub_login(hub_env, clerk, monkeypatch):  # noqa: F811
+    """The hub and browser login on, and the hub's callback registered with the fake Clerk."""
+    from tests.test_server import CLIENT_ID
+    monkeypatch.setenv("XO_OAUTH_CLIENT_ID", CLIENT_ID)
+    monkeypatch.setenv("XO_CLERK_FRONTEND_URL", os.environ["CLERK_API_URL"] + "/")
+    monkeypatch.setenv("XO_HUB_LOGIN_REDIRECT", HUB_REDIRECT)
+    clerk.redirect_uris.add(HUB_REDIRECT)
+    return clerk
+
+
+def _hub_signin(app, body=None, key=HUB_KEY):
+    from tests.test_server import VERIFIER
+    sent = {"code": "code_1", "verifier": VERIFIER, "redirect": HUB_REDIRECT} if body is None else body
+    return app.handle("POST", "/login/hub", {"authorization": f"Bearer {key}"} if key else {}, json.dumps(sent).encode())
+
+
+def test_hub_sign_in_is_off_until_its_callback_is_set(hub_env, clerk, monkeypatch, capfd):  # noqa: F811
+    from tests.test_server import CLIENT_ID
+    monkeypatch.setenv("XO_OAUTH_CLIENT_ID", CLIENT_ID)
+    monkeypatch.setenv("XO_CLERK_FRONTEND_URL", os.environ["CLERK_API_URL"] + "/")
+    app = _app(_alice(), FakeHub())
+    assert "hub" not in app.handle("GET", "/login", {}, None)[1]["data"]
+    assert _hub_signin(app)[0] == 404 and clerk.fapi == []
+    # Only the hub's own callback turns it on; anything else turns it off and says why.
+    for wrong in ("https://evil.example/-/login/xo/callback", "https://hub.quirq.dev/callback"):
+        monkeypatch.setenv("XO_HUB_LOGIN_REDIRECT", wrong)
+        assert server.Config().hub_login is None
+        assert "hub sign-in is off: XO_HUB_LOGIN_REDIRECT must be https://hub.quirq.dev/-/login/xo/callback" \
+            in capfd.readouterr().err
+    monkeypatch.setenv("XO_HUB_LOGIN_REDIRECT", HUB_REDIRECT)
+    monkeypatch.delenv("XO_OAUTH_CLIENT_ID")
+    assert server.Config().hub_login is None and "browser login is off" in capfd.readouterr().err
+
+
+def test_hub_sign_in_is_off_with_the_hub_off(clerk, monkeypatch, capfd):  # noqa: F811
+    monkeypatch.setenv("XO_HUB_LOGIN_REDIRECT", HUB_REDIRECT)
+    assert server.Config().hub_login is None and "the hub is off" in capfd.readouterr().err
+
+
+def test_get_login_offers_the_hubs_callback(hub_login):
+    status, out = _app(_alice(), FakeHub()).handle("GET", "/login", {}, None)
+    assert status == 200 and out["data"]["hub"] == {"redirect": HUB_REDIRECT}
+    assert out["data"]["browser"]["redirects"] == list(server.LOGIN_REDIRECTS)  # the CLI's are unchanged
+    assert hub_login.fapi == []
+
+
+def test_hub_sign_in_answers_the_users_agent_and_makes_no_key(hub_login):
+    users, hub, lines = _Users({"user_alice": ("Alice", {})}), FakeHub(), []
+    app = _app(users, hub, lines)
+    assert _hub_signin(app) == (200, {"success": True, "data": {"subject": "user_alice", "agent": "alice"}})
+    assert hub.calls[-1] == ("agent", "user_alice", "alice")
+    token, _ = hub_login.fapi
+    assert token["form"]["redirect_uri"] == HUB_REDIRECT and "Authorization" not in token["headers"]
+    assert hub_login.minted == [] and not any(c["path"].startswith("/v1/api_keys") for c in hub_login.calls)
+    assert json.loads(lines[-1]) | {"time": None} == {"time": None, "method": "POST", "route": "/login/hub",
+                                                    "keyId": None, "caller": None, "target": "user_alice",
+                                                    "outcome": 200}
+    assert all(TOKEN not in line and HUB_KEY not in line for line in lines)
+    # The code works once.
+    status, out = _hub_signin(app)
+    assert status == 401 and out["error"].endswith("sign in again")
+
+
+def test_a_returning_user_gets_the_same_agent(hub_login):
+    hub = FakeHub()
+    hub.agents["user_alice"] = {"agent": "alice", "token": TOKEN}
+    assert _hub_signin(_app(_Users({"user_alice": ("alice", {})}), hub))[1]["data"]["agent"] == "alice"
+    assert len(hub.agents) == 1
+
+
+@pytest.mark.parametrize("key", [None, "wrong", HUB_KEY + "x"])
+def test_hub_sign_in_needs_the_hubs_key(hub_login, key):
+    lines = []
+    status, out = _hub_signin(_app(_alice(), FakeHub(), lines), key=key)
+    assert status == 401 and out["error"] == "Missing or wrong hub key"
+    assert hub_login.fapi == [] and json.loads(lines[-1])["outcome"] == 401
+
+
+@pytest.mark.parametrize("change, status", [
+    ({"redirect": "http://127.0.0.1:8976/callback"}, 400), ({"redirect": "https://evil.example/-/login/xo/callback"}, 400),
+    ({"code": "a b"}, 400), ({"verifier": "v" * 42}, 400), ({"extra": 1}, 422), ({"redirect": None}, 400)])
+def test_hub_sign_in_refuses_bad_bodies_before_calling_clerk(hub_login, change, status):
+    from tests.test_server import VERIFIER
+    body = {"code": "code_1", "verifier": VERIFIER, "redirect": HUB_REDIRECT} | change
+    assert _hub_signin(_app(_alice(), FakeHub()), body)[0] == status
+    assert _hub_signin(_app(_alice(), FakeHub()), {"code": "code_1"})[0] == 422
+    assert hub_login.fapi == []
+
+
+def test_hub_sign_in_refuses_a_username_that_cannot_name_an_agent(hub_login):
+    hub = FakeHub()
+    status, out = _hub_signin(_app(_Users({"user_alice": ("al_ice", {})}), hub))
+    assert status == 409 and "change it first" in out["error"] and hub.agents == {}
+
+
+def test_hub_sign_in_with_the_hub_down_is_a_502(hub_login):
+    status, out = _hub_signin(_app(_Users({"user_alice": ("alice", {})}), FakeHub(down=True)))
+    assert status == 502 and out["error"] == "The hub did not answer"

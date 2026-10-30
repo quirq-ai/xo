@@ -25,8 +25,9 @@ xo create space ────┘                      └── /api/core/v1/... 
 | GET | `/` | anyone | the status page: health, counts and the latest requests, refreshed every 5 seconds |
 | GET | `/status` | anyone | what the page shows, as JSON; no Clerk call |
 | GET | `/config` | anyone | the services list `xo login` reads (`src/xo/services.json`), with `xo.url` set to where this server passes `/api/core/v1` on to (null when that is not a plain https address); addresses only (`me.url` is xo's shipped address, not necessarily this server), no Clerk call; answers even when the server is missing its settings |
-| GET | `/login` | anyone | `{"browser": null}`, or where `xo login` signs in: Clerk's `/oauth/authorize` address, the public client id, the scope, the three loopback redirect URLs and how long a new key works; no Clerk call. Set by the two browser login settings below |
+| GET | `/login` | anyone | `{"browser": null}`, or where `xo login` signs in: Clerk's `/oauth/authorize` address, the public client id, the scope, the three loopback redirect URLs and how long a new key works; no Clerk call. Set by the two browser login settings below. With hub sign-in on, also `"hub": {"redirect"}`: the hub website's callback |
 | POST | `/login/browser` | anyone (no key) | `{"code", "verifier", "redirect", "name"?}` from a browser sign-in: see "Browser login" below; answers `{"key", "days", "reused"}`. 404 while browser login is off |
+| POST | `/login/hub` | the hub (`XO_HUB_KEY`) | `{"code", "verifier", "redirect"}` from a sign-in the hub's website started: see "Signing in to the hub's website" below; answers `{"subject", "agent"}`. 404 while hub sign-in is off |
 | GET | `/me` | any user key | `id`, `username`, `firstName`, `lastName`, `imageUrl`, `createdAt`, `email` (primary), `publicMetadata`, `privateMetadata`: the key's own user only, with secret-looking values masked |
 | GET | `/me/projects` | any user key | `projects`: the list in the key's own private metadata (`[]` when there is none) |
 | POST | `/me/projects` | any user key | adds `{"name": "..."}` to that list and answers the new list; see "Projects" below |
@@ -119,6 +120,29 @@ piped in on stdin (`printf KEY | xo login`) is read as before, without a browser
 checks keys with the same Clerk instance this server's Secret Key belongs to, so the key works
 there; if the two ever differed, XO would refuse it and the CLI would save nothing.
 
+## Signing in to the hub's website
+
+The hub's website (quirq-ai/space-hub) has a "Sign in with xo" button. It signs the visitor in as
+their hub agent through the same Clerk sign-in and OAuth application as `xo login`, with no
+terminal and no token to paste. The hub is the OAuth client here, and this server swaps the code:
+
+1. The hub makes a random state and a verifier, keeps them for 10 minutes, ties them to the browser
+   with an HttpOnly cookie, and sends the browser to Clerk's `/oauth/authorize` (from `GET /login`)
+   with the redirect `GET /login` offers under `hub`.
+2. Clerk sends the browser back to the hub with a code. The hub checks the state against the cookie
+   and sends `POST /login/hub` `{"code", "verifier", "redirect"}` with `Authorization: Bearer
+   XO_HUB_KEY`.
+3. The server refuses any other key (401) and any other redirect (400), swaps the code as browser
+   login does, then makes or finds the user's hub agent exactly as `POST /me/hub` does (the same
+   name rules and 409s). It answers `{"subject", "agent"}`: no API key is made, and the agent's
+   token, which the hub already keeps, is not sent.
+
+The hub then signs the browser in with that agent's token in its own HttpOnly session cookie. The
+code works once and only with the hub's verifier, the redirect is fixed by `XO_HUB_LOGIN_REDIRECT`
+and by Clerk, and the hub shows the button only while `GET /login` offers its callback. Turn it on
+in this order: add the redirect URL to the Clerk OAuth application, then set
+`XO_HUB_LOGIN_REDIRECT` and redeploy. Deleting the setting and redeploying hides the button again.
+
 ## The status page
 
 `/` shows whether the server answers, how many requests and `/healthz` pings it has served, how
@@ -187,6 +211,7 @@ Environment only, so the secret never lands in shell history or the process list
 | `XO_CLERK_FRONTEND_URL` | for browser login | that Clerk instance's Frontend API URL, https only. Browser login is on only when both are set; a missing or bad one turns it off with a line on stderr, never the server |
 | `XO_HUB_URL` | for the hub | the quirq hub, `https://hub.quirq.dev`, https only. With `XO_HUB_KEY`, xo's data lives there; see "The hub" below. One without the other stops the server |
 | `XO_HUB_KEY` | for the hub | the hub's `SPACEHUB_XO_KEY`; never printed or logged |
+| `XO_HUB_LOGIN_REDIRECT` | for hub sign-in | `https://hub.quirq.dev/-/login/xo/callback` (`XO_HUB_URL` plus `/-/login/xo/callback`, nothing else), set once it is a redirect URL of the Clerk OAuth application. Needs browser login and the hub on; a missing setting or a bad value turns hub sign-in off with a line on stderr, never the server |
 
 ```sh
 xo serve --host 127.0.0.1 --port 8787

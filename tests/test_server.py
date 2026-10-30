@@ -66,6 +66,7 @@ class FakeClerk:
         # request, and the code it takes, the user who signed in, and what it answers otherwise.
         self.fapi: list[dict] = []
         self.codes = {"code_1": "user_alice"}  # code -> who signed in (each works once)
+        self.redirect_uris = {REDIRECT}  # the OAuth application's redirect URLs
         self.token_answer: tuple[int, dict] | None = None
         self.userinfo_answer: tuple[int, dict] | None = None
         self.mint_answer: tuple[int, object] | None = None
@@ -137,7 +138,7 @@ def clerk(monkeypatch):
                     return state.token_answer
                 who = state.codes.pop(form.get("code"), None)
                 if (who is None or form.get("grant_type") != "authorization_code" or form.get("client_id") != CLIENT_ID
-                        or form.get("redirect_uri") != REDIRECT or form.get("code_verifier") != VERIFIER):
+                        or form.get("redirect_uri") not in state.redirect_uris or form.get("code_verifier") != VERIFIER):
                     return 400, {"error": "invalid_grant"}
                 return 200, {"access_token": "oat_" + who, "token_type": "Bearer"}
             if self.command == "GET" and self.path == "/oauth/userinfo":
