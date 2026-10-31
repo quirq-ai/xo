@@ -293,6 +293,11 @@ same Clerk sign-in ([server.md](server.md), "Signing in to the hub's website").
 3. `curl -s https://xo.quirq.dev/login` now shows `"hub": {"redirect": ...}`, and the hub's sign-in
    page shows "Sign in with xo" within five minutes. If `hub` is missing, **Logs** have a line
    starting `xo serve: hub sign-in is off:` that says why.
+4. Signing in needs a GitHub account connected to the XO account: the hub's builder is that
+   GitHub account's. GitHub must be on in Clerk (**Configure → SSO connections → GitHub**, with
+   the instance's own GitHub credentials in production). Someone with none connected is sent to
+   Clerk's account page (`https://accounts.<domain>/user`, from `XO_CLERK_FRONTEND_URL`) to connect
+   one; to send them elsewhere, add `XO_GITHUB_CONNECT_URL` (an https address) and redeploy.
 
 To turn it off, delete the variable and redeploy: the button goes away and the route answers 404.
 
