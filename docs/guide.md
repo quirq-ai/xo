@@ -215,7 +215,9 @@ xo sync project:headscale                        # git pull --rebase, then push
     `pushRemote`), and need a branch (not a detached HEAD). Tags and commits are left where they
     are.
 - **The quirq hub.** When the xo server keeps a quirq hub, `xo login` asks it for your hub agent
-  (named after your username) and hands the agent's token to the hub's own client (`spacehub`,
+  (the builder of the GitHub account connected to your XO account, named after its login, with
+  your username as its display name; with none connected, the hub step says where to connect
+  one) and hands the agent's token to the hub's own client (`spacehub`,
   from quirq-ai/space-hub, which brings `git-remote-quirq`; it needs Node 22), which keeps it; xo
   saves only the hub's address and the agent's name, and `xo status` shows them. Without the
   client, `xo login` says how to install it: a space's projects then push to GitHub as before,

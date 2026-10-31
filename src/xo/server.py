@@ -18,8 +18,8 @@ verifies it with Clerk and answers:
                                     logged
     POST  /login/hub                the hub's key, only with hub sign-in on: {"code", "verifier",
                                     "redirect"} from a Clerk sign-in the hub's website started: the
-                                    server swaps the code, makes the user's hub agent as /me/hub does,
-                                    and answers {"subject", "agent"}; no API key is made
+                                    server swaps the code, has the hub make the user's builder as
+                                    /me/hub does, and answers {"subject", "agent"}; no API key is made
     GET   /me                       any user key: the key's own account, with its primary email and
                                     its public and private metadata (secret-looking values masked)
     GET   /me/projects              any user key: the `projects` list in its own private metadata
@@ -45,9 +45,12 @@ verifies it with Clerk and answers:
                                     shared project into the space it names, their projects into
                                     its projects, and the invite off
     POST  /me/shared/reject         any user key: {"id"}: the invite off; the sender can share again
-    POST  /me/hub                   any user key, only with the hub on: the key's own hub agent, made
-                                    on first use and named after its username: {"server", "agent",
-                                    "token"} (the token pushes to the hub; never logged)
+    POST  /me/hub                   any user key, only with the hub on: the key's own hub builder, the
+                                    builder of the GitHub account connected to the user's XO account
+                                    (named after its login, with the username as its display name),
+                                    made on first use: {"server", "agent", "token"} (the token pushes
+                                    to the hub; never logged). Without a connected GitHub account,
+                                    409 with "connect": where to connect one
     GET   /user-metadata/{userId}   admin keys only: public and private metadata
     PATCH /user-metadata/{userId}   admin keys only: deep-merge changes into allow-listed keys
     POST  /api/core/v1/{create}     passed on to XO's core API as sent, key included, and its
@@ -92,6 +95,10 @@ Configuration (environment only, so the secret never lands in shell history or t
                               is a redirect URL of the Clerk OAuth application: then GET /login
                               offers it and POST /login/hub is on (it needs browser login and the
                               hub too). A bad value turns hub sign-in off, never the server
+    XO_GITHUB_CONNECT_URL     the page where a user connects GitHub to their XO account (https):
+                              /me/hub and /login/hub send people without one there. Unset: Clerk's
+                              account page, from XO_CLERK_FRONTEND_URL (clerk.<domain> is
+                              accounts.<domain>/user)
 
 It listens on 127.0.0.1 by default: put it behind an HTTPS proxy before giving it any other host.
 On Vercel, the repo's root app.py serves the same routes through `wsgi_app()` (docs/deploy-vercel.md).
@@ -124,13 +131,16 @@ HUB_URL_ENV = "XO_HUB_URL"
 HUB_KEY_ENV = "XO_HUB_KEY"
 HUB_LOGIN_ENV = "XO_HUB_LOGIN_REDIRECT"
 HUB_CALLBACK = "/-/login/xo/callback"  # where the hub's website takes a sign-in back (space-hub web.ts)
+CONNECT_ENV = "XO_GITHUB_CONNECT_URL"
+# The GitHub account Clerk keeps for a user who connected one (its external account).
+GITHUB_PROVIDER = "oauth_github"
+GITHUB_ID = re.compile(r"[1-9][0-9]{0,15}")
+GITHUB_LOGIN = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}")
 HUB_TIMEOUT = 10.0
 HUB_API = "/-/api/xo/v1"
 MAX_HUB_ANSWER = 1024 * 1024
 # The private metadata keys that are xo's own: with the hub on, these live there instead.
 XO_KEYS = ("projects", "spaces", "shared")
-# The hub's agent names (space-hub's USERNAME rule).
-HUB_AGENT = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?")
 CLERK_URL_ENV = "CLERK_API_URL"
 DEFAULT_CLERK_URL = "https://api.clerk.com"
 CLERK_TIMEOUT = 10.0
@@ -286,6 +296,42 @@ class Config:
             raise XoError(f"set both {HUB_URL_ENV} and {HUB_KEY_ENV} to keep xo's data in the hub, or neither")
         self.hub_url = _upstream(HUB_URL_ENV, hub_url).rstrip("/") if hub_url else None
         self.hub_login = _hub_login(self.hub_url, self.oauth_client_id)
+        self.github_connect = _github_connect(self.frontend_url)
+
+
+def _github_connect(frontend: str | None) -> str | None:
+    """Where a user connects GitHub to their XO account: XO_GITHUB_CONNECT_URL, else Clerk's own
+    account page beside the Frontend API (https://clerk.<domain> serves accounts.<domain>/user, a
+    development instance's <slug>.clerk.accounts.dev serves <slug>.accounts.dev/user). A bad value
+    is left out, with a line on stderr: the refusal then says only what to do."""
+    raw = os.environ.get(CONNECT_ENV, "").strip()
+    if raw:
+        parts = urllib.parse.urlsplit(raw)
+        if parts.scheme != "https" or not parts.hostname or "@" in parts.netloc:
+            print(f"xo serve: {CONNECT_ENV} must be an https address; it is left out", file=sys.stderr, flush=True)
+            return None
+        return raw
+    host = urllib.parse.urlsplit(frontend).hostname if frontend else None
+    if host and host.endswith(".clerk.accounts.dev"):
+        return f"https://{host[:-len('.clerk.accounts.dev')]}.accounts.dev/user"
+    if host and host.startswith("clerk."):
+        return f"https://accounts.{host[len('clerk.'):]}/user"
+    return None
+
+
+def _github_of(user: dict) -> dict | None:
+    """The GitHub account a Clerk user connected, verified by GitHub: {"id", "login"}, else None."""
+    accounts = user.get("external_accounts")
+    for a in accounts if isinstance(accounts, list) else []:
+        if not isinstance(a, dict) or a.get("provider") != GITHUB_PROVIDER:
+            continue
+        verification = a.get("verification")
+        if isinstance(verification, dict) and verification.get("status") not in (None, "verified"):
+            continue
+        uid, login = a.get("provider_user_id"), a.get("username")
+        if isinstance(uid, str) and GITHUB_ID.fullmatch(uid) and isinstance(login, str) and GITHUB_LOGIN.fullmatch(login):
+            return {"id": uid, "login": login}
+    return None
 
 
 def _browser_login() -> tuple[str | None, str | None]:
@@ -534,9 +580,10 @@ class Hub:
             raise HubError(502, "bad answer")
         return version + 1
 
-    def agent(self, subject: str, username: str) -> dict:
-        """The user's hub agent, made on first call: {"agent", "token"}."""
-        out = self._call("POST", "agents/" + urllib.parse.quote(subject, safe=""), {"username": username})
+    def agent(self, subject: str, username: str, github: dict) -> dict:
+        """The user's hub builder: their GitHub account's, made on first call with `username` as its
+        display name: {"agent", "token"}."""
+        out = self._call("POST", "agents/" + urllib.parse.quote(subject, safe=""), {"username": username, "github": github})
         if not isinstance(out.get("agent"), str) or not isinstance(out.get("token"), str) or not out["token"]:
             raise HubError(502, "bad answer")
         return {"agent": out["agent"], "token": out["token"]}
@@ -831,11 +878,12 @@ class _Forwarded(Exception):
 
 
 class _Reply(Exception):
-    def __init__(self, status: int, error: str, clerk: int | str | None = None) -> None:
+    def __init__(self, status: int, error: str, clerk: int | str | None = None, extra: dict | None = None) -> None:
         super().__init__(error)
         self.status = status
         self.error = error
         self.clerk = clerk  # what Clerk said, for the audit line, when Clerk is why the request failed
+        self.extra = extra or {}  # more fields of the refusal, beside "error"
 
 
 MISCONFIGURED = "xo server misconfigured; tell whoever runs it"
@@ -997,7 +1045,7 @@ class App:
         except _Forwarded as f:
             status, payload = f.status, f.payload
         except _Reply as r:
-            status, payload = r.status, {"success": False, "error": r.error}
+            status, payload = r.status, {"success": False, "error": r.error, **r.extra}
         self.record(method, path, status, start)
         return status, payload
 
@@ -1123,28 +1171,28 @@ class App:
         key, _, who = self._caller(headers, "me", "/me/hub")
         if not self.hub:
             raise self._refuse(who, 404, "This xo server keeps no hub")
-        made = self._agent_for(key["subject"], self._user(key["subject"]).get("username"), who)
+        made = self._agent_for(key["subject"], self._user(key["subject"]), who)
         self.audit(**who, outcome=200)  # never the token
         return {"server": self.cfg.hub_url, "agent": made["agent"], "token": made["token"]}
 
-    def _agent_for(self, subject: str, name: Any, who: dict) -> dict:
-        """The user's hub agent, made on first use and named after their username `name` (the only
-        name this server ever sends the hub): {"agent", "token"}. A refusal is audited."""
-        agent = name.lower() if isinstance(name, str) else ""
-        if not HUB_AGENT.fullmatch(agent):
-            raise self._refuse(who, 409, "Your username cannot name a hub agent: it needs 1 to 39 letters, digits "
-                                         "or inner hyphens; change it first")
+    def _agent_for(self, subject: str, user: dict, who: dict) -> dict:
+        """The user's hub builder: the builder of the GitHub account they connected to XO, named
+        after its login, with their username (`user` is their Clerk record) as its display name and,
+        when the hub can give it, a second name: {"agent", "token"}. A refusal is audited; without a
+        connected GitHub account it says where to connect one."""
+        github = _github_of(user)
+        if not github:
+            where = self.cfg.github_connect
+            self.audit(**who, outcome=409)
+            raise _Reply(409, "Connect GitHub to your XO account first: your hub builder is your GitHub account"
+                              + (f" ({where})" if where else ""), extra={"connect": where} if where else None)
+        name = user.get("username")
         try:
-            made = self._hub(lambda: self.hub.agent(subject, agent), who)
+            return self._hub(lambda: self.hub.agent(subject, name if isinstance(name, str) else "", github), who)
         except HubConflict as e:
-            if "reserved" in e.reason:
-                raise self._refuse(who, 409, f"The hub keeps the name {agent} for itself; change your username "
-                                             "to get a hub agent") from None
-            # Agent names are first come across the hub, and one stays with the account that took it:
-            # a username given up and then taken by someone else stays the first account's agent.
-            raise self._refuse(who, 409, f"The hub's agent {agent} belongs to another account (one that had "
-                                         "this username before); change your username to get a hub agent") from None
-        return made
+            # The GitHub login is a name the hub gave someone else (an org, or another builder).
+            raise self._refuse(who, 409, f"The hub cannot give you the name {github['login'].lower()}: "
+                                         f"{e.reason or 'it is taken there'}") from None
 
     def _browser(self) -> dict | None:
         """What the CLI needs to start a browser login: Clerk's sign-in address and the public client id."""
@@ -1274,7 +1322,7 @@ class App:
             raise self._refuse(who, 400, f"redirect must be {self.cfg.hub_login}")
         user_id = self._signed_in(code, verifier, redirect, "/login/hub")
         who["target"] = user_id
-        made = self._agent_for(user_id, self._user(user_id, who).get("username"), who)
+        made = self._agent_for(user_id, self._user(user_id, who), who)
         self.audit(**who, outcome=200)  # never the token
         return {"subject": user_id, "agent": made["agent"]}
 

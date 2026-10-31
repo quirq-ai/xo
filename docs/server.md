@@ -37,7 +37,7 @@ xo create space ────┘                      └── /api/core/v1/... 
 | POST | `/me/spaces/connect` | any user key | `{"name", "id"?}`: a new space entry with no projects; with an id, only for an XO space the caller's key can read |
 | POST | `/me/spaces/{name}/projects` | any user key | `{"project", "ref"}`: sets one project's ref in that space |
 | PUT | `/me/spaces/{name}` | any user key | `{"rev", "projects", "base"}`: replaces the space's projects and refs if it is still at `rev` holding `base`, else 409 |
-| POST | `/me/hub` | any user key | with the hub on: the key's own hub agent, made on first use and named after its username: `{"server", "agent", "token"}`; see "The hub" below. 404 with the hub off |
+| POST | `/me/hub` | any user key | with the hub on: the key's own hub builder, the builder of the GitHub account connected to the user's XO account, made on first use: `{"server", "agent", "token"}`; see "The hub" below. 409 with `connect` (where to connect GitHub) when none is connected; 404 with the hub off |
 | GET | `/user-metadata/{userId}` | admin keys | `publicMetadata`, `privateMetadata` |
 | PATCH | `/user-metadata/{userId}` | admin keys | both buckets after a deep merge; `null` removes a key |
 | POST | `/api/core/v1/{create}` | an `ak_` key | XO's answer: `claude-code`, `codex`, `antigravity`, `hermes`, `openclaw`, `xo-cowork`, `nebius-openclaw` |
@@ -123,8 +123,9 @@ there; if the two ever differed, XO would refuse it and the CLI would save nothi
 ## Signing in to the hub's website
 
 The hub's website (quirq-ai/space-hub) has a "Sign in with xo" button. It signs the visitor in as
-their hub agent through the same Clerk sign-in and OAuth application as `xo login`, with no
-terminal and no token to paste. The hub is the OAuth client here, and this server swaps the code:
+their hub builder (the builder of the GitHub account connected to their XO account) through the
+same Clerk sign-in and OAuth application as `xo login`, with no terminal and no token to paste.
+The hub is the OAuth client here, and this server swaps the code:
 
 1. The hub makes a random state and a verifier, keeps them for 10 minutes, ties them to the browser
    with an HttpOnly cookie, and sends the browser to Clerk's `/oauth/authorize` (from `GET /login`)
@@ -133,8 +134,9 @@ terminal and no token to paste. The hub is the OAuth client here, and this serve
    and sends `POST /login/hub` `{"code", "verifier", "redirect"}` with `Authorization: Bearer
    XO_HUB_KEY`.
 3. The server refuses any other key (401) and any other redirect (400), swaps the code as browser
-   login does, then makes or finds the user's hub agent exactly as `POST /me/hub` does (the same
-   name rules and 409s). It answers `{"subject", "agent"}`: no API key is made, and the agent's
+   login does, then makes or finds the user's hub builder exactly as `POST /me/hub` does (the same
+   409s: with no GitHub connected, `connect` says where to connect it, and the hub's page sends
+   the visitor there). It answers `{"subject", "agent"}`: no API key is made, and the builder's
    token, which the hub already keeps, is not sent.
 
 The hub then signs the browser in with that agent's token in its own HttpOnly session cookie. The
@@ -212,6 +214,7 @@ Environment only, so the secret never lands in shell history or the process list
 | `XO_HUB_URL` | for the hub | the quirq hub, `https://hub.quirq.dev`, https only. With `XO_HUB_KEY`, xo's data lives there; see "The hub" below. One without the other stops the server |
 | `XO_HUB_KEY` | for the hub | the hub's `SPACEHUB_XO_KEY`; never printed or logged |
 | `XO_HUB_LOGIN_REDIRECT` | for hub sign-in | `https://hub.quirq.dev/-/login/xo/callback` (`XO_HUB_URL` plus `/-/login/xo/callback`, nothing else), set once it is a redirect URL of the Clerk OAuth application. Needs browser login and the hub on; a missing setting or a bad value turns hub sign-in off with a line on stderr, never the server |
+| `XO_GITHUB_CONNECT_URL` | no | the page where a user connects GitHub to their XO account (https), linked from the 409 of `/me/hub` and hub sign-in. Unset: Clerk's account page beside `XO_CLERK_FRONTEND_URL` (`https://clerk.<domain>` gives `https://accounts.<domain>/user`); a bad value is left out with a line on stderr |
 
 ```sh
 xo serve --host 127.0.0.1 --port 8787
@@ -274,15 +277,16 @@ that record instead. Everything else stays as described here, the limits include
   (Clerk has no such check, so with the hub off the server writes, waits and reads back).
 - **`/me`** shows the record's keys in place of Clerk's, and the rest of Clerk's private metadata
   as before.
-- **`POST /me/hub`** answers the user's hub agent, which the hub makes on first use, named after
-  the user's Clerk username in lowercase (a name the hub refuses is a 409). The server sends the
-  hub only the username Clerk has for the key's own user. The answer's `token` is what that
-  user's xo pushes to the hub with; it is never logged.
-- **Agent names are first come.** A hub agent name stays with the account that took it, so a
-  username someone gave up and another account then took is a 409 ("belongs to another account")
-  for the new owner, who must pick another username. Names the hub keeps for itself are a 409 that
-  says so. Only this server makes agents (the hub then refuses its own sign-ups), and only from
-  usernames Clerk gave, so nobody can take a name that no Clerk account had first.
+- **`POST /me/hub`** answers the user's hub builder: the builder of the GitHub account they
+  connected to XO, as Clerk keeps it (their `oauth_github` external account, verified: its id and
+  login). The server sends the hub that id and login and the user's Clerk username, and the hub
+  makes the builder on first use, named after the GitHub login, with the username as its display
+  name and, when the name is free there and no one else's GitHub login, a second name that shows
+  the same space. A builder the hub made from the username before GitHub was needed becomes the
+  GitHub account's (its token and work kept, its old name a second name). Without a connected
+  GitHub account it is a 409 whose `connect` is where to connect one (`XO_GITHUB_CONNECT_URL`, else
+  Clerk's account page); a GitHub login the hub gave someone else is a 409 that says so. The
+  answer's `token` is what that user's xo pushes to the hub with; it is never logged.
 - **`/user-metadata`** (admin keys) shows `projects`, `spaces` and `shared` from the hub, as
   stored, and refuses (422, nothing written) a PATCH naming any of them in `privateMetadata`, even
   when `$XO_EDITABLE_PRIVATE_KEYS` lists them: Clerk's copy is no longer read, so a change there

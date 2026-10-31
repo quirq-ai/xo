@@ -27,6 +27,7 @@ class FakeHub:
         self.records: dict[str, tuple[int, dict]] = {}
         self.agents: dict[str, dict] = {}
         self.calls: list[tuple] = []
+        self.taken: set[str] = set()  # names the hub gave others (orgs, other builders)
         self.race, self.down = race, down
 
     def _check(self, what, *args):
@@ -49,14 +50,15 @@ class FakeHub:
         self.records[subject] = (version + 1, json.loads(json.dumps(doc)))
         return version + 1
 
-    def agent(self, subject, username):
-        self._check("agent", subject, username)
-        if subject not in self.agents:
-            if username == "admin":
-                raise server.HubConflict('agent name "admin" is reserved')
-            if any(a["agent"] == username for a in self.agents.values()):
-                raise server.HubConflict()
-            self.agents[subject] = {"agent": username, "token": TOKEN}
+    def agent(self, subject, username, github):
+        """The builder of the GitHub account, named after its login (space-hub's xo_link_github)."""
+        self._check("agent", subject, username, github)
+        name = github["login"].lower()
+        if name == "admin":
+            raise server.HubConflict('the name "admin" is reserved on this hub; ask the hub\'s admin')
+        if name in self.taken:
+            raise server.HubConflict(f'cannot sign in as {name}: the name "{name}" is taken on this hub')
+        self.agents[subject] = {"agent": name, "token": TOKEN}
         return dict(self.agents[subject])
 
 
@@ -70,6 +72,15 @@ def hub_env(clerk, monkeypatch):  # noqa: F811
 def _app(users, hub, lines=None):
     return server.App(server.Config(), clerk=users, core=_Core(), hub=hub,
                       audit=(lines.append if lines is not None else lambda line: None))
+
+
+def _github(users, user_id, login, uid="583231", status="verified"):
+    """`user_id` connected the GitHub account `login` to XO, as Clerk keeps it (SYNTHETIC)."""
+    users.users[user_id]["external_accounts"] = [
+        {"object": "external_account", "provider": "oauth_google", "provider_user_id": "1", "username": "not-github"},
+        {"object": "external_account", "provider": "oauth_github", "provider_user_id": uid, "username": login,
+         "verification": {"status": status, "strategy": "oauth_github"}}]
+    return users
 
 
 def _alice(**private):
@@ -150,33 +161,58 @@ def test_the_hub_down_is_a_502_and_says_so_in_the_audit(hub_env):
     assert users.patches == []
 
 
-def test_me_hub_gives_the_users_own_agent_under_their_username(hub_env):
-    users, hub, lines = _Users({"user_alice": ("Alice", {})}), FakeHub(), []
+def test_me_hub_gives_the_builder_of_the_github_account_connected_to_xo(hub_env):
+    users, hub, lines = _github(_Users({"user_alice": ("Alice", {})}), "user_alice", "Alice-GH"), FakeHub(), []
     status, out = _as(_app(users, hub, lines), USER_KEY, "/me/hub")
-    assert (status, out["data"]) == (200, {"server": "https://hub.quirq.dev", "agent": "alice", "token": TOKEN})
-    assert hub.calls[-1] == ("agent", "user_alice", "alice")
+    assert (status, out["data"]) == (200, {"server": "https://hub.quirq.dev", "agent": "alice-gh", "token": TOKEN})
+    # The username goes as it is: the hub makes it the display name, and a second name if it can.
+    assert hub.calls[-1] == ("agent", "user_alice", "Alice", {"id": "583231", "login": "Alice-GH"})
     assert all(TOKEN not in line for line in lines)
 
 
-def test_me_hub_refuses_a_username_that_cannot_name_an_agent_and_a_taken_name(hub_env):
+def test_me_hub_without_github_connected_says_where_to_connect_it(hub_env, monkeypatch):
+    monkeypatch.setenv("XO_GITHUB_CONNECT_URL", "https://accounts.xo.example/user")
+    hub, lines = FakeHub(), []
+    status, out = _as(_app(_Users({"user_alice": ("alice", {})}), hub, lines), USER_KEY, "/me/hub")
+    assert status == 409 and out["connect"] == "https://accounts.xo.example/user"
+    assert out["error"].startswith("Connect GitHub to your XO account first") and "https://accounts.xo.example/user" in out["error"]
+    assert hub.calls == [] and json.loads(lines[-1])["outcome"] == 409
+    # A GitHub account not verified (yet) is not one.
+    users = _github(_Users({"user_alice": ("alice", {})}), "user_alice", "alice", status="unverified")
+    assert _as(_app(users, hub), USER_KEY, "/me/hub")[0] == 409 and hub.calls == []
+
+
+def test_me_hub_with_the_github_login_taken_on_the_hub_says_so(hub_env):
     hub = FakeHub()
-    assert _as(_app(_Users({"user_alice": ("al_ice", {})}), hub), USER_KEY, "/me/hub")[0] == 409
-    hub.agents["user_other"] = {"agent": "alice", "token": "t"}
-    status, out = _as(_app(_Users({"user_alice": ("alice", {})}), hub), USER_KEY, "/me/hub")
-    assert status == 409 and "belongs to another account" in out["error"]
-    status, out = _as(_app(_Users({"user_alice": ("admin", {})}), hub), USER_KEY, "/me/hub")
-    assert status == 409 and "keeps the name admin for itself" in out["error"]
+    hub.taken.add("alice")
+    status, out = _as(_app(_github(_Users({"user_alice": ("alice", {})}), "user_alice", "alice"), hub), USER_KEY, "/me/hub")
+    assert status == 409 and out["error"].startswith("The hub cannot give you the name alice:") and "is taken" in out["error"]
+
+
+@pytest.mark.parametrize("frontend, env, connect", [
+    ("https://clerk.xo.builders", None, "https://accounts.xo.builders/user"),
+    ("https://happy-cat-12.clerk.accounts.dev", None, "https://happy-cat-12.accounts.dev/user"),
+    ("https://clerk.xo.builders", "https://xo.builders/settings/accounts", "https://xo.builders/settings/accounts"),
+    ("https://clerk.xo.builders", "http://xo.builders/settings", None),
+    ("https://frontend.example.com", None, None),
+    (None, None, None)])
+def test_where_github_is_connected(monkeypatch, frontend, env, connect):
+    if env:
+        monkeypatch.setenv("XO_GITHUB_CONNECT_URL", env)
+    else:
+        monkeypatch.delenv("XO_GITHUB_CONNECT_URL", raising=False)
+    assert server._github_connect(frontend) == connect
 
 
 def test_the_hub_client_passes_on_the_reason_of_a_409(hub_http):
     hub, _, answers = hub_http
     answers.append(_json(409, {"error": 'agent name "admin" is\nreserved'}))
     with pytest.raises(server.HubConflict) as e:
-        hub.agent("user_alice", "admin")
+        hub.agent("user_alice", "admin", {"id": "1", "login": "admin"})
     assert e.value.reason == 'agent name "admin" is reserved'
     answers.append((409, b"not json", {}))
     with pytest.raises(server.HubConflict) as e:
-        hub.agent("user_alice", "admin")
+        hub.agent("user_alice", "admin", {"id": "1", "login": "admin"})
     assert e.value.reason == ""
 
 
@@ -377,11 +413,11 @@ def test_get_login_offers_the_hubs_callback(hub_login):
     assert hub_login.fapi == []
 
 
-def test_hub_sign_in_answers_the_users_agent_and_makes_no_key(hub_login):
-    users, hub, lines = _Users({"user_alice": ("Alice", {})}), FakeHub(), []
+def test_hub_sign_in_answers_the_users_builder_and_makes_no_key(hub_login):
+    users, hub, lines = _github(_Users({"user_alice": ("Alice", {})}), "user_alice", "alice"), FakeHub(), []
     app = _app(users, hub, lines)
     assert _hub_signin(app) == (200, {"success": True, "data": {"subject": "user_alice", "agent": "alice"}})
-    assert hub.calls[-1] == ("agent", "user_alice", "alice")
+    assert hub.calls[-1] == ("agent", "user_alice", "Alice", {"id": "583231", "login": "alice"})
     token, _ = hub_login.fapi
     assert token["form"]["redirect_uri"] == HUB_REDIRECT and "Authorization" not in token["headers"]
     assert hub_login.minted == [] and not any(c["path"].startswith("/v1/api_keys") for c in hub_login.calls)
@@ -394,10 +430,10 @@ def test_hub_sign_in_answers_the_users_agent_and_makes_no_key(hub_login):
     assert status == 401 and out["error"].endswith("sign in again")
 
 
-def test_a_returning_user_gets_the_same_agent(hub_login):
+def test_a_returning_user_gets_the_same_builder(hub_login):
     hub = FakeHub()
     hub.agents["user_alice"] = {"agent": "alice", "token": TOKEN}
-    assert _hub_signin(_app(_Users({"user_alice": ("alice", {})}), hub))[1]["data"]["agent"] == "alice"
+    assert _hub_signin(_app(_github(_Users({"user_alice": ("alice", {})}), "user_alice", "alice"), hub))[1]["data"]["agent"] == "alice"
     assert len(hub.agents) == 1
 
 
@@ -420,12 +456,19 @@ def test_hub_sign_in_refuses_bad_bodies_before_calling_clerk(hub_login, change, 
     assert hub_login.fapi == []
 
 
-def test_hub_sign_in_refuses_a_username_that_cannot_name_an_agent(hub_login):
+def test_hub_sign_in_without_github_connected_says_where_to_connect_it(hub_login, monkeypatch):
+    monkeypatch.setenv("XO_GITHUB_CONNECT_URL", "https://accounts.xo.example/user")
     hub = FakeHub()
     status, out = _hub_signin(_app(_Users({"user_alice": ("al_ice", {})}), hub))
-    assert status == 409 and "change it first" in out["error"] and hub.agents == {}
+    assert status == 409 and out["connect"] == "https://accounts.xo.example/user" and hub.agents == {}
+
+
+def test_hub_sign_in_needs_no_username_that_could_name_a_builder(hub_login):
+    hub = FakeHub()
+    status, out = _hub_signin(_app(_github(_Users({"user_alice": ("al_ice", {})}), "user_alice", "alice"), hub))
+    assert status == 200 and out["data"]["agent"] == "alice"
 
 
 def test_hub_sign_in_with_the_hub_down_is_a_502(hub_login):
-    status, out = _hub_signin(_app(_Users({"user_alice": ("alice", {})}), FakeHub(down=True)))
+    status, out = _hub_signin(_app(_github(_Users({"user_alice": ("alice", {})}), "user_alice", "alice"), FakeHub(down=True)))
     assert status == 502 and out["error"] == "The hub did not answer"
